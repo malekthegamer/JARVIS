@@ -23,7 +23,7 @@ REAL_MIC_HINTS = ("microphone", "realtek", "headset")
 VIRTUAL_HINTS = (
     "voicemeeter", "vb-audio", "cable", "virtual", "stereo mix", "loopback",
     "audiorelay", "steam streaming", "wave link", "sound mapper", "primary sound",
-    "output", "speakers",
+    "output", "speakers", "wo mic", "voicemod",  # phone-mic / voice-changer apps
 )
 
 _lock = threading.Lock()
@@ -50,9 +50,18 @@ def find_real_mic() -> tuple[int | None, str]:
         for idx, name in devices:
             if idx == int(override):
                 return idx, name
+    # Rank candidates: a Realtek/hardware mic beats a generic "Microphone (...)"
+    # name — virtual mic apps (WO Mic, Voicemod) love the generic label.
+    ranked: list[tuple[int, int, str]] = []
     for idx, name in devices:
-        if is_probably_real_mic(name):
-            return idx, name
+        if not is_probably_real_mic(name):
+            continue
+        lower = name.lower()
+        rank = 0 if "realtek" in lower else (1 if "headset" in lower else 2)
+        ranked.append((rank, idx, name))
+    if ranked:
+        _rank, idx, name = min(ranked)
+        return idx, name
     return None, "system default"
 
 

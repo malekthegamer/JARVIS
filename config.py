@@ -37,7 +37,9 @@ KEY_ENV_VARS = {
     "openai_whisper": "OPENAI_API_KEY",
 }
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
+# 127.0.0.1 (not "localhost"): Windows resolves localhost to ::1 first and
+# wastes seconds timing out on IPv6 when a server is IPv4-only or down.
+OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 SERVER_HOST = "127.0.0.1"  # localhost ONLY — never expose beyond this machine
 SERVER_PORT = 8000
 

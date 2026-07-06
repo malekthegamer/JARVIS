@@ -23,7 +23,7 @@ class OllamaProvider(BrainProvider):
 
     def is_configured(self) -> bool:
         try:
-            return requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=2).ok
+            return requests.get(f"{config.OLLAMA_URL}/api/tags", timeout=1).ok
         except requests.RequestException:
             return False
 

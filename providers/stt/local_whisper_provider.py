@@ -25,11 +25,10 @@ class LocalWhisperProvider(STTProvider):
         self.active_device: str | None = None  # "cuda" | "cpu" after first load
 
     def is_configured(self) -> bool:
-        try:
-            import faster_whisper  # noqa: F401
-            return True
-        except ImportError:
-            return False
+        # find_spec instead of importing — the real import costs seconds and
+        # would stall the settings page just to answer "is it installed?".
+        import importlib.util
+        return importlib.util.find_spec("faster_whisper") is not None
 
     def _get_model(self):
         from faster_whisper import WhisperModel  # lazy

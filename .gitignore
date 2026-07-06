@@ -12,6 +12,10 @@ __pycache__/
 .venv/
 venv/
 
+# Test artifacts
+.playwright-mcp/
+*.png
+
 # OS / editor
 Thumbs.db
 .DS_Store
