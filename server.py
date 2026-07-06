@@ -74,6 +74,13 @@ async def _startup() -> None:
     notifications.subscribe(lambda item: broadcast_threadsafe({"type": "notification", "item": item}))
     try:
         from core import scheduler
+        # Background monitoring -> dashboard notifications only (reactive-only rule).
+        sysmon = skill_registry.get_skill("system_monitor")
+        if sysmon:
+            scheduler.every_minutes(5, sysmon.check_thresholds, tag="sysmon")
+        prod = skill_registry.get_skill("productivity")
+        if prod:
+            scheduler.every_minutes(1, prod.check_due, tag="reminders")
         scheduler.start()
     except Exception:
         pass
