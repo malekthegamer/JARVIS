@@ -1,0 +1,52 @@
+# ============ JARVIS requirements ============
+# Core / brain providers
+python-dotenv>=1.0
+google-genai>=1.0          # Gemini (NOT the deprecated google-generativeai)
+openai>=1.50               # OpenAI + OpenRouter (OpenAI-compatible) + Whisper API
+anthropic>=0.40            # Claude
+requests>=2.31             # Ollama local HTTP API
+
+# Voice
+SpeechRecognition>=3.10    # shared capture + Google Web Speech STT
+PyAudio>=0.2.14            # raw mic capture (prebuilt wheels for cp312)
+faster-whisper>=1.0        # local Whisper (GPU float16 on Blackwell, CPU fallback)
+edge-tts>=6.1              # free neural TTS (default voice out)
+pyttsx3>=2.90              # offline fallback TTS
+elevenlabs>=1.0            # premium TTS (optional key)
+pygame>=2.5                # audio playback for edge-tts / elevenlabs bytes
+
+# Web dashboard
+fastapi>=0.110
+uvicorn[standard]>=0.29
+
+# Skills — PC control & automation
+pyautogui>=0.9.54
+pynput>=1.7
+psutil>=5.9
+screen_brightness_control>=0.22
+schedule>=1.2
+
+# Skills — research & productivity
+ddgs>=9.0                  # DuckDuckGo search (successor of duckduckgo-search)
+pypdf>=4.0
+beautifulsoup4>=4.12       # page text extraction
+
+# Skills — vision & clipboard
+pytesseract>=0.3.10        # requires Tesseract binary installed separately
+Pillow>=10.0
+pyperclip>=1.8
+mss>=9.0                   # fast screenshots
+
+# Skills — media & finance
+yfinance>=0.2.40
+feedparser>=6.0
+
+# Desktop wrapper (Phase 9)
+pywebview>=5.0
+pystray>=0.19
+
+# Optional (not installed by default; enable when configured):
+#   playwright        — browser automation (then: playwright install chromium)
+#   google-api-python-client google-auth-oauthlib — Gmail / Calendar
+#   discord.py        — Discord messaging
+#   opencv-python     — webcam detection

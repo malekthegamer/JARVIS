@@ -1,0 +1,28 @@
+# Secrets — never commit
+.env
+
+# Runtime data (settings/memory/logs are user-local)
+data/
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS / editor
+Thumbs.db
+.DS_Store
+.vscode/
+.idea/
+
+# Audio scratch
+*.wav
+*.mp3
+!static/*.mp3
+
+# OAuth tokens
+token.json
+credentials.json
