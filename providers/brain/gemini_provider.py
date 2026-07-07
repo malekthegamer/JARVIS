@@ -13,6 +13,10 @@ class GeminiProvider(BrainProvider):
     requires_api_key = True
     supports_tools = True
 
+    def __init__(self) -> None:
+        self._cached_client = None
+        self._cached_key: str | None = None
+
     def is_configured(self) -> bool:
         return config.get_api_key("gemini") is not None
 
@@ -21,7 +25,13 @@ class GeminiProvider(BrainProvider):
         key = config.get_api_key("gemini")
         if not key:
             raise ProviderError("missing_key", "Gemini")
-        return genai.Client(api_key=key)
+        # Reuse one client across calls (a fresh per-call client gets its httpx
+        # connection torn down -> "client has been closed"). Rebuild only when
+        # the key changes, so a Settings key update still takes effect.
+        if self._cached_client is None or self._cached_key != key:
+            self._cached_client = genai.Client(api_key=key)
+            self._cached_key = key
+        return self._cached_client
 
     def generate(self, messages, system_prompt, tools=None) -> BrainResponse:
         try:
