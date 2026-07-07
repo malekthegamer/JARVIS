@@ -3,7 +3,9 @@
   const $ = (id) => document.getElementById(id);
   const conversation = $("conversation"), input = $("input");
   const feed = $("feed"), notifs = $("notifs");
-  let speakReplies = false, pendingEl = null, ws, unread = 0;
+  // Voice replies default ON (persisted) — JARVIS should sound like JARVIS.
+  let speakReplies = localStorage.getItem("jarvis.speakReplies") !== "off";
+  let pendingEl = null, ws, unread = 0;
 
   const orb = window.Orb.mount($("orb"));
 
@@ -117,11 +119,16 @@
     ws.send(JSON.stringify({ type: "chat", text, speak: speakReplies }));
     input.value = "";
   });
-  $("speakToggle").addEventListener("click", () => {
-    speakReplies = !speakReplies;
+  function renderSpeakToggle() {
     $("speakToggle").classList.toggle("on", speakReplies);
     $("speakToggle").title = `Voice replies: ${speakReplies ? "on" : "off"}`;
+  }
+  $("speakToggle").addEventListener("click", () => {
+    speakReplies = !speakReplies;
+    localStorage.setItem("jarvis.speakReplies", speakReplies ? "on" : "off");
+    renderSpeakToggle();
   });
+  renderSpeakToggle();
   $("railToggle").addEventListener("click", openRail);
   $("railClose").addEventListener("click", closeRail);
   $("scrim").addEventListener("click", closeRail);
