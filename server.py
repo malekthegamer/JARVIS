@@ -167,6 +167,11 @@ async def post_settings(payload: dict) -> JSONResponse:
         audit_log.log_action("settings", "saved", {"sections": list(new_settings.keys())})
     else:
         settings.reload()
+    try:  # keep the Windows startup entry in sync with the toggle
+        from core import autostart
+        autostart.sync_from_settings()
+    except Exception:
+        pass
     return get_settings()
 
 
