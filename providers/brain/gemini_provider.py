@@ -49,7 +49,13 @@ class GeminiProvider(BrainProvider):
                 if msg.get("content"):
                     parts.append(types.Part.from_text(text=msg["content"]))
                 for tc in msg.get("tool_calls", []):
-                    parts.append(types.Part.from_function_call(name=tc["name"], args=tc["args"]))
+                    fc_part = types.Part.from_function_call(name=tc["name"], args=tc["args"])
+                    # Gemini 3.x REQUIRES the thought_signature from the original
+                    # function call to be echoed back, or the next turn 400s.
+                    sig = (tc.get("extra") or {}).get("thought_signature")
+                    if sig:
+                        fc_part.thought_signature = sig
+                    parts.append(fc_part)
                 if parts:
                     contents.append(types.Content(role="model", parts=parts))
             elif role == "tool":
@@ -79,7 +85,12 @@ class GeminiProvider(BrainProvider):
             for i, part in enumerate(candidate.content.parts or []):
                 if getattr(part, "function_call", None):
                     fc = part.function_call
-                    out.tool_calls.append(ToolCall(id=f"gemini-{i}", name=fc.name, args=dict(fc.args or {})))
+                    extra = {}
+                    sig = getattr(part, "thought_signature", None)
+                    if sig:
+                        extra["thought_signature"] = sig
+                    out.tool_calls.append(ToolCall(
+                        id=f"gemini-{i}", name=fc.name, args=dict(fc.args or {}), extra=extra))
                 elif getattr(part, "text", None):
                     out.text += part.text
         except (AttributeError, IndexError, TypeError) as exc:

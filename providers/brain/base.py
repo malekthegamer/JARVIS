@@ -18,9 +18,12 @@ class ToolCall:
     id: str
     name: str
     args: dict
+    # Provider-specific round-trip data that must be echoed back on the next
+    # turn (e.g. Gemini 3.x 'thought_signature'). Opaque to everyone else.
+    extra: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
-        return {"id": self.id, "name": self.name, "args": self.args}
+        return {"id": self.id, "name": self.name, "args": self.args, "extra": self.extra}
 
 
 @dataclass
