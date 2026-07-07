@@ -21,7 +21,9 @@ from core.settings_store import settings
 
 REAL_MIC_HINTS = ("microphone", "realtek", "headset")
 VIRTUAL_HINTS = (
-    "voicemeeter", "vb-audio", "cable", "virtual", "stereo mix", "loopback",
+    # "voicemeet" not "voicemeeter": MME truncates device names to 31 chars,
+    # so "Virtual Mix (VB-Audio Voicemeet" must still match.
+    "voicemeet", "vb-audio", "cable", "virtual", "stereo mix", "loopback",
     "audiorelay", "steam streaming", "wave link", "sound mapper", "primary sound",
     "output", "speakers", "wo mic", "voicemod",  # phone-mic / voice-changer apps
 )
@@ -42,13 +44,32 @@ def list_input_devices() -> list[tuple[int, str]]:
 
 
 def find_real_mic() -> tuple[int | None, str]:
-    """Return (device_index, name). Settings override wins; else first device
-    passing the real-mic filter; else system default (None index)."""
+    """Return (device_index, name).
+
+    Windows device indices SHIFT when audio devices appear/disappear, so a
+    pinned index alone can silently start pointing at a Voicemeeter virtual
+    cable (this exact failure happened). Resolution order:
+      1. pinned index, but ONLY if its current name still matches the pinned
+         name (or passes the real-mic filter when no name was stored);
+      2. the pinned NAME found at whatever index it moved to;
+      3. ranked auto-detect;
+      4. system default.
+    """
     override = settings.get("stt.mic_device_index")
+    pinned_name = (settings.get("stt.mic_device_name") or "").strip()
     devices = list_input_devices()
     if override is not None:
         for idx, name in devices:
-            if idx == int(override):
+            if idx != int(override):
+                continue
+            if pinned_name and name.strip() == pinned_name:
+                return idx, name  # pin still valid
+            if not pinned_name and is_probably_real_mic(name):
+                return idx, name  # legacy pin, still looks like a real mic
+            break  # index exists but points at a different/virtual device now
+    if pinned_name:  # indices shifted — chase the device by name
+        for idx, name in devices:
+            if name.strip() == pinned_name:
                 return idx, name
     # Rank candidates: a Realtek/hardware mic beats a generic "Microphone (...)"
     # name — virtual mic apps (WO Mic, Voicemod) love the generic label.

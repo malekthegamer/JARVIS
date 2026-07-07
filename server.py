@@ -16,6 +16,7 @@ import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.base import BaseHTTPMiddleware
 
 import config
 from brain import jarvis_brain
@@ -24,6 +25,18 @@ from core.settings_store import settings
 from providers import registry
 
 app = FastAPI(title="JARVIS", docs_url=None, redoc_url=None)
+
+
+class NoCacheMiddleware(BaseHTTPMiddleware):
+    """Local single-user app: never let the browser cache the UI, so edits to
+    static files always take effect on refresh (no stale JS/CSS)."""
+    async def dispatch(self, request, call_next):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        return response
+
+
+app.add_middleware(NoCacheMiddleware)
 
 _clients: set[WebSocket] = set()
 _loop: asyncio.AbstractEventLoop | None = None
@@ -201,6 +214,26 @@ def get_mics() -> JSONResponse:
         return JSONResponse({"devices": devices, "auto": {"index": auto_index, "name": auto_name}})
     except Exception as exc:
         return JSONResponse({"devices": [], "auto": None, "error": str(exc)})
+
+
+@app.post("/api/listen")
+async def listen_once(payload: dict | None = None) -> JSONResponse:
+    """Push-to-talk: capture one utterance from the PC mic and transcribe it.
+    Runs on a worker thread so the event loop stays free; drives the orb's
+    listening state while capturing."""
+    def _capture() -> dict:
+        from voice.voice_manager import voice_manager
+        broadcast_threadsafe({"type": "status", "state": "listening"})
+        try:
+            text = voice_manager.listen(timeout=8)
+            return {"text": text or "", "ok": bool(text)}
+        finally:
+            broadcast_threadsafe({"type": "status", "state": "idle"})
+
+    result = await asyncio.get_running_loop().run_in_executor(None, _capture)
+    if not result["ok"]:
+        result["message"] = "I didn't catch that — check the mic in Settings and try again."
+    return JSONResponse(result)
 
 
 @app.post("/api/tts_test")

@@ -37,6 +37,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "whisper_model": "medium",   # safe for 8GB VRAM; large-v3 selectable
         "whisper_device": "cuda",    # auto-falls back to CPU if CUDA libs fail
         "mic_device_index": None,     # None = auto-detect real mic (see voice.capture)
+        "mic_device_name": "",        # pinned by NAME too — survives index shifts
     },
     "wake_word": "jarvis",
     "autostart": False,

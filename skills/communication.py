@@ -31,9 +31,13 @@ class CommunicationSkill(Skill):
         ]
 
     def execute(self, tool: str, args: dict) -> str:
-        if tool == "send_email":
-            return self._send_email(args)
-        return f"Unknown communication tool {tool}."
+        try:
+            if tool == "send_email":
+                return self._send_email(args)
+            return f"Unknown communication tool {tool}."
+        except Exception as exc:  # a tool must never crash the brain loop
+            self.log(tool, args, "error")
+            return f"Email action failed: {exc}"
 
     def _gmail_service(self):
         if not GMAIL_CREDS.exists():

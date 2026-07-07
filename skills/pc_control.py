@@ -7,6 +7,7 @@ never drags in pyautogui at startup.
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 
 from core.confirmations import confirm_action
@@ -24,6 +25,49 @@ APP_ALIASES = {
     "vscode": "code", "vs code": "code", "code": "code",
 }
 
+# Common "open X" requests that are websites, not installed apps.
+WEBSITES = {
+    "youtube": "https://www.youtube.com", "google": "https://www.google.com",
+    "gmail": "https://mail.google.com", "maps": "https://maps.google.com",
+    "google maps": "https://maps.google.com", "reddit": "https://www.reddit.com",
+    "twitter": "https://x.com", "x": "https://x.com",
+    "github": "https://github.com", "netflix": "https://www.netflix.com",
+    "twitch": "https://www.twitch.tv", "instagram": "https://www.instagram.com",
+    "facebook": "https://www.facebook.com", "whatsapp": "https://web.whatsapp.com",
+    "chatgpt": "https://chatgpt.com", "claude": "https://claude.ai",
+    "amazon": "https://www.amazon.com", "wikipedia": "https://www.wikipedia.org",
+}
+
+
+def _resolve_executable(target: str) -> str | None:
+    """Find a launchable path for `target`, or None. Checks, in order:
+    a direct/existing path, PATH (with common exe extensions), and the
+    Windows App Paths registry (where chrome/msedge/spotify/etc. register)."""
+    if os.path.isfile(target):
+        return target
+    hit = shutil.which(target)
+    if hit:
+        return hit
+    for ext in (".exe", ".com", ".bat"):
+        hit = shutil.which(target + ext)
+        if hit:
+            return hit
+    name = target if target.lower().endswith(".exe") else target + ".exe"
+    try:
+        import winreg
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                key_path = rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{name}"
+                with winreg.OpenKey(root, key_path) as key:
+                    path, _ = winreg.QueryValueEx(key, None)
+                    if path and os.path.isfile(path.strip('"')):
+                        return path.strip('"')
+            except FileNotFoundError:
+                continue
+    except Exception:
+        pass
+    return None
+
 
 @register_skill
 class PCControlSkill(Skill):
@@ -32,8 +76,10 @@ class PCControlSkill(Skill):
 
     def tools(self) -> list[dict]:
         return [
-            tool("open_app", "Launch an application by name (e.g. notepad, chrome, spotify).",
-                 {"app": prop("string", "Application name or alias")}, ["app"]),
+            tool("open_app", "Launch an application OR well-known website by name (e.g. notepad, chrome, spotify, youtube). Websites open in the default browser.",
+                 {"app": prop("string", "Application or site name")}, ["app"]),
+            tool("open_website", "Open any website/URL in the default browser (use when open_app doesn't know the site).",
+                 {"url": prop("string", "URL or site name, e.g. 'https://example.com' or 'example.com'")}, ["url"]),
             tool("close_app", "Close an application by its process/window name. Requires confirmation.",
                  {"app": prop("string", "Application/process name to close")}, ["app"]),
             tool("list_windows", "List the titles of currently open windows."),
@@ -57,16 +103,44 @@ class PCControlSkill(Skill):
     # ---- tools ----
     def _open_app(self, args) -> str:
         app = str(args.get("app", "")).strip().lower()
+        if not app:
+            return "Which app should I open?"
+        # Known website (or something that looks like one) -> browser.
+        if app in WEBSITES or "." in app or app.startswith("http"):
+            return self._open_website({"url": WEBSITES.get(app, app)})
+
         target = APP_ALIASES.get(app, app)
-        try:
-            if target.startswith("ms-settings:") or target.endswith(".exe"):
-                os.startfile(target) if target.endswith(".exe") else os.system(f"start {target}")
-            else:
-                subprocess.Popen(target, shell=True)
-        except Exception:
-            os.system(f'start "" "{target}"')
-        self.log("open_app", {"app": app})
-        return f"Opened {app}, sir."
+        # URI scheme like "ms-settings:" (colon, but not a "C:\" drive path).
+        is_uri = ":" in target and not (len(target) > 1 and target[1] == ":")
+        if is_uri:
+            try:
+                os.startfile(target)
+                self.log("open_app", {"app": app})
+                return f"Opened {app}, sir."
+            except OSError:
+                pass
+        # Resolve to a real executable FIRST. `start` with an unknown target
+        # pops a blocking "cannot find" dialog, so we never hand it a guess —
+        # we resolve via PATH then the Windows App Paths registry, and only
+        # launch something we actually found.
+        exe = _resolve_executable(target)
+        if exe:
+            os.startfile(exe)
+            self.log("open_app", {"app": app})
+            return f"Opened {app}, sir."
+        self.log("open_app", {"app": app}, "not_found")
+        return (f"I couldn't find an app called '{app}' installed. "
+                f"If it's a website, say 'open the {app} website' instead.")
+
+    def _open_website(self, args) -> str:
+        url = str(args.get("url", "")).strip()
+        if not url:
+            return "Which site should I open?"
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + (url if "." in url else f"www.{url}.com")
+        os.startfile(url)  # default browser via shell URL association
+        self.log("open_website", {"url": url})
+        return f"Opened {url} in your browser."
 
     def _close_app(self, args) -> str:
         app = str(args.get("app", "")).strip()

@@ -123,6 +123,7 @@
       for (const d of data.devices.filter(d => d.real || d.index === current)) {
         const opt = document.createElement("option");
         opt.value = d.index; opt.textContent = `[${d.index}] ${d.name}`;
+        opt.dataset.name = d.name;  // pin by name too — indices shift on Windows
         sel.appendChild(opt);
       }
       if (current !== null && current !== undefined) sel.value = String(current);
@@ -158,6 +159,8 @@
           whisper_model: $("whisperModel").value,
           whisper_device: $("whisperDevice").value,
           mic_device_index: $("micSelect").value === "" ? null : Number($("micSelect").value),
+          mic_device_name: $("micSelect").value === "" ? ""
+            : ($("micSelect").selectedOptions[0]?.dataset.name || ""),
         },
         wake_word: $("wakeWord").value.trim() || "jarvis",
         autostart: $("autostart").checked,

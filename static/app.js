@@ -129,6 +129,29 @@
     renderSpeakToggle();
   });
   renderSpeakToggle();
+  // push-to-talk: capture one utterance on the PC, drop it into the composer,
+  // and send it. The orb shows the listening state while the server captures.
+  let listening = false;
+  $("talkBtn").addEventListener("click", async () => {
+    if (listening) return;
+    listening = true;
+    $("talkBtn").classList.add("on");
+    $("promptHint").textContent = "Listening… speak now.";
+    $("promptHint").style.opacity = "1";
+    try {
+      const res = await (await fetch("/api/listen", { method: "POST" })).json();
+      if (res.ok && res.text) {
+        ws.send(JSON.stringify({ type: "chat", text: res.text, speak: speakReplies }));
+      } else {
+        $("promptHint").textContent = res.message || "I didn't catch that.";
+      }
+    } catch {
+      $("promptHint").textContent = "Voice capture failed — is the mic set up?";
+    } finally {
+      listening = false;
+      $("talkBtn").classList.remove("on");
+    }
+  });
   $("railToggle").addEventListener("click", openRail);
   $("railClose").addEventListener("click", closeRail);
   $("scrim").addEventListener("click", closeRail);
