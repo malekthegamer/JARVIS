@@ -41,9 +41,15 @@ _PRE_INPUT_SETTLE_S = 0.15
 
 # ---- tier classification ----
 # Decided from the RESOLVED element name / literal combo — not model paraphrase.
+# English committal/destructive verbs. Whole-word matched (\b…\b) so "binary"
+# won't trip "bin" and "combine" won't trip "bin". Errs toward over-prompting;
+# see the honest blind-spot list in classify_click's tests (non-English and
+# icon-only labels are NOT covered — that needs the vision fallback slice).
 _DESTRUCTIVE_RE = re.compile(
-    r"\b(send|submit|confirm|delete|remove|save|discard|buy|purchase|pay|order|"
-    r"post|publish|reply|share|sign|apply|install|uninstall|format|empty)\b")
+    r"\b(send|unsend|submit|confirm|delete|erase|wipe|remove|trash|bin|"
+    r"save|overwrite|replace|reset|discard|buy|purchase|pay|order|post|"
+    r"publish|reply|share|sign|apply|install|uninstall|deactivate|"
+    r"unsubscribe|format|empty)\b")
 _DIALOG_COMMIT_RE = re.compile(r"\b(yes|ok|continue)\b")  # only inside a dialog
 _MODS = {"ctrl", "control", "alt", "shift", "win"}
 _AUTO_KEYS = {"up", "down", "left", "right", "tab", "esc", "escape",
@@ -484,6 +490,14 @@ def classify_type(args: dict) -> dict:
 
 
 def classify_press(args: dict) -> dict:
+    """Tier for a key combo. NOTE on the Save-As boundary (deliberate for this
+    slice): approving Ctrl+S gates and sends the KEYPRESS only. For an already-
+    named file that keypress IS the irreversible write, so gating it is correct.
+    For a new/untitled file it opens a Save As dialog — the code stops there and
+    does NOT auto-complete it. Completing the save means the model separately
+    clicks the dialog's 'Save' button, and that click is INDEPENDENTLY confirm-
+    gated (classify_click: 'save' is destructive). So there is no silent auto-
+    complete of the irreversible step — every path to disk crosses the gate."""
     combo = str(args.get("combo", ""))
     window = args.get("window")
     _win, title = _target_window(window)

@@ -198,3 +198,74 @@ def test_terminal_backstop(title):
 
 def test_non_terminal_window_not_flagged():
     assert jinput._is_terminal("Untitled - Notepad") is False
+
+
+# ---------- verification follow-up: broadened destructive vocab + wiring ----------
+
+@pytest.mark.parametrize("name", [
+    "Erase", "Wipe", "Overwrite", "Replace All", "Reset", "Trash",
+    "Move to Bin", "Unsend", "Deactivate account", "Unsubscribe",
+])
+def test_click_tier_broadened_destructive_words(name):
+    """These were AUTO before the verification pass — now correctly gated."""
+    assert jinput._click_tier(name, False) == "confirm"
+
+
+@pytest.mark.parametrize("name", ["Binary", "Combine", "Reserved", "Format Painter"])
+def test_click_tier_no_false_positive_on_substrings(name):
+    """Whole-word matching: 'bin' must not fire on 'Binary'/'Combine', and a
+    benign 'Format Painter' toolbar button is... actually 'format' IS gated —
+    verify the substring-only ones stay AUTO."""
+    # 'Format Painter' contains the whole word 'format' → intentionally confirm.
+    expected = "confirm" if name == "Format Painter" else "auto"
+    assert jinput._click_tier(name, False) == expected
+
+
+def _classify_click_with(monkeypatch, element_name, is_dialog=False, window="Some App"):
+    def fake_resolve(desc, window_hint=None):
+        return {"ok": True, "element_name": element_name, "control_type": "Button",
+                "window_title": window, "window_is_dialog": is_dialog,
+                "rect": (0, 0, 10, 10), "mid_point": (5, 5)}
+    monkeypatch.setattr(jinput, "resolve_target", fake_resolve)
+    return jinput.classify_click({"target": element_name, "window": window})
+
+
+@pytest.mark.parametrize("label", ["Send", "Delete", "Submit", "Confirm", "Post"])
+def test_classify_click_gates_destructive_buttons_end_to_end(monkeypatch, label):
+    """Not just _click_tier in isolation — the whole classify_click path a
+    real button click travels must return confirm."""
+    info = _classify_click_with(monkeypatch, label)
+    assert info["tier"] == "confirm"
+    assert label.lower() in info["description"].lower()
+
+
+def test_completing_the_save_is_itself_gated(monkeypatch):
+    """Q1 guarantee: after Ctrl+S opens Save As, clicking the dialog's 'Save'
+    button does NOT slip through as a silent auto-complete — it re-gates."""
+    info = _classify_click_with(monkeypatch, "Save", is_dialog=True, window="Save As")
+    assert info["tier"] == "confirm"
+
+
+def test_safe_clicks_stay_auto_no_false_positive(monkeypatch):
+    for label in ["Bold", "Italic", "Cut", "Copy", "Zoom in", "File"]:
+        assert _classify_click_with(monkeypatch, label)["tier"] == "auto", label
+
+
+def test_known_blind_spots_are_documented_not_secretly_working(monkeypatch):
+    """HONEST pin of current limitations. If any of these ever flips to
+    'confirm' (e.g. we add i18n or vision classification), update this test —
+    it exists so a real gap can't hide. These are NOT caught today:
+      - non-English labels ('Enviar'=send, 'Löschen'=delete)
+      - icon-only buttons with an empty accessible name
+      - 'OK'/'Yes' outside a UIA Dialog (dialog-scoped to avoid over-prompting)
+    """
+    assert _classify_click_with(monkeypatch, "Enviar")["tier"] == "auto"
+    assert _classify_click_with(monkeypatch, "Löschen")["tier"] == "auto"
+    assert _classify_click_with(monkeypatch, "")["tier"] == "auto"
+    assert _classify_click_with(monkeypatch, "OK", is_dialog=False)["tier"] == "auto"
+
+
+def test_enter_and_ctrl_enter_gate_chat_submit():
+    """Pressing Enter (send a chat message) must not slip through as AUTO."""
+    assert jinput.classify_press({"combo": "enter", "window": "Discord"})["tier"] == "confirm"
+    assert jinput.classify_press({"combo": "ctrl+enter", "window": "Slack"})["tier"] == "confirm"
