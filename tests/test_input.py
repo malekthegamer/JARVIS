@@ -149,3 +149,50 @@ def test_click_aborts_when_window_closed(notepad):
     out = jinput.click("the text area", window_hint="Notepad")
     assert out["ok"] is False
     assert "mid_point" not in out
+
+
+# ---------- stage 3: tier classifier (pure logic, no UIA) ----------
+
+@pytest.mark.parametrize("name,is_dialog,expected", [
+    ("Save", False, "confirm"),
+    ("Send", False, "confirm"),
+    ("Delete", False, "confirm"),
+    ("Submit", False, "confirm"),
+    ("Don't Save", False, "confirm"),
+    ("Publish", False, "confirm"),
+    ("Bold", False, "auto"),        # a formatting button is harmless
+    ("File", False, "auto"),        # a menu is harmless to open
+    ("Cut", False, "auto"),
+    ("OK", True, "confirm"),        # OK in a DIALOG commits something
+    ("OK", False, "auto"),          # "OK" as a plain label doesn't
+    ("Yes", True, "confirm"),
+    ("Continue", True, "confirm"),
+])
+def test_click_tier(name, is_dialog, expected):
+    assert jinput._click_tier(name, is_dialog) == expected
+
+
+@pytest.mark.parametrize("combo,expected", [
+    ("ctrl+c", "auto"), ("ctrl+v", "auto"), ("ctrl+a", "auto"), ("ctrl+z", "auto"),
+    ("tab", "auto"), ("up", "auto"), ("esc", "auto"), ("home", "auto"),
+    ("enter", "confirm"), ("ctrl+enter", "confirm"), ("ctrl+s", "confirm"),
+    ("alt+f4", "confirm"), ("ctrl+w", "confirm"), ("delete", "confirm"),
+    ("ctrl+shift+p", "confirm"),   # unknown → fail closed
+    ("f5", "confirm"),             # unknown → fail closed
+])
+def test_combo_tier(combo, expected):
+    assert jinput._combo_tier(combo) == expected
+
+
+def test_combo_tier_normalizes_modifier_order():
+    assert jinput._combo_tier("a+ctrl") == jinput._combo_tier("ctrl+a") == "auto"
+
+
+@pytest.mark.parametrize("title", ["Command Prompt", "Windows PowerShell",
+                                   "cmd.exe", "Terminal"])
+def test_terminal_backstop(title):
+    assert jinput._is_terminal(title) is True
+
+
+def test_non_terminal_window_not_flagged():
+    assert jinput._is_terminal("Untitled - Notepad") is False

@@ -13,7 +13,7 @@ import time
 
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
-from jarvis.primitives import apps, files, screen, ui_tree, windows
+from jarvis.primitives import apps, files, input as jinput, screen, ui_tree, windows
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -22,7 +22,7 @@ WINDOW_WAIT_S = 5.0
 DIFF_MEANINGFUL = 0.01
 
 
-def _run_launch_app(args: dict) -> str:
+def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
     """Act (launch) + observe (ui tree, screenshots) + verify (both signals),
     reported separately so the model — and the user — see the evidence."""
     name = str(args.get("name", "")).strip()
@@ -57,18 +57,63 @@ def _run_launch_app(args: dict) -> str:
     return f"{result['message']} VERIFY [{verdict}]: {'; '.join(verify)}."
 
 
-def _run_read_ui_tree(args: dict) -> str:
+def _run_read_ui_tree(args: dict, gate_info: dict | None = None) -> str:
     return ui_tree.read_ui_tree()
 
 
-def _run_delete_file(args: dict) -> str:
+def _run_delete_file(args: dict, gate_info: dict | None = None) -> str:
     r = files.delete_file(str(args.get("name", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
-def _run_close_window(args: dict) -> str:
+def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
     r = windows.close_window(str(args.get("title", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_click(args: dict, gate_info: dict | None = None) -> str:
+    """Click, with screenshot-diff verify. Re-resolves at exec time and, if a
+    CONFIRM approval named a specific element, refuses if it changed."""
+    target = str(args.get("target", ""))
+    window = args.get("window")
+    expect = gate_info.get("expect_name") if gate_info else None
+    before = screen.capture_screen()
+    r = jinput.click(target, window_hint=window, expect_name=expect)
+    if not r["ok"]:
+        return f"FAILED: {r['message']}"
+    time.sleep(0.3)
+    frac = screen.screenshot_diff(before, screen.capture_screen())
+    return f"OK: {r['message']} VERIFY: screen changed {frac:.1%}."
+
+
+def _run_type_text(args: dict, gate_info: dict | None = None) -> str:
+    """Type, then read the target's text back via UIA to verify."""
+    text = str(args.get("text", ""))
+    window = args.get("window")
+    r = jinput.type_text(text, window_hint=window)
+    if not r["ok"]:
+        return f"FAILED: {r['message']}"
+    typed = r.get("typed", text)
+    readback = jinput.read_back_text(window)
+    if readback is None:
+        verify = "VERIFY: control doesn't expose text — couldn't confirm"
+    elif typed and typed in readback:
+        verify = "VERIFY: text confirmed present in the control"
+    else:
+        verify = "VERIFY: typed text NOT found on readback — tell the user it may not have landed"
+    return f"OK: {r['message']} {verify}."
+
+
+def _run_press_keys(args: dict, gate_info: dict | None = None) -> str:
+    combo = str(args.get("combo", ""))
+    window = args.get("window")
+    before = screen.capture_screen()
+    r = jinput.press_keys(combo, window_hint=window)
+    if not r["ok"]:
+        return f"FAILED: {r['message']}"
+    time.sleep(0.3)
+    frac = screen.screenshot_diff(before, screen.capture_screen())
+    return f"OK: {r['message']} VERIFY: screen changed {frac:.1%}."
 
 
 PRIMITIVES: dict[str, dict] = {
@@ -136,6 +181,67 @@ PRIMITIVES: dict[str, dict] = {
             },
         },
     },
+    "click": {
+        "fn": _run_click,
+        "classify": jinput.classify_click,
+        "schema": {
+            "name": "click",
+            "description": ("Click an on-screen element described in natural language "
+                            "(e.g. 'the Save button', 'the search field'). Provide the "
+                            "'window' you are working in. Committal clicks (Save, Send, "
+                            "Delete, OK in a dialog, …) are confirmation-gated."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string",
+                               "description": "Natural-language description of the element to click"},
+                    "window": {"type": "string",
+                               "description": "Title (or part) of the window it's in — strongly recommended"},
+                },
+                "required": ["target"],
+            },
+        },
+    },
+    "type_text": {
+        "fn": _run_type_text,
+        "classify": jinput.classify_type,
+        "schema": {
+            "name": "type_text",
+            "description": ("Type text into the focused control of a window. Does NOT "
+                            "press Enter — newlines are ignored; to submit, ask to press "
+                            "Enter as a separate step. Provide the 'window' to type into."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The text to type"},
+                    "window": {"type": "string",
+                               "description": "Title (or part) of the target window"},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    "press_keys": {
+        "fn": _run_press_keys,
+        "classify": jinput.classify_press,
+        "schema": {
+            "name": "press_keys",
+            "description": ("Press a keyboard combo like 'ctrl+a', 'tab', or 'enter' in a "
+                            "window. Navigation/selection/clipboard combos run freely; "
+                            "committal keys (Enter, Ctrl+S, Alt+F4, Delete, unknown combos) "
+                            "are confirmation-gated."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "combo": {"type": "string",
+                              "description": "Keys joined by '+', e.g. 'ctrl+s'"},
+                    "window": {"type": "string",
+                               "description": "Title (or part) of the target window"},
+                },
+                "required": ["combo"],
+            },
+        },
+    },
 }
 
 _CANCEL_REASONS = {
@@ -152,19 +258,28 @@ def tools_schema() -> list[dict]:
 
 def execute(name: str, args: dict) -> str:
     """Run one primitive. CONFIRM-tier primitives pass the fail-closed gate
-    first; only an explicit user approval reaches EXECUTING. Never raises."""
+    first; only an explicit user approval reaches EXECUTING. Never raises.
+
+    Tier is resolved two ways: a static "tier" (+ optional "describe"), or a
+    dynamic "classify"(args) -> {tier, description, expect_name} that decides
+    from the RESOLVED element / literal combo (so the model can't paraphrase a
+    dangerous action past the gate)."""
     prim = PRIMITIVES.get(name)
     if prim is None:
         return f"Unknown tool: {name}"
     args = args or {}
+    gate_info = None
     try:
-        if prim["tier"] == "confirm":
-            cancelled = _confirm_gate(prim, name, args)
+        tier, description, gate_info = _decide_tier(prim, args)
+        if tier == "confirm":
+            if description is None:
+                return "FAILED: nothing matching that to act on right now."
+            cancelled = _gate(name, description)
             if cancelled is not None:
                 return cancelled
         broadcaster.set(AgentState.EXECUTING, detail=name)
         try:
-            return prim["fn"](args)
+            return prim["fn"](args, gate_info)
         except Exception as exc:
             return f"Tool {name} crashed: {exc}"
     finally:
@@ -172,18 +287,35 @@ def execute(name: str, args: dict) -> str:
         broadcaster.set(AgentState.THINKING)
 
 
-def _confirm_gate(prim: dict, name: str, args: dict) -> str | None:
+def _decide_tier(prim: dict, args: dict) -> tuple[str, str | None, dict | None]:
+    """Return (tier, description, gate_info). Classification failure fails
+    closed (confirm)."""
+    if "classify" in prim:
+        try:
+            info = prim["classify"](args)
+            return info.get("tier", "confirm"), info.get("description"), info
+        except Exception:
+            return "confirm", "an action that could not be classified", None
+    tier = prim.get("tier", "auto")
+    description = None
+    if tier == "confirm" and prim.get("describe"):
+        try:
+            description = prim["describe"](args)
+        except Exception:
+            description = None
+    return tier, description, None
+
+
+def _gate(name: str, description: str) -> str | None:
     """None = approved, proceed. A string = cancelled, return it as the tool
     result. Any internal failure reads as cancelled (fail closed)."""
+    timeout_s = 0.0
     try:
-        description = prim["describe"](args)
-        if description is None:
-            return "FAILED: nothing matching that to act on right now."
         broadcaster.set(AgentState.CONFIRMING, detail=name)
         timeout_s = float(settings.get("confirm.timeout_s", 30))
         decision = confirmations.request(description, timeout_s=timeout_s)
     except Exception:
-        decision, description, timeout_s = Decision(False, "error"), name, 0.0
+        decision = Decision(False, "error")
     if decision.approved:
         return None
     reason = _CANCEL_REASONS.get(decision.reason, decision.reason).format(t=timeout_s)

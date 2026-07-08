@@ -35,6 +35,24 @@ _STOPWORDS = {"the", "a", "an", "my", "this", "that", "please", "click", "on"}
 _CHUNK = 40                    # type in chunks, re-check focus between them
 _FOCUS_SETTLE_S = 0.15
 
+# ---- tier classification ----
+# Decided from the RESOLVED element name / literal combo — not model paraphrase.
+_DESTRUCTIVE_RE = re.compile(
+    r"\b(send|submit|confirm|delete|remove|save|discard|buy|purchase|pay|order|"
+    r"post|publish|reply|share|sign|apply|install|uninstall|format|empty)\b")
+_DIALOG_COMMIT_RE = re.compile(r"\b(yes|ok|continue)\b")  # only inside a dialog
+_MODS = {"ctrl", "control", "alt", "shift", "win"}
+_AUTO_KEYS = {"up", "down", "left", "right", "tab", "esc", "escape",
+              "home", "end", "pageup", "pagedown", "backspace"}
+_AUTO_COMBOS = {"ctrl+c", "ctrl+v", "ctrl+x", "ctrl+a", "ctrl+z", "ctrl+y", "ctrl+f"}
+_CONFIRM_COMBOS = {"enter", "ctrl+enter", "ctrl+shift+enter", "ctrl+s",
+                   "alt+f4", "ctrl+w", "delete"}
+_TERMINAL_HINTS = ("cmd", "command prompt", "powershell", "terminal",
+                   "wt", "conhost", "console")
+_COMBO_LABELS = {"ctrl+s": "save", "enter": "submit", "ctrl+enter": "submit",
+                 "alt+f4": "close the window", "ctrl+w": "close the tab",
+                 "delete": "delete"}
+
 
 # ============================ resolution ============================
 
@@ -73,6 +91,15 @@ def _target_window(window_hint: str | None):
 
 def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "").strip().casefold())
+
+
+def _is_dialog(win) -> bool:
+    try:
+        ct = win.element_info.control_type
+        cn = win.element_info.class_name or ""
+        return ct == "Dialog" or cn == "#32770"
+    except Exception:
+        return False
 
 
 def _score(needle: str, name: str) -> float:
@@ -190,7 +217,8 @@ def resolve_target(description: str, window_hint: str | None = None) -> dict:
         r = el.rectangle()
         mid = r.mid_point()
         return {"ok": True, "element_name": name, "control_type": ctype,
-                "window_title": title, "rect": (r.left, r.top, r.right, r.bottom),
+                "window_title": title, "window_is_dialog": _is_dialog(window),
+                "rect": (r.left, r.top, r.right, r.bottom),
                 "mid_point": (int(mid.x), int(mid.y))}
     except Exception as exc:
         return {"ok": False, "message": f"Found '{name}' but couldn't locate it ({exc}).",
@@ -342,14 +370,22 @@ def _combo_to_send_keys(combo: str) -> str:
     return prefix + named.get(key, key)
 
 
-def click(description: str, window_hint: str | None = None) -> dict:
-    """Resolve a description and click its center. Tier decided upstream;
-    this fn assumes approval already happened for CONFIRM-tier targets."""
+def click(description: str, window_hint: str | None = None,
+          expect_name: str | None = None) -> dict:
+    """Resolve a description and click its center. Tier decided upstream; this
+    fn assumes approval already happened for CONFIRM-tier targets. It RE-
+    resolves at execution time (never reuses stale coordinates); if the caller
+    passed the name that was approved, a fresh resolution to a different
+    element aborts — the user approved a specific target, not a description."""
     r = resolve_target(description, window_hint=window_hint)
     if not r["ok"]:
         cands = r.get("candidates") or []
         extra = f" I can see: {', '.join(cands[:6])}." if cands else ""
         return {"ok": False, "message": r["message"] + extra}
+    if expect_name is not None and _norm(r["element_name"]) != _norm(expect_name):
+        return {"ok": False,
+                "message": f"The target changed while waiting: approved '{expect_name}', "
+                           f"now resolves to '{r['element_name']}'. Not clicking."}
     x, y = r["mid_point"]
     try:
         import pydirectinput
@@ -366,3 +402,97 @@ def click(description: str, window_hint: str | None = None) -> dict:
                 "element_name": r["element_name"]}
     except Exception as exc:
         return {"ok": False, "message": f"Couldn't click '{r['element_name']}': {exc}"}
+
+
+# ============================ tier classification ============================
+
+def _norm_combo(combo: str) -> str:
+    parts = [p.strip().lower() for p in str(combo).split("+") if p.strip()]
+    parts = ["ctrl" if p == "control" else p for p in parts]
+    mods = [p for p in parts if p in _MODS]
+    keys = [p for p in parts if p not in _MODS]
+    order = {"ctrl": 0, "alt": 1, "shift": 2, "win": 3}
+    mods.sort(key=lambda m: order.get(m, 9))
+    return "+".join(mods + keys)
+
+
+def _click_tier(element_name: str, is_dialog: bool) -> str:
+    n = _norm(element_name)
+    if "don't save" in n or "don’t save" in n:
+        return "confirm"
+    if _DESTRUCTIVE_RE.search(n):
+        return "confirm"
+    if is_dialog and _DIALOG_COMMIT_RE.search(n):
+        return "confirm"
+    return "auto"
+
+
+def _combo_tier(combo: str) -> str:
+    c = _norm_combo(combo)
+    if c in _CONFIRM_COMBOS:
+        return "confirm"
+    if c in _AUTO_COMBOS:
+        return "auto"
+    if "+" not in c and c in _AUTO_KEYS:
+        return "auto"
+    return "confirm"  # unknown → fail closed
+
+
+def _is_terminal(title: str) -> bool:
+    t = _norm(title)
+    return any(k in t for k in _TERMINAL_HINTS)
+
+
+def classify_click(args: dict) -> dict:
+    """Resolve the target so the tier reflects the REAL element, and the
+    modal names it. Resolution failure → auto (the click fn re-resolves and
+    fails cleanly without acting — no need to prompt for a no-op)."""
+    desc = str(args.get("target", ""))
+    window = args.get("window")
+    r = resolve_target(desc, window_hint=window)
+    if not r["ok"]:
+        return {"tier": "auto", "description": f"Click '{desc}'", "expect_name": None}
+    tier = _click_tier(r["element_name"], r.get("window_is_dialog", False))
+    if _is_terminal(r["window_title"]):
+        tier = "confirm"
+    label = r["element_name"] or desc
+    return {"tier": tier, "expect_name": r["element_name"],
+            "description": f"Click '{label}' in '{r['window_title']}'"}
+
+
+def classify_type(args: dict) -> dict:
+    window = args.get("window")
+    _win, title = _target_window(window)
+    where = f"'{title}'" if title else "the focused window"
+    tier = "confirm" if _is_terminal(title or "") else "auto"
+    return {"tier": tier, "expect_name": None, "description": f"Type into {where}"}
+
+
+def classify_press(args: dict) -> dict:
+    combo = str(args.get("combo", ""))
+    window = args.get("window")
+    _win, title = _target_window(window)
+    tier = "confirm" if _is_terminal(title or "") else _combo_tier(combo)
+    label = _COMBO_LABELS.get(_norm_combo(combo), "")
+    where = f" in '{title}'" if title else ""
+    desc = f"Press {combo}" + (f" ({label})" if label else "") + where
+    return {"tier": tier, "expect_name": None, "description": desc}
+
+
+# ============================ verify (readback) ============================
+
+def read_back_text(window_hint: str | None = None) -> str | None:
+    """Text of the edit/document control in the target window, for verifying
+    type_text. None when no such control exposes text."""
+    win, _title = _target_window(window_hint)
+    if win is None:
+        return None
+    try:
+        for c in win.descendants():
+            if c.element_info.control_type in _EDIT_TYPES:
+                txt = c.window_text()
+                if txt is not None:
+                    return txt
+    except Exception:
+        return None
+    return None

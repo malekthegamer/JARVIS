@@ -54,7 +54,7 @@ def _make_brain(provider):
 def test_tool_round_walks_executing_state(monkeypatch, state_log):
     calls = []
     monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn",
-                        lambda args: calls.append(args) or "LAUNCHED. VERIFY: ok.")
+                        lambda args, gi=None: calls.append(args) or "LAUNCHED. VERIFY: ok.")
     provider = ToolCallingProvider()
     brain = _make_brain(provider)
     reply = brain.think("open notepad")
@@ -82,7 +82,7 @@ def test_unknown_tool_returns_string_not_crash(state_log):
 
 
 def test_crashing_primitive_is_contained(monkeypatch, state_log):
-    def boom(args):
+    def boom(args, gi=None):
         raise RuntimeError("primitive exploded")
     monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn", boom)
     provider = ToolCallingProvider()
@@ -205,6 +205,71 @@ def test_no_modal_for_nonexistent_window(state_log, confirm_events):
     assert "FAILED" in provider.seen_tool_result
     states = [e["state"] for e in state_log]
     assert "confirming" not in states
+
+
+# ---------- slice 4: input tools through the dynamic-tier gate ----------
+
+def test_type_text_is_auto_no_confirm(monkeypatch, state_log, confirm_events):
+    # classify_type -> auto (non-terminal window); fn stubbed so no real typing
+    monkeypatch.setitem(primitives.PRIMITIVES["type_text"], "classify",
+                        lambda args: {"tier": "auto", "description": "Type", "expect_name": None})
+    monkeypatch.setitem(primitives.PRIMITIVES["type_text"], "fn",
+                        lambda args, gi=None: "OK: typed. VERIFY: text confirmed present.")
+    provider = ToolCallingProvider(tool_name="type_text",
+                                   tool_args={"text": "hello world", "window": "Notepad"})
+    brain = _make_brain(provider)
+    reply = brain.think("type hello world in notepad")
+
+    assert "confirmed" in provider.seen_tool_result
+    states = [e["state"] for e in state_log]
+    assert "confirming" not in states, "AUTO type must not gate"
+    assert "executing" in states
+    assert confirm_events == []
+
+
+def test_ctrl_s_is_confirm_gated(monkeypatch, state_log, confirm_events):
+    ran = []
+    monkeypatch.setitem(primitives.PRIMITIVES["press_keys"], "classify",
+                        lambda args: {"tier": "confirm",
+                                      "description": "Press ctrl+s (save) in 'Notepad'",
+                                      "expect_name": None})
+    monkeypatch.setitem(primitives.PRIMITIVES["press_keys"], "fn",
+                        lambda args, gi=None: ran.append(1) or "OK: Pressed ctrl+s.")
+    unsubscribe = _auto_resolver(approved=True)
+    try:
+        provider = ToolCallingProvider(tool_name="press_keys",
+                                       tool_args={"combo": "ctrl+s", "window": "Notepad"})
+        brain = _make_brain(provider)
+        brain.think("save it")
+    finally:
+        unsubscribe()
+
+    assert ran == [1], "approved ctrl+s must run"
+    states = [e["state"] for e in state_log]
+    assert states == ["thinking", "confirming", "executing", "thinking", "idle"]
+    assert "save" in confirm_events[0]["description"].lower()
+
+
+def test_ctrl_s_declined_does_not_run(monkeypatch, state_log):
+    ran = []
+    monkeypatch.setitem(primitives.PRIMITIVES["press_keys"], "classify",
+                        lambda args: {"tier": "confirm",
+                                      "description": "Press ctrl+s (save) in 'Notepad'",
+                                      "expect_name": None})
+    monkeypatch.setitem(primitives.PRIMITIVES["press_keys"], "fn",
+                        lambda args, gi=None: ran.append(1) or "OK")
+    unsubscribe = _auto_resolver(approved=False)
+    try:
+        provider = ToolCallingProvider(tool_name="press_keys",
+                                       tool_args={"combo": "ctrl+s", "window": "Notepad"})
+        brain = _make_brain(provider)
+        brain.think("save it")
+    finally:
+        unsubscribe()
+
+    assert ran == [], "declined ctrl+s must NOT run"
+    assert "CANCELLED" in provider.seen_tool_result
+    assert "executing" not in [e["state"] for e in state_log]
 
 
 def test_live_question_never_enters_executing(state_log):
