@@ -9,6 +9,7 @@
     idle:      { hue: 195, spin: 0.10, pulse: 0.35, turb: 0.5, ringGlow: 0.7 },
     listening: { hue: 38,  spin: 0.16, pulse: 0.9,  turb: 0.9, ringGlow: 1.0 },
     thinking:  { hue: 205, spin: 0.7,  pulse: 0.6,  turb: 1.4, ringGlow: 1.1 },
+    confirming:{ hue: 38,  spin: 0.06, pulse: 0.45, turb: 0.5, ringGlow: 1.15 },
     executing: { hue: 265, spin: 1.1,  pulse: 1.0,  turb: 1.6, ringGlow: 1.3 },
     speaking:  { hue: 190, spin: 0.22, pulse: 1.6,  turb: 1.1, ringGlow: 1.2 },
     offline:   { hue: 210, spin: 0.03, pulse: 0.12, turb: 0.2, ringGlow: 0.25 },

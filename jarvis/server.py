@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from jarvis.brain import jarvis_brain
+from jarvis.core.confirmations import confirmations
 from jarvis.state import broadcaster
 from jarvis.voice.voice_manager import voice_manager
 
@@ -35,6 +36,7 @@ _clients: set[WebSocket] = set()
 _events: asyncio.Queue | None = None
 _loop: asyncio.AbstractEventLoop | None = None
 _busy = threading.Lock()  # one interaction at a time (re-entrancy guard)
+_chat_tasks: set[asyncio.Task] = set()  # keep fire-and-forget tasks alive
 
 
 def _enqueue_threadsafe(event: dict) -> None:
@@ -63,12 +65,14 @@ async def _lifespan(app: FastAPI):
     global _loop, _events
     _loop = asyncio.get_running_loop()
     _events = asyncio.Queue()
-    unsubscribe = broadcaster.subscribe(_enqueue_threadsafe)
+    unsubscribe_state = broadcaster.subscribe(_enqueue_threadsafe)
+    unsubscribe_confirm = confirmations.subscribe(_enqueue_threadsafe)
     fanout = asyncio.create_task(_fanout_forever())
     try:
         yield
     finally:
-        unsubscribe()
+        unsubscribe_state()
+        unsubscribe_confirm()
         fanout.cancel()
 
 
@@ -116,28 +120,47 @@ async def api_listen() -> JSONResponse:
         _busy.release()
 
 
+async def _run_chat(text: str, ws: WebSocket) -> None:
+    """Fire-and-forget chat runner. The WS receive loop must stay free while
+    this blocks (a CONFIRM-gated action waits on the user's answer, and that
+    answer arrives through the receive loop — awaiting here would deadlock)."""
+    if not _busy.acquire(blocking=False):
+        try:
+            await ws.send_json({"type": "error", "message": "busy"})
+        except Exception:
+            pass
+        return
+    try:
+        await run_in_threadpool(_respond, text)
+    finally:
+        _busy.release()
+
+
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     _clients.add(ws)
     try:
-        # State sync so a (re)connecting HUD renders the truth immediately.
+        # State sync so a (re)connecting HUD renders the truth immediately —
+        # including a confirm modal that was pending when the tab (re)loaded.
         await ws.send_json({"type": "state", "state": broadcaster.current.value,
                             "seq": 0, "detail": "sync"})
+        pending = confirmations.pending_event()
+        if pending:
+            await ws.send_json(pending)
         while True:
             msg = await ws.receive_json()
-            if msg.get("type") != "chat":
-                continue
-            text = (msg.get("text") or "").strip()[:MAX_CHAT_CHARS]
-            if not text:
-                continue
-            if not _busy.acquire(blocking=False):
-                await ws.send_json({"type": "error", "message": "busy"})
-                continue
-            try:
-                await run_in_threadpool(_respond, text)
-            finally:
-                _busy.release()
+            kind = msg.get("type")
+            if kind == "chat":
+                text = (msg.get("text") or "").strip()[:MAX_CHAT_CHARS]
+                if not text:
+                    continue
+                task = asyncio.create_task(_run_chat(text, ws))
+                _chat_tasks.add(task)
+                task.add_done_callback(_chat_tasks.discard)
+            elif kind == "confirm_response":
+                confirmations.resolve(str(msg.get("id", "")),
+                                      bool(msg.get("approved")))
     except WebSocketDisconnect:
         pass
     finally:

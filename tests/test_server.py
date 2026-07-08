@@ -103,6 +103,160 @@ def test_busy_guard_rejects_reentrant_listen(client):
         server._busy.release()
 
 
+# ---------- slice 3: confirm flow over the WebSocket ----------
+
+import threading
+import time
+
+from jarvis.core.confirmations import confirmations
+from jarvis.primitives import files
+from jarvis.providers.brain.base import ToolCall
+
+
+class DeleteProposingProvider(BrainProvider):
+    """Round 1: propose delete_file. Round 2: report the tool result."""
+    supports_tools = True
+
+    def is_configured(self):
+        return True
+
+    def __init__(self):
+        self.rounds = 0
+
+    def generate(self, messages, system_prompt, tools=None):
+        self.rounds += 1
+        if self.rounds == 1:
+            return BrainResponse(tool_calls=[
+                ToolCall(id="t1", name="delete_file", args={"name": "ws-test.txt"})])
+        result = next(m["content"] for m in reversed(messages) if m["role"] == "tool")
+        return BrainResponse(text=f"Result: {result}")
+
+
+@pytest.fixture()
+def confirm_client(monkeypatch):
+    from jarvis import server
+    from jarvis.brain import jarvis_brain
+    from jarvis.core.settings_store import settings
+    from jarvis.state import AgentState, broadcaster
+    from jarvis.voice.voice_manager import voice_manager
+
+    monkeypatch.setattr(jarvis_brain, "_provider_override", DeleteProposingProvider())
+
+    def fake_speak(text):
+        if not text:
+            return
+        broadcaster.set(AgentState.SPEAKING)
+        broadcaster.set(AgentState.IDLE)
+
+    monkeypatch.setattr(voice_manager, "speak", fake_speak)
+    settings.set("confirm.timeout_s", 5, persist=False)  # bound any test hang
+    jarvis_brain.reset()
+    files.AGENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    target = files.AGENT_FILES_DIR / "ws-test.txt"
+    target.write_text("ws", encoding="utf-8")
+    with TestClient(server.app) as c:
+        yield c, target
+    settings.set("confirm.timeout_s", 30, persist=False)
+    target.unlink(missing_ok=True)
+
+
+def test_ws_confirm_round_trip_on_one_socket(confirm_client):
+    """THE deadlock test: the confirm response must be readable on the same
+    socket that triggered the blocking action."""
+    client, target = confirm_client
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # hello
+        ws.send_json({"type": "chat", "text": "delete ws-test.txt"})
+
+        confirm = None
+        for _ in range(30):
+            event = ws.receive_json()
+            if event["type"] == "confirm_request":
+                confirm = event
+                break
+        assert confirm, "confirm_request never arrived"
+        assert "ws-test.txt" in confirm["description"]
+
+        ws.send_json({"type": "confirm_response", "id": confirm["id"],
+                      "approved": True})
+        events = _drain_until_idle_after_speaking(ws)
+
+    assert not target.exists(), "approved deletion must happen"
+    resolved = [e for e in events if e.get("type") == "confirm_resolved"]
+    assert resolved and resolved[0]["result"] == "approved"
+    reply = next(e["text"] for e in events
+                 if e.get("type") == "transcript" and e["who"] == "jarvis")
+    assert "Deleted" in reply
+
+
+def test_ws_confirm_decline_leaves_file(confirm_client):
+    client, target = confirm_client
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "chat", "text": "delete ws-test.txt"})
+        confirm = None
+        for _ in range(30):
+            event = ws.receive_json()
+            if event["type"] == "confirm_request":
+                confirm = event
+                break
+        ws.send_json({"type": "confirm_response", "id": confirm["id"],
+                      "approved": False})
+        events = _drain_until_idle_after_speaking(ws)
+
+    assert target.exists(), "declined deletion must not happen"
+    reply = next(e["text"] for e in events
+                 if e.get("type") == "transcript" and e["who"] == "jarvis")
+    assert "CANCELLED" in reply
+
+
+def test_second_chat_mid_confirm_gets_busy(confirm_client):
+    client, target = confirm_client
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "chat", "text": "delete ws-test.txt"})
+        confirm = None
+        busy_seen = False
+        for _ in range(30):
+            event = ws.receive_json()
+            if event["type"] == "confirm_request":
+                confirm = event
+                ws.send_json({"type": "chat", "text": "and also do this"})
+            if event.get("type") == "error" and event.get("message") == "busy":
+                busy_seen = True
+                break
+        assert confirm and busy_seen
+        ws.send_json({"type": "confirm_response", "id": confirm["id"],
+                      "approved": False})
+        _drain_until_idle_after_speaking(ws)
+
+
+def test_pending_confirm_replayed_to_new_connection(confirm_client):
+    client, _ = confirm_client
+    result = {}
+
+    def blocked_request():
+        result["decision"] = confirmations.request("replay me", timeout_s=5)
+
+    t = threading.Thread(target=blocked_request)
+    t.start()
+    deadline = time.time() + 2
+    while time.time() < deadline and confirmations.pending_event() is None:
+        time.sleep(0.02)
+    try:
+        with client.websocket_connect("/ws") as ws:
+            hello = ws.receive_json()
+            assert hello["type"] == "state"
+            replay = ws.receive_json()
+            assert replay["type"] == "confirm_request"
+            assert replay["description"] == "replay me"
+            ws.send_json({"type": "confirm_response", "id": replay["id"],
+                          "approved": False})
+    finally:
+        t.join()
+    assert result["decision"].approved is False
+
+
 def test_huge_chat_is_truncated_not_fatal(client):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()

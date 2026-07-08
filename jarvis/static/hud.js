@@ -45,6 +45,47 @@
     }, 1800);
   }
 
+  // ---------- CONFIRM modal (fail closed: only Approve sends true) ----------
+  const backdrop = document.getElementById("confirm-backdrop");
+  const confirmDesc = document.getElementById("confirm-desc");
+  const confirmCount = document.getElementById("confirm-count");
+  let confirmId = null;
+  let countdownTimer = null;
+
+  function showConfirm(event) {
+    confirmId = event.id;
+    confirmDesc.textContent = event.description;
+    backdrop.classList.remove("hidden");
+    let remaining = Math.round(event.timeout_s || 30);
+    confirmCount.textContent = remaining;
+    clearInterval(countdownTimer);
+    countdownTimer = setInterval(() => {
+      remaining -= 1;
+      confirmCount.textContent = Math.max(remaining, 0);
+      if (remaining <= 0) clearInterval(countdownTimer); // server cancels; modal clears on confirm_resolved
+    }, 1000);
+    document.getElementById("confirm-no").focus(); // safe default focus
+  }
+
+  function hideConfirm() {
+    confirmId = null;
+    clearInterval(countdownTimer);
+    backdrop.classList.add("hidden");
+  }
+
+  function answerConfirm(approved) {
+    if (!confirmId || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "confirm_response", id: confirmId, approved }));
+    // The modal clears on the server's confirm_resolved broadcast (all tabs).
+  }
+
+  document.getElementById("confirm-yes").addEventListener("click", () => answerConfirm(true));
+  document.getElementById("confirm-no").addEventListener("click", () => answerConfirm(false));
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && confirmId) answerConfirm(false);
+    // Deliberately NO keyboard shortcut for Approve — explicit click only.
+  });
+
   function connect() {
     ws = new WebSocket(`ws://${location.host}/ws`);
     ws.onopen = () => {
@@ -56,6 +97,8 @@
       const event = JSON.parse(msg.data);
       if (event.type === "state") setState(event.state, event.detail);
       else if (event.type === "transcript") addLine(event.who, event.text);
+      else if (event.type === "confirm_request") showConfirm(event);
+      else if (event.type === "confirm_resolved") hideConfirm();
       else if (event.type === "error" && event.message === "busy")
         flashHint("One moment — still working on the last one.");
     };
@@ -63,6 +106,7 @@
       body.classList.remove("online");
       connText.textContent = "reconnecting";
       setState("offline");
+      hideConfirm(); // a dead socket can't answer; server replays on reconnect
       setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 8000);
     };

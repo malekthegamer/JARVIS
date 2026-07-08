@@ -28,6 +28,19 @@
     <p class="line empty" id="empty-line">Awaiting first exchange.</p>
   </section>
 
+  <div class="confirm-backdrop hidden" id="confirm-backdrop">
+    <div class="confirm-modal" role="alertdialog" aria-modal="true"
+         aria-labelledby="confirm-title" aria-describedby="confirm-desc">
+      <p class="confirm-title" id="confirm-title">⚠ CONFIRM ACTION</p>
+      <p class="confirm-desc" id="confirm-desc"></p>
+      <p class="confirm-count">Cancels automatically in <span id="confirm-count">–</span>s</p>
+      <div class="confirm-buttons">
+        <button type="button" id="confirm-no">Cancel</button>
+        <button type="button" id="confirm-yes">Approve</button>
+      </div>
+    </div>
+  </div>
+
   <form class="chat" id="chat-form">
     <input id="chat-input" type="text" autocomplete="off" spellcheck="false"
            placeholder="Or type a message…" aria-label="Message JARVIS">

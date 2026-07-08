@@ -188,6 +188,86 @@ body[data-state="offline"]   .state-label { color: var(--text-dim); }
   outline: none;
 }
 
+/* ---------- CONFIRM modal (spec §2.3: distinct amber panel) ---------- */
+.confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 10, 0.55);
+  backdrop-filter: blur(4px);
+  opacity: 1;
+  transition: opacity 0.2s ease;
+}
+.confirm-backdrop.hidden { display: none; }
+
+.confirm-modal {
+  width: min(480px, 88vw);
+  padding: 26px 28px 22px;
+  background: rgba(16, 13, 6, 0.85);
+  border: 1px solid var(--amber);
+  border-radius: 14px;
+  box-shadow: 0 0 32px rgba(255, 176, 32, 0.25),
+              inset 0 0 24px rgba(255, 176, 32, 0.06);
+}
+.confirm-title {
+  font-family: var(--mono);
+  font-size: 13px;
+  letter-spacing: 0.3em;
+  color: var(--amber);
+  margin-bottom: 14px;
+}
+.confirm-desc {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text-bright);
+  overflow-wrap: anywhere;
+}
+.confirm-count {
+  margin-top: 10px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.confirm-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+.confirm-buttons button {
+  padding: 9px 22px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  letter-spacing: 0.08em;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+#confirm-no {
+  color: var(--text);
+  background: rgba(201, 214, 227, 0.06);
+  border: 1px solid rgba(201, 214, 227, 0.25);
+}
+#confirm-no:hover, #confirm-no:focus-visible {
+  background: rgba(201, 214, 227, 0.14);
+  outline: none;
+}
+#confirm-yes {
+  color: #1A1206;
+  background: var(--amber);
+  border: 1px solid var(--amber);
+  font-weight: 700;
+}
+#confirm-yes:hover, #confirm-yes:focus-visible {
+  background: #FFC24E;
+  outline: none;
+}
+
+body[data-state="confirming"] .state-label { color: var(--amber); }
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
