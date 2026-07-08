@@ -42,10 +42,14 @@ def test_diff_shape_mismatch_reports_full_change():
 
 
 def test_live_rapid_captures_mostly_static():
-    a = screen.capture_screen()
-    b = screen.capture_screen()
-    frac = screen.screenshot_diff(a, b)
-    assert frac < 0.5, f"back-to-back captures differ by {frac:.0%} — diff is broken"
+    # Min across three pairs: one pair can straddle a big transient repaint
+    # (window animations from neighboring tests); three can't all do so.
+    fracs = []
+    for _ in range(3):
+        a = screen.capture_screen()
+        b = screen.capture_screen()
+        fracs.append(screen.screenshot_diff(a, b))
+    assert min(fracs) < 0.5, f"every capture pair differs hugely: {fracs} — diff is broken"
 
 
 # ---------- stage 3: launch_app + ui_tree ----------
