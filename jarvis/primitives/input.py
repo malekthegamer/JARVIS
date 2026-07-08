@@ -34,10 +34,10 @@ _STOPWORDS = {"the", "a", "an", "my", "this", "that", "please", "click", "on"}
 
 _CHUNK = 40                    # type in chunks, re-check focus between them
 _FOCUS_SETTLE_S = 0.15
-# After focus is confirmed, the freshly-foregrounded window's input queue
-# isn't ready for a few hundred ms — typing immediately drops the FIRST
-# keystroke (reproduced: "Ship"->"hip"). Settle before the first key.
-_PRE_INPUT_SETTLE_S = 0.4
+# Brief settle after focus, then RE-VERIFY the foreground right before sending
+# (a fullscreen app can re-grab focus during the settle — the re-verify, not
+# the delay, is the safety). Kept short so the theft window stays small.
+_PRE_INPUT_SETTLE_S = 0.15
 
 # ---- tier classification ----
 # Decided from the RESOLVED element name / literal combo — not model paraphrase.
@@ -343,7 +343,11 @@ def press_keys(combo: str, window_hint: str | None = None) -> dict:
     win, title = _target_window(window_hint)
     if not _acquire_focus(win, title):
         return {"ok": False, "message": "Target window isn't focused — aborted."}
-    time.sleep(_PRE_INPUT_SETTLE_S)  # avoid the first-key drop after focus
+    time.sleep(_PRE_INPUT_SETTLE_S)
+    if not _refocus_foreground(title):  # a fullscreen app may have re-grabbed focus
+        return {"ok": False,
+                "message": "Focus was taken by another window before the keypress — "
+                           "aborted so the keys don't hit the wrong app."}
     try:
         import pydirectinput
         keys = [k.strip().lower() for k in combo.split("+") if k.strip()]
@@ -394,6 +398,9 @@ def click(description: str, window_hint: str | None = None,
         return {"ok": False,
                 "message": f"The target changed while waiting: approved '{expect_name}', "
                            f"now resolves to '{r['element_name']}'. Not clicking."}
+    if not _refocus_foreground(r["window_title"]):  # don't click into a window that stole focus
+        return {"ok": False,
+                "message": "Focus moved to another window before the click — aborted."}
     x, y = r["mid_point"]
     try:
         import pydirectinput
