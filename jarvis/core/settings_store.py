@@ -33,6 +33,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "mic_device_index": None,     # None = auto-detect real mic (see jarvis.voice.capture)
         "mic_device_name": "",        # pinned by NAME too — survives index shifts
     },
+    "confirm": {
+        "timeout_s": 30,  # no answer within this window -> action cancelled
+    },
     "history_max_messages": 40,
 }
 

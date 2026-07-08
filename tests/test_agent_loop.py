@@ -102,6 +102,111 @@ def test_tools_schema_exposed_to_brain():
     assert "launch_app" in names and "read_ui_tree" in names
 
 
+# ---------- slice 3: CONFIRM tier gate ----------
+
+import threading
+import time as _time
+
+from jarvis.core.confirmations import confirmations
+from jarvis.primitives import files
+
+
+@pytest.fixture()
+def confirm_events():
+    log: list[dict] = []
+    unsubscribe = confirmations.subscribe(log.append)
+    yield log
+    unsubscribe()
+
+
+@pytest.fixture()
+def workspace_file():
+    files.AGENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    f = files.AGENT_FILES_DIR / "gate-test.txt"
+    f.write_text("gate", encoding="utf-8")
+    yield f
+    f.unlink(missing_ok=True)
+
+
+def _auto_resolver(approved: bool):
+    """Answer the next confirm_request like a user clicking a modal button."""
+    def responder(event):
+        if event.get("type") == "confirm_request":
+            threading.Thread(
+                target=lambda: (_time.sleep(0.05),
+                                confirmations.resolve(event["id"], approved)),
+            ).start()
+    return confirmations.subscribe(responder)
+
+
+def test_confirm_approved_full_walk(state_log, confirm_events, workspace_file):
+    unsubscribe = _auto_resolver(approved=True)
+    try:
+        provider = ToolCallingProvider(tool_name="delete_file",
+                                       tool_args={"name": "gate-test.txt"})
+        brain = _make_brain(provider)
+        reply = brain.think("delete gate-test.txt from your workspace")
+    finally:
+        unsubscribe()
+
+    assert not workspace_file.exists(), "approved deletion must actually happen"
+    assert "Deleted" in provider.seen_tool_result
+    states = [e["state"] for e in state_log]
+    assert states == ["thinking", "confirming", "executing", "thinking", "idle"]
+    assert "gate-test.txt" in confirm_events[0]["description"]
+    assert reply
+
+
+def test_confirm_denied_nothing_runs(state_log, confirm_events, workspace_file):
+    unsubscribe = _auto_resolver(approved=False)
+    try:
+        provider = ToolCallingProvider(tool_name="delete_file",
+                                       tool_args={"name": "gate-test.txt"})
+        brain = _make_brain(provider)
+        brain.think("delete gate-test.txt from your workspace")
+    finally:
+        unsubscribe()
+
+    assert workspace_file.exists(), "declined action must not run"
+    assert "CANCELLED" in provider.seen_tool_result
+    assert "do not retry" in provider.seen_tool_result.lower()
+    states = [e["state"] for e in state_log]
+    assert "confirming" in states
+    assert "executing" not in states, "denied gate must never reach EXECUTING"
+    assert states[-1] == "idle"
+    kinds = [e["type"] for e in confirm_events]
+    assert kinds.count("confirm_request") == 1, "no re-prompting after a decline"
+
+
+def test_confirm_timeout_fails_safe(state_log, workspace_file):
+    from jarvis.core.settings_store import settings
+    settings.set("confirm.timeout_s", 0.3, persist=False)
+    try:
+        provider = ToolCallingProvider(tool_name="delete_file",
+                                       tool_args={"name": "gate-test.txt"})
+        brain = _make_brain(provider)
+        brain.think("delete gate-test.txt")
+    finally:
+        settings.set("confirm.timeout_s", 30, persist=False)
+
+    assert workspace_file.exists(), "timeout must cancel, never proceed"
+    assert "CANCELLED" in provider.seen_tool_result
+    assert "no response" in provider.seen_tool_result
+    assert broadcaster.current is AgentState.IDLE
+
+
+def test_no_modal_for_nonexistent_window(state_log, confirm_events):
+    provider = ToolCallingProvider(tool_name="close_window",
+                                   tool_args={"title": "xyzzy-window-that-does-not-exist"})
+    brain = _make_brain(provider)
+    brain.think("close that window")
+
+    assert confirm_events == [], "no pointless modal for a missing target"
+    assert "FAILED" in provider.seen_tool_result
+    states = [e["state"] for e in state_log]
+    assert "confirming" not in states
+
+
 def test_live_question_never_enters_executing(state_log):
     """Intent split: a pure question must stay conversational."""
     from jarvis import config

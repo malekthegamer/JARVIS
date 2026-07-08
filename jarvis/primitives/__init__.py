@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 import time
 
-from jarvis.primitives import apps, screen, ui_tree
+from jarvis.core.confirmations import Decision, confirmations
+from jarvis.core.settings_store import settings
+from jarvis.primitives import apps, files, screen, ui_tree, windows
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -59,6 +61,16 @@ def _run_read_ui_tree(args: dict) -> str:
     return ui_tree.read_ui_tree()
 
 
+def _run_delete_file(args: dict) -> str:
+    r = files.delete_file(str(args.get("name", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_close_window(args: dict) -> str:
+    r = windows.close_window(str(args.get("title", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 PRIMITIVES: dict[str, dict] = {
     "launch_app": {
         "fn": _run_launch_app,
@@ -88,6 +100,49 @@ PRIMITIVES: dict[str, dict] = {
             "parameters": {"type": "object", "properties": {}},
         },
     },
+    "delete_file": {
+        "fn": _run_delete_file,
+        "tier": "confirm",
+        "describe": files.describe_delete,
+        "schema": {
+            "name": "delete_file",
+            "description": ("Delete a file from the agent workspace "
+                            "(data/agent_files). The user must approve via a "
+                            "confirmation prompt before anything is deleted. Use "
+                            "ONLY when the user explicitly asks to delete a file."),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string",
+                                        "description": "File name inside the agent workspace"}},
+                "required": ["name"],
+            },
+        },
+    },
+    "close_window": {
+        "fn": _run_close_window,
+        "tier": "confirm",
+        "describe": windows.describe_close,
+        "schema": {
+            "name": "close_window",
+            "description": ("Close an open window by its title (or part of it). "
+                            "The user must approve via a confirmation prompt before "
+                            "it closes. Use ONLY when the user explicitly asks to "
+                            "close a window or app."),
+            "parameters": {
+                "type": "object",
+                "properties": {"title": {"type": "string",
+                                         "description": "Window title, or a distinctive part of it"}},
+                "required": ["title"],
+            },
+        },
+    },
+}
+
+_CANCEL_REASONS = {
+    "declined": "the user declined",
+    "timeout": "no response from the user within {t:.0f} seconds",
+    "superseded": "another confirmation was already pending",
+    "error": "the confirmation prompt could not be shown",
 }
 
 
@@ -96,15 +151,41 @@ def tools_schema() -> list[dict]:
 
 
 def execute(name: str, args: dict) -> str:
-    """Run one primitive with the EXECUTING state visible. Never raises."""
+    """Run one primitive. CONFIRM-tier primitives pass the fail-closed gate
+    first; only an explicit user approval reaches EXECUTING. Never raises."""
     prim = PRIMITIVES.get(name)
     if prim is None:
         return f"Unknown tool: {name}"
-    broadcaster.set(AgentState.EXECUTING, detail=name)
+    args = args or {}
     try:
-        return prim["fn"](args or {})
-    except Exception as exc:
-        return f"Tool {name} crashed: {exc}"
+        if prim["tier"] == "confirm":
+            cancelled = _confirm_gate(prim, name, args)
+            if cancelled is not None:
+                return cancelled
+        broadcaster.set(AgentState.EXECUTING, detail=name)
+        try:
+            return prim["fn"](args)
+        except Exception as exc:
+            return f"Tool {name} crashed: {exc}"
     finally:
         # Control returns to the model round; think()'s finally still lands IDLE.
         broadcaster.set(AgentState.THINKING)
+
+
+def _confirm_gate(prim: dict, name: str, args: dict) -> str | None:
+    """None = approved, proceed. A string = cancelled, return it as the tool
+    result. Any internal failure reads as cancelled (fail closed)."""
+    try:
+        description = prim["describe"](args)
+        if description is None:
+            return "FAILED: nothing matching that to act on right now."
+        broadcaster.set(AgentState.CONFIRMING, detail=name)
+        timeout_s = float(settings.get("confirm.timeout_s", 30))
+        decision = confirmations.request(description, timeout_s=timeout_s)
+    except Exception:
+        decision, description, timeout_s = Decision(False, "error"), name, 0.0
+    if decision.approved:
+        return None
+    reason = _CANCEL_REASONS.get(decision.reason, decision.reason).format(t=timeout_s)
+    return (f"CANCELLED ({reason}): {description}. "
+            f"Do not retry — acknowledge this to the user.")
