@@ -19,6 +19,7 @@ class AgentState(str, Enum):
     IDLE = "idle"
     LISTENING = "listening"
     THINKING = "thinking"
+    CONFIRMING = "confirming"  # waiting on the user's yes/no; detail = primitive
     EXECUTING = "executing"  # a primitive is running; detail = its name
     SPEAKING = "speaking"
 
