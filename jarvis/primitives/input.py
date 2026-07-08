@@ -34,6 +34,10 @@ _STOPWORDS = {"the", "a", "an", "my", "this", "that", "please", "click", "on"}
 
 _CHUNK = 40                    # type in chunks, re-check focus between them
 _FOCUS_SETTLE_S = 0.15
+# After focus is confirmed, the freshly-foregrounded window's input queue
+# isn't ready for a few hundred ms — typing immediately drops the FIRST
+# keystroke (reproduced: "Ship"->"hip"). Settle before the first key.
+_PRE_INPUT_SETTLE_S = 0.4
 
 # ---- tier classification ----
 # Decided from the RESOLVED element name / literal combo — not model paraphrase.
@@ -276,17 +280,19 @@ def _acquire_focus(win, expected_title: str | None, attempts: int = 4) -> bool:
 
 
 def _do_type(text: str) -> None:
-    """Type ASCII via pydirectinput, else pyautogui, else pywinauto unicode."""
+    """Type text via pyautogui (handles Shift/case), else pywinauto unicode.
+
+    NOTE: pydirectinput is deliberately NOT used for text — its write() maps
+    only unshifted keys and silently drops uppercase/shifted characters
+    ("Ship" -> "hip"). It stays the primary for press_keys/click (game keys),
+    where that limitation doesn't apply.
+    """
     if text.isascii():
         try:
-            import pydirectinput
-            pydirectinput.write(text, interval=0.0)
-            return
-        except Exception:
-            pass
-        try:
             import pyautogui
-            pyautogui.write(text, interval=0.0)
+            # 0.03s/key: at 0.01 the Shift for a second uppercase letter can
+            # race and drop ("World" -> "world"); 0.03 was 3/3 reliable, send_keys 2/3.
+            pyautogui.write(text, interval=0.03)
             return
         except Exception:
             pass
@@ -312,6 +318,7 @@ def type_text(text: str, window_hint: str | None = None) -> dict:
 
     if not _acquire_focus(win, expected):
         return {"ok": False, "message": "Target window isn't focused — aborted before typing."}
+    time.sleep(_PRE_INPUT_SETTLE_S)  # let the input queue catch up (first-key drop)
 
     typed = 0
     for i in range(0, len(text), _CHUNK):
@@ -336,6 +343,7 @@ def press_keys(combo: str, window_hint: str | None = None) -> dict:
     win, title = _target_window(window_hint)
     if not _acquire_focus(win, title):
         return {"ok": False, "message": "Target window isn't focused — aborted."}
+    time.sleep(_PRE_INPUT_SETTLE_S)  # avoid the first-key drop after focus
     try:
         import pydirectinput
         keys = [k.strip().lower() for k in combo.split("+") if k.strip()]

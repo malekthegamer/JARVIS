@@ -59,7 +59,9 @@ def test_resolve_returns_no_coordinates_on_failure(notepad):
 # ---------- raw synthesis ----------
 
 def test_type_text_lands_in_notepad(notepad):
-    marker = "hello world"
+    # Mixed case ON PURPOSE: pydirectinput silently drops uppercase, so an
+    # all-lowercase marker would hide that regression ("Ship" -> "hip").
+    marker = "Hello World 42"
     out = jinput.type_text(marker, window_hint="Notepad")
     assert out["ok"], out
     time.sleep(0.4)
