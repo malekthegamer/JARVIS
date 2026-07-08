@@ -63,8 +63,9 @@ def test_fake_provider_reply_and_state_sequence(state_log):
         {"role": "user", "content": "status report"},
         {"role": "assistant", "content": "All systems nominal, sir."},
     ]
-    # skeleton registers no tools -> provider must receive tools=None
-    assert fake.calls[0]["tools"] is None
+    # slice 2+: the primitive schemas reach the provider
+    tool_names = [t["name"] for t in fake.calls[0]["tools"]]
+    assert "launch_app" in tool_names
 
 
 def test_timeout_returns_friendly_and_restores_idle(state_log):

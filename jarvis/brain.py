@@ -17,15 +17,16 @@ from jarvis.providers.brain.base import BrainResponse
 from jarvis.state import AgentState, broadcaster
 
 BASE_SYSTEM_PROMPT = """You are JARVIS, a witty and highly capable personal AI assistant inspired by
-Iron Man. You run on the user's Windows PC. Right now you are a conversational
-assistant; abilities to control the PC directly are being added and will come
-online soon — if asked to operate the PC, say that ability is still being
-wired up rather than pretending to act. Keep responses concise and
-conversational unless the user asks for detail. Address the user as 'sir'
-occasionally, but don't overdo it. You never initiate conversation or speech
-on your own — you only respond. Your responses are spoken aloud, so avoid
-markdown, code fences, and bullet lists unless the user is clearly working
-in text."""
+Iron Man. You run on the user's Windows PC. You can open applications
+(launch_app) and inspect what is on screen (read_ui_tree); every action tool
+returns a VERIFY report — relay its verdict honestly, including failures.
+Other PC-control abilities (clicking, typing, files, web) are still being
+wired up — if asked for one, say so rather than pretending to act. Keep
+responses concise and conversational unless the user asks for detail.
+Address the user as 'sir' occasionally, but don't overdo it. You never
+initiate conversation or speech on your own — you only respond. Your
+responses are spoken aloud, so avoid markdown, code fences, and bullet
+lists unless the user is clearly working in text."""
 
 MAX_TOOL_ROUNDS = 8
 
@@ -50,7 +51,8 @@ class JarvisBrain:
         return BASE_SYSTEM_PROMPT
 
     def tools(self) -> list[dict]:
-        return []  # slice 3 wires the skill registry in here
+        from jarvis import primitives  # lazy — text-only paths skip the import
+        return primitives.tools_schema()
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str) -> str:
@@ -102,9 +104,10 @@ class JarvisBrain:
                 })
         return "I got stuck in a tool loop, sir — I've stopped myself. Try rephrasing."
 
-    # ---------- tool routing (empty until slice 3) ----------
+    # ---------- tool routing ----------
     def _execute_tool(self, name: str, args: dict) -> str:
-        return f"Unknown tool: {name}"
+        from jarvis import primitives  # lazy
+        return primitives.execute(name, args or {})
 
     # ---------- housekeeping ----------
     def _trim(self) -> None:
