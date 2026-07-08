@@ -108,6 +108,7 @@ body.online #conn-text::after { content: ""; }
   transition: color 0.2s ease, opacity 0.2s ease;
 }
 body[data-state="listening"] .state-label { color: var(--amber); }
+body[data-state="executing"] .state-label { color: #B08CFF; } /* orb work-hue 265 */
 body[data-state="offline"]   .state-label { color: var(--text-dim); }
 
 .hint {

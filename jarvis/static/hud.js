@@ -13,9 +13,10 @@
   let ws = null;
   let retryMs = 500;
 
-  function setState(name) {
+  function setState(name, detail) {
     body.dataset.state = name;
-    stateLabel.textContent = name.toUpperCase();
+    stateLabel.textContent =
+      name.toUpperCase() + (detail ? ` · ${detail.toUpperCase()}` : "");
     orb.setState(name);
   }
 
@@ -53,7 +54,7 @@
     };
     ws.onmessage = (msg) => {
       const event = JSON.parse(msg.data);
-      if (event.type === "state") setState(event.state);
+      if (event.type === "state") setState(event.state, event.detail);
       else if (event.type === "transcript") addLine(event.who, event.text);
       else if (event.type === "error" && event.message === "busy")
         flashHint("One moment — still working on the last one.");

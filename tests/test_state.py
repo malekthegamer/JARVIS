@@ -56,6 +56,16 @@ def test_unsubscribe_detaches():
     unsubscribe()  # double-unsubscribe is harmless
 
 
+def test_executing_state_round_trips_with_detail():
+    b = StateBroadcaster()
+    received: list[dict] = []
+    b.subscribe(received.append)
+    b.set(AgentState.EXECUTING, detail="launch_app")
+    assert received == [{"type": "state", "state": "executing", "seq": 1,
+                         "detail": "launch_app"}]
+    assert b.current is AgentState.EXECUTING
+
+
 def test_bad_subscriber_does_not_break_others():
     b = StateBroadcaster()
     received: list[dict] = []

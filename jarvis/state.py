@@ -1,8 +1,8 @@
 """The spec §2.4 state machine — THE seam between the agent and every UI.
 
-Slice-1 states: IDLE, LISTENING, THINKING, SPEAKING. (EXECUTING arrives with
-the agent loop in slice 3.) One process-wide broadcaster; the server
-subscribes and forwards events over WebSocket, tests subscribe directly.
+States: IDLE, LISTENING, THINKING, EXECUTING, SPEAKING. One process-wide
+broadcaster; the server subscribes and forwards events over WebSocket,
+tests subscribe directly.
 
 Events carry a monotonic `seq` so consumers can detect reordering. Delivery
 happens under the lock — subscribers MUST be fast and non-blocking (the
@@ -19,6 +19,7 @@ class AgentState(str, Enum):
     IDLE = "idle"
     LISTENING = "listening"
     THINKING = "thinking"
+    EXECUTING = "executing"  # a primitive is running; detail = its name
     SPEAKING = "speaking"
 
 
