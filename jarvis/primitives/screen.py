@@ -19,7 +19,7 @@ def capture_screen(monitor: int = 0) -> np.ndarray:
     Returns an (H, W, 3) BGR uint8 array."""
     import mss  # lazy
 
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         shot = sct.grab(sct.monitors[monitor])
     return np.asarray(shot)[:, :, :3].copy()
 

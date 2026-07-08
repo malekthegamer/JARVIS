@@ -50,3 +50,4 @@ pystray>=0.19
 #   google-api-python-client google-auth-oauthlib — Gmail / Calendar
 #   discord.py        — Discord messaging
 #   opencv-python     — webcam detection
+pywinauto  # UI Automation tree (perception) + input synthesis for later slices
