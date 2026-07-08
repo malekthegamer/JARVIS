@@ -81,6 +81,9 @@
     }
   }
 
+  // Test hook: lets verification tooling render any state deterministically.
+  window.__hudSetState = setState;
+
   document.getElementById("orb-button").addEventListener("click", pushToTalk);
   document.addEventListener("keydown", (e) => {
     if (e.code === "Space" && document.activeElement !== input) {
