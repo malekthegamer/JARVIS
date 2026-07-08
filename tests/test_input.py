@@ -99,3 +99,53 @@ def test_type_text_strips_newlines(notepad):
             break
     # both words present, but not separated by an actual newline we sent
     assert "line one" in content and "line two" in content
+
+
+# ---------- stage 2: focus safety (monkeypatched — no reliance on real races) ----------
+
+def test_type_aborts_when_window_not_focused(notepad, monkeypatch):
+    """If focus can't be confirmed, type_text must abort before sending keys."""
+    typed = []
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda title: False)
+    monkeypatch.setattr(jinput, "_do_type", lambda t: typed.append(t))
+    out = jinput.type_text("secret keystrokes", window_hint="Notepad")
+    assert out["ok"] is False
+    assert "focus" in out["message"].lower()
+    assert typed == [], "nothing may be typed when focus is unconfirmed"
+
+
+def test_press_keys_aborts_when_not_focused(notepad, monkeypatch):
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda title: False)
+    out = jinput.press_keys("ctrl+s", window_hint="Notepad")
+    assert out["ok"] is False
+    assert "focus" in out["message"].lower()
+
+
+def test_type_stops_at_chunk_boundary_on_focus_loss(notepad, monkeypatch):
+    """Focus lost mid-type → stop at the next chunk boundary, not spray keys."""
+    chunks = []
+    monkeypatch.setattr(jinput, "_do_type", lambda t: chunks.append(t))
+    # focus OK for acquire + first chunk, then stolen
+    calls = {"n": 0}
+
+    def flaky(_title):
+        calls["n"] += 1
+        return calls["n"] <= 1  # first chunk's guard passes; then focus is "stolen"
+
+    monkeypatch.setattr(jinput, "_acquire_focus", lambda w, t, attempts=4: True)
+    monkeypatch.setattr(jinput, "_refocus_foreground", flaky)
+    out = jinput.type_text("x" * 100, window_hint="Notepad")  # 3 chunks of 40
+    assert out["ok"] is False
+    assert "focus changed" in out["message"].lower()
+    assert len(chunks) == 1, f"typed {len(chunks)} chunks — should stop at boundary"
+
+
+def test_click_aborts_when_window_closed(notepad):
+    """Resolve, then the window vanishes → clean failure, no phantom click."""
+    r = jinput.resolve_target("the text area", window_hint="Notepad")
+    assert r["ok"]
+    _kill_notepad()
+    time.sleep(1.0)
+    out = jinput.click("the text area", window_hint="Notepad")
+    assert out["ok"] is False
+    assert "mid_point" not in out
