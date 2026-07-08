@@ -69,7 +69,8 @@ def test_launch_notepad_and_window_present():
         result = apps.launch_app("notepad")
         assert result["ok"], result
         assert result["pid"]
-        deadline = time.time() + 6
+        # 12s: Win11's UWP Notepad broker is slow to hand off under load
+        deadline = time.time() + 12
         while time.time() < deadline:
             if ui_tree.window_present("Notepad"):
                 break
