@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>J.A.R.V.I.S</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='8' cy='8' r='6' fill='%233BE8FF' opacity='.25'/%3E%3Ccircle cx='8' cy='8' r='3' fill='%233BE8FF'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/hud.css">
+</head>
+<body data-state="offline">
+  <header class="hud-top">
+    <span class="wordmark">J.A.R.V.I.S</span>
+    <span class="conn" id="conn" title="Connection">
+      <span class="conn-dot"></span><span id="conn-text">connecting</span>
+    </span>
+  </header>
+
+  <main class="hud-center">
+    <button class="orb-button" id="orb-button"
+            aria-label="Push to talk — click, then speak">
+      <canvas id="orb"></canvas>
+    </button>
+    <p class="state-label" id="state-label">OFFLINE</p>
+    <p class="hint">Click the orb or press <kbd>Space</kbd>, then speak</p>
+  </main>
+
+  <section class="transcript" id="transcript" aria-live="polite">
+    <p class="line empty" id="empty-line">Awaiting first exchange.</p>
+  </section>
+
+  <form class="chat" id="chat-form">
+    <input id="chat-input" type="text" autocomplete="off" spellcheck="false"
+           placeholder="Or type a message…" aria-label="Message JARVIS">
+    <button type="submit">Send</button>
+  </form>
+
+  <script src="/static/orb.js"></script>
+  <script src="/static/hud.js"></script>
+</body>
+</html>
