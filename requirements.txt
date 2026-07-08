@@ -51,3 +51,4 @@ pystray>=0.19
 #   discord.py        — Discord messaging
 #   opencv-python     — webcam detection
 pywinauto  # UI Automation tree (perception) + input synthesis for later slices
+pydirectinput  # input synthesis (click/type/press), works in fullscreen (spec 1.5)
