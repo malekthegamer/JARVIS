@@ -294,6 +294,214 @@ def test_plan_steps_empty_is_failed_not_crash(state_log):
     assert [e["status"] for e in steps] == ["start", "failed"]
 
 
+# ---------- Stage 3: loop guards (hostile) ----------
+
+import threading
+import time as _time
+
+from jarvis.core.confirmations import confirmations
+from jarvis.primitives import files
+
+
+def _auto_resolver(approved: bool):
+    """Answer the next confirm_request like a user clicking a modal button."""
+    def responder(event):
+        if event.get("type") == "confirm_request":
+            threading.Thread(
+                target=lambda: (_time.sleep(0.05),
+                                confirmations.resolve(event["id"], approved)),
+            ).start()
+    return confirmations.subscribe(responder)
+
+
+@pytest.fixture()
+def workspace_file():
+    files.AGENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+    f = files.AGENT_FILES_DIR / "chain-gate.txt"
+    f.write_text("chain", encoding="utf-8")
+    yield f
+    f.unlink(missing_ok=True)
+
+
+def test_identical_retry_after_failure_is_blocked_not_executed(monkeypatch, state_log):
+    """The breaker: an exact (tool, args) repeat of a just-FAILED call must
+    NOT reach the primitive — the model gets a synthetic BLOCKED result."""
+    ran: list[dict] = []
+    monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn",
+                        lambda args, gi=None: ran.append(args) or "FAILED: no such app.")
+    same = ToolCall(id="t1", name="launch_app", args={"name": "bogus"})
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[same]),
+        BrainResponse(tool_calls=[ToolCall(id="t2", name="launch_app",
+                                           args={"name": "bogus"})]),
+        BrainResponse(text="Understood, changing approach."),
+    ])
+    brain = _make_brain(provider)
+    brain.think("open bogusapp")
+
+    assert len(ran) == 1, "the identical retry must never execute"
+    blocked = [m for m in brain.history
+               if m["role"] == "tool" and m["content"].startswith("BLOCKED")]
+    assert len(blocked) == 1
+    assert "read_ui_tree" in blocked[0]["content"]  # told how to proceed
+    # a blocked call never ran -> no step events for it
+    steps = [e for e in state_log if e["type"] == "step"]
+    assert [(e["n"], e["status"]) for e in steps] == [(1, "start"), (1, "failed")]
+
+
+def test_changed_args_after_failure_is_allowed(monkeypatch, state_log):
+    """The breaker blocks REPEATS, not corrections — different args run."""
+    ran: list[dict] = []
+    monkeypatch.setitem(
+        primitives.PRIMITIVES["launch_app"], "fn",
+        lambda args, gi=None: ran.append(args) or
+        ("FAILED: no such app." if args["name"] == "bogus" else "LAUNCHED. VERIFY: ok."))
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app",
+                                           args={"name": "bogus"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t2", name="launch_app",
+                                           args={"name": "notepad"})]),
+        BrainResponse(text="Got it open on the second try, sir."),
+    ])
+    _make_brain(provider).think("open the editor")
+    assert [a["name"] for a in ran] == ["bogus", "notepad"]
+
+
+def test_three_failures_abort_chain_with_honest_summary(monkeypatch, state_log):
+    """Failure budget: the third hard failure aborts the chain — later calls
+    get a synthetic ABORTED result and never execute."""
+    ran: list[dict] = []
+    monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn",
+                        lambda args, gi=None: ran.append(args) or "FAILED: nope.")
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app", args={"name": "a"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t2", name="launch_app", args={"name": "b"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t3", name="launch_app", args={"name": "c"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t4", name="launch_app", args={"name": "d"})]),
+        BrainResponse(text="I couldn't get any of those open, sir."),
+    ])
+    brain = _make_brain(provider)
+    brain.think("open all the things")
+
+    assert [a["name"] for a in ran] == ["a", "b", "c"], "4th call must not run"
+    aborted = [m for m in brain.history
+               if m["role"] == "tool" and "CHAIN ABORTED" in m["content"]]
+    assert len(aborted) == 1 and "failures" in aborted[0]["content"]
+    ends = [e for e in state_log if e["type"] == "chain_end"]
+    assert [e["status"] for e in ends] == ["budget"]
+
+
+def test_step2_of_3_fails_replan_or_clean_fail_never_forever(monkeypatch, state_log):
+    """THE named hostile case: plan [A, B, C]; A ok; B fails; identical B
+    blocked; revised B' fails; third failure -> budget abort; C never runs.
+    Loop-forever impossible: breaker + budget + MAX_TOOL_ROUNDS."""
+    from jarvis.brain import MAX_TOOL_ROUNDS
+    ran: list[dict] = []
+    monkeypatch.setitem(
+        primitives.PRIMITIVES["launch_app"], "fn",
+        lambda args, gi=None: ran.append(args) or
+        ("LAUNCHED. VERIFY: ok." if args["name"] == "notepad" else "FAILED: no window."))
+    b_call = {"name": "broken-app"}
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="p1", name="plan_steps",
+                                           args={"steps": ["A open notepad",
+                                                           "B open broken-app",
+                                                           "C read the screen"]})]),
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app", args={"name": "notepad"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t2", name="launch_app", args=dict(b_call))]),   # B fails
+        BrainResponse(tool_calls=[ToolCall(id="t3", name="launch_app", args=dict(b_call))]),   # blind retry -> BLOCKED
+        BrainResponse(tool_calls=[ToolCall(id="p2", name="plan_steps",                          # replan (visible)
+                                           args={"steps": ["A done", "B try variant", "C read"]}),
+                                  ToolCall(id="t4", name="launch_app", args={"name": "broken-app-2"})]),  # fails (2)
+        BrainResponse(tool_calls=[ToolCall(id="t5", name="launch_app", args={"name": "broken-app-3"})]),  # fails (3) -> budget
+        BrainResponse(tool_calls=[ToolCall(id="t6", name="read_ui_tree", args={})]),            # after abort -> synthetic
+        BrainResponse(text="Sir: notepad opened; the second app failed three ways; I stopped there."),
+    ])
+    brain = _make_brain(provider)
+    reply = brain.think("open notepad and broken-app then read the screen")
+
+    assert provider.calls <= MAX_TOOL_ROUNDS, "must terminate inside the round cap"
+    assert reply.startswith("Sir:"), "reached final prose — no infinite loop"
+    # B's blind retry never executed; C (read_ui_tree) never executed after abort
+    assert [a["name"] for a in ran] == ["notepad", "broken-app", "broken-app-2", "broken-app-3"]
+    plans = [e for e in state_log if e["type"] == "plan"]
+    assert [p["revision"] for p in plans] == [1, 2], "the replan is a visible event"
+    ends = [e for e in state_log if e["type"] == "chain_end"]
+    assert [e["status"] for e in ends] == ["budget"]
+
+
+def test_cancelled_midchain_blocks_rest_mechanically(monkeypatch, state_log, workspace_file):
+    """User declines step 2's CONFIRM -> step 3 must never execute, enforced
+    by the brain (synthetic ABORTED result), not by trusting the model."""
+    ran: list[dict] = []
+    monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn",
+                        lambda args, gi=None: ran.append(args) or "LAUNCHED. VERIFY: ok.")
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app", args={"name": "notepad"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t2", name="delete_file",
+                                           args={"name": "chain-gate.txt"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t3", name="launch_app", args={"name": "calculator"})]),
+        BrainResponse(text="Stopping there as you declined, sir."),
+    ])
+    unsubscribe = _auto_resolver(approved=False)
+    try:
+        brain = _make_brain(provider)
+        brain.think("open notepad, delete the file, open calculator")
+    finally:
+        unsubscribe()
+
+    assert workspace_file.exists(), "declined deletion must not happen"
+    assert [a["name"] for a in ran] == ["notepad"], "step 3 must never run after decline"
+    aborted = [m for m in brain.history
+               if m["role"] == "tool" and "CHAIN ABORTED" in m["content"]]
+    assert len(aborted) == 1
+    ends = [e for e in state_log if e["type"] == "chain_end"]
+    assert [e["status"] for e in ends] == ["cancelled"]
+
+
+def test_confirm_approved_midchain_resumes(monkeypatch, state_log, workspace_file):
+    """Approval mid-chain resumes the chain exactly where it paused."""
+    ran: list[dict] = []
+    monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn",
+                        lambda args, gi=None: ran.append(args) or "LAUNCHED. VERIFY: ok.")
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app", args={"name": "notepad"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t2", name="delete_file",
+                                           args={"name": "chain-gate.txt"})]),
+        BrainResponse(tool_calls=[ToolCall(id="t3", name="launch_app", args={"name": "calculator"})]),
+        BrainResponse(text="All three done, sir."),
+    ])
+    unsubscribe = _auto_resolver(approved=True)
+    try:
+        _make_brain(provider).think("open notepad, delete the file, open calculator")
+    finally:
+        unsubscribe()
+
+    assert not workspace_file.exists(), "approved deletion must happen"
+    assert [a["name"] for a in ran] == ["notepad", "calculator"], "chain resumed after approval"
+    states = [e["state"] for e in state_log if e["type"] == "state"]
+    assert "confirming" in states
+    ends = [e for e in state_log if e["type"] == "chain_end"]
+    assert [e["status"] for e in ends] == ["done"]
+
+
+def test_round_exhaustion_reports_chain_status(monkeypatch, state_log):
+    """Exhausting MAX_TOOL_ROUNDS must produce an honest progress report,
+    not the old generic 'I got stuck'."""
+    from jarvis.brain import MAX_TOOL_ROUNDS
+    _stub_launch(monkeypatch)
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id=f"t{i}", name="launch_app",
+                                           args={"name": f"app{i}"})])
+        for i in range(MAX_TOOL_ROUNDS)
+    ])
+    reply = _make_brain(provider).think("open everything")
+    assert "action limit" in reply
+    assert f"{MAX_TOOL_ROUNDS} succeeded" in reply
+    ends = [e for e in state_log if e["type"] == "chain_end"]
+    assert [e["status"] for e in ends] == ["exhausted"]
+
+
 def test_direct_execute_without_chain_keeps_plain_detail(monkeypatch, state_log):
     """primitives.execute() outside any think() (no tracker) must behave
     exactly as before — plain tool-name detail."""

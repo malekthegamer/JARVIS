@@ -18,7 +18,12 @@ _busy lock + brain RLock): one chain at a time by construction.
 """
 from __future__ import annotations
 
+import json
+
 from jarvis.state import broadcaster
+
+# Hard failures allowed in one chain before it aborts (slice-6 Stage 3).
+CHAIN_FAILURE_BUDGET = 3
 
 # Tools that observe rather than act — they never advance the declared-step
 # cursor. Anything not listed advances on success (new verbs default to
@@ -47,8 +52,9 @@ class ChainTracker:
         self.revision = 0                   # bumped per plan_steps call
         self.calls: list[dict] = []         # ground truth: executed tool calls
         self.cursor = 0                     # completed declared steps (display)
-        self.failures = 0                   # hard FAILED results (Stage 3 budget)
-        self.aborted: str | None = None     # None | reason (Stage 3)
+        self.failures = 0                   # hard FAILED results (budget)
+        self.aborted: str | None = None     # None | cancelled|budget|exhausted
+        self.last_failure: tuple | None = None  # (tool, args_key) of last hard fail
 
     # ---------- declared plan ----------
     def set_plan(self, steps: list[str]) -> None:
@@ -58,9 +64,10 @@ class ChainTracker:
                           "revision": self.revision})
 
     # ---------- ground-truth call tracking ----------
-    def begin_call(self, tool: str) -> int:
+    def begin_call(self, tool: str, args: dict | None = None) -> int:
         n = len(self.calls) + 1
-        self.calls.append({"n": n, "tool": tool, "status": "start"})
+        self.calls.append({"n": n, "tool": tool, "status": "start",
+                           "args_key": _args_key(args)})
         broadcaster.emit(self._step_event(n))
         return n
 
@@ -69,11 +76,45 @@ class ChainTracker:
         call["status"] = status
         if status == "failed":
             self.failures += 1
-        elif status == "ok" and call["tool"] not in PERCEPTION_TOOLS:
-            # display heuristic: a successful action completes a declared step
-            self.cursor = min(self.cursor + 1, len(self.steps)) \
-                if self.steps else self.cursor + 1
+            self.last_failure = (call["tool"], call["args_key"])
+            if self.failures >= CHAIN_FAILURE_BUDGET:
+                self.aborted = "budget"
+        elif status == "cancelled":
+            # the user said no — the rest of this chain is dead (fail closed)
+            self.aborted = "cancelled"
+        elif status == "ok":
+            self.last_failure = None  # progress resets the retry breaker
+            if call["tool"] not in PERCEPTION_TOOLS:
+                # display heuristic: a successful action completes a declared step
+                self.cursor = min(self.cursor + 1, len(self.steps)) \
+                    if self.steps else self.cursor + 1
         broadcaster.emit(self._step_event(n))
+
+    # ---------- the guards (mechanical, never trust the model) ----------
+    def pre_call_guard(self, tool: str, args: dict | None) -> str | None:
+        """None = proceed. A string = synthetic tool result; the call must
+        NOT execute (and gets no step events — nothing ran)."""
+        if self.aborted:
+            reason = ("the user declined a confirmation"
+                      if self.aborted == "cancelled"
+                      else f"too many failures ({CHAIN_FAILURE_BUDGET})")
+            return (f"CHAIN ABORTED — {reason}. No further actions will run "
+                    "for this request. Tell the user honestly which steps "
+                    "completed and which did not.")
+        if self.last_failure == (tool, _args_key(args)):
+            return ("BLOCKED: that exact action just failed. Do not repeat "
+                    "it — observe the screen (read_ui_tree) or revise the "
+                    "plan (plan_steps) with a different approach.")
+        return None
+
+    def progress_summary(self) -> str:
+        ok = sum(1 for c in self.calls if c["status"] == "ok")
+        failed = sum(1 for c in self.calls if c["status"] == "failed")
+        parts = [f"So far: {ok} succeeded, {failed} failed."]
+        if self.steps:
+            parts.append(f"Plan progress: {self.cursor} of "
+                         f"{len(self.steps)} steps done.")
+        return " ".join(parts)
 
     def _step_event(self, n: int) -> dict:
         call = self.calls[n - 1]
@@ -97,6 +138,14 @@ class ChainTracker:
                 "cursor": self.cursor,
                 "calls": [dict(c) for c in self.calls],
                 "aborted": self.aborted}
+
+
+def _args_key(args: dict | None) -> str:
+    """Canonical, order-insensitive identity for a call's arguments."""
+    try:
+        return json.dumps(args or {}, sort_keys=True, default=str)
+    except Exception:
+        return str(args)
 
 
 _current: ChainTracker | None = None

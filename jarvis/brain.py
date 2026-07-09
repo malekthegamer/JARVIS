@@ -96,7 +96,7 @@ class JarvisBrain:
     def think(self, user_message: str) -> str:
         with self._lock:
             broadcaster.set(AgentState.THINKING)
-            chain.start()  # one chain per interaction; ground truth for the HUD
+            tracker = chain.start()  # one chain per interaction; ground truth for the HUD
             status = "error"  # anything that escapes _think_inner ends the chain honestly
             try:
                 reply = self._think_inner(user_message)
@@ -107,7 +107,8 @@ class JarvisBrain:
             except Exception as exc:  # absolute last resort — never crash a run loop
                 return f"Something went wrong on my end: {exc}"
             finally:
-                chain.clear(status)  # even a crash emits the terminal chain_end
+                # an aborted chain (cancelled/budget/exhausted) names its reason
+                chain.clear(tracker.aborted or status)
                 broadcaster.set(AgentState.IDLE)
 
     def _think_inner(self, user_message: str) -> str:
@@ -141,14 +142,29 @@ class JarvisBrain:
             })
             for tc in resp.tool_calls:
                 tracker = chain.current()
-                n = tracker.begin_call(tc.name) if tracker else 0
-                result = self._execute_tool(tc.name, tc.args)
-                if tracker:
+                blocked = tracker.pre_call_guard(tc.name, tc.args or {}) \
+                    if tracker else None
+                if blocked is not None:
+                    result = blocked  # synthetic result — the call never runs
+                elif tracker:
+                    n = tracker.begin_call(tc.name, tc.args or {})
+                    result = self._execute_tool(tc.name, tc.args)
                     tracker.end_call(n, chain.status_from_result(str(result)))
+                else:
+                    result = self._execute_tool(tc.name, tc.args)
                 self.history.append({
                     "role": "tool", "tool_call_id": tc.id, "name": tc.name,
                     "content": str(result)[:4000],
                 })
+        return self._exhausted_reply()
+
+    def _exhausted_reply(self) -> str:
+        """MAX_TOOL_ROUNDS ran out mid-chain: report progress honestly."""
+        tracker = chain.current()
+        if tracker and tracker.calls:
+            tracker.aborted = tracker.aborted or "exhausted"
+            return ("I've hit my action limit for one request and stopped "
+                    f"myself, sir. {tracker.progress_summary()}")
         return "I got stuck in a tool loop, sir — I've stopped myself. Try rephrasing."
 
     # ---------- tool routing ----------
