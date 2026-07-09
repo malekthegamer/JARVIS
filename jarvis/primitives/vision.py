@@ -153,11 +153,19 @@ def _grab_window(window_hint: str | None):
     mss grabs the window's exact rectangle in absolute virtual-screen coords,
     so multi-monitor origins need no offset math — offset is just the rect's
     top-left, used to map image coords back to screen coords."""
+    import time
     from jarvis.primitives.input import _target_window
     win, title = _target_window(window_hint)
     if win is None:
         return None
     try:
+        # Bring the window forward so the screenshot is of the ACTUAL target,
+        # not whatever happens to overlap its rectangle. Best-effort.
+        try:
+            win.set_focus()
+            time.sleep(0.15)
+        except Exception:
+            pass
         r = win.rectangle()
         left, top, right, bottom = r.left, r.top, r.right, r.bottom
         w, h = right - left, bottom - top
