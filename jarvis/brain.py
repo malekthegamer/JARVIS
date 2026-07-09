@@ -27,6 +27,14 @@ inside apps: click elements (click), type text (type_text), and press keys
 press Enter — to submit or save, use press_keys separately (that will be
 confirmation-gated). Every action tool returns a VERIFY report — relay its
 verdict honestly, including failures and 'not confirmed' results.
+For any task that needs MORE THAN ONE action, first call plan_steps with a
+short ordered list of the steps you intend to take — the user watches that
+plan progress on their HUD. Execute one step at a time and check each
+tool's VERIFY verdict before moving on. If a step fails or the screen
+isn't what you expected, do not blindly repeat the same action: look again
+(read_ui_tree) and call plan_steps again with a revised plan. When you
+finish — or stop early — tell the user honestly which steps completed and
+which did not.
 Destructive or committal actions are confirmation-gated: the user sees a
 prompt and may decline or ignore it. A CANCELLED tool result is final —
 acknowledge it gracefully and NEVER retry a cancelled action. Abilities not
@@ -39,6 +47,26 @@ responses are spoken aloud, so avoid markdown, code fences, and bullet
 lists unless the user is clearly working in text."""
 
 MAX_TOOL_ROUNDS = 8
+MAX_PLAN_STEPS = 20  # a longer "plan" is noise, not a plan
+
+# Brain-level meta-tool (slice 6): declares/revises the visible plan. It
+# touches no OS surface, so it lives here — NOT in the primitives registry
+# (no tier gate, no act/observe/verify wrapper).
+PLAN_STEPS_SCHEMA = {
+    "name": "plan_steps",
+    "description": ("Declare (or revise) your ordered plan BEFORE a multi-step "
+                    "task: a short list of the steps you intend to take, in "
+                    "order. The user sees this plan on their HUD and watches it "
+                    "progress. Call it again with a new list if you change "
+                    "approach after a failure."),
+    "parameters": {
+        "type": "object",
+        "properties": {"steps": {
+            "type": "array", "items": {"type": "string"},
+            "description": "Ordered, short, human-readable step descriptions"}},
+        "required": ["steps"],
+    },
+}
 
 
 class JarvisBrain:
@@ -62,7 +90,7 @@ class JarvisBrain:
 
     def tools(self) -> list[dict]:
         from jarvis import primitives  # lazy — text-only paths skip the import
-        return primitives.tools_schema()
+        return primitives.tools_schema() + [PLAN_STEPS_SCHEMA]
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str) -> str:
@@ -125,8 +153,25 @@ class JarvisBrain:
 
     # ---------- tool routing ----------
     def _execute_tool(self, name: str, args: dict) -> str:
+        if name == "plan_steps":
+            return self._plan_steps(args or {})
         from jarvis import primitives  # lazy
         return primitives.execute(name, args or {})
+
+    def _plan_steps(self, args: dict) -> str:
+        """Meta-tool: record + broadcast the declared plan. Never raises."""
+        raw = args.get("steps") or []
+        steps = [str(s).strip() for s in raw if str(s).strip()]
+        if not steps:
+            return "FAILED: plan_steps needs a non-empty list of step descriptions."
+        if len(steps) > MAX_PLAN_STEPS:
+            return (f"FAILED: that plan is too long ({len(steps)} steps) — "
+                    f"declare at most {MAX_PLAN_STEPS}, broader strokes.")
+        tracker = chain.current()
+        if tracker:
+            tracker.set_plan(steps)
+        numbered = "; ".join(f"{i}) {s}" for i, s in enumerate(steps, 1))
+        return f"PLAN SET ({len(steps)} steps): {numbered}. Now execute step 1."
 
     # ---------- housekeeping ----------
     def _trim(self) -> None:

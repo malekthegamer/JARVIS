@@ -200,6 +200,100 @@ def test_detail_with_declared_plan_shows_total(monkeypatch, state_log):
     assert [e["status"] for e in state_log if e["type"] == "chain_end"] == ["done"]
 
 
+# ---------- Stage 2: plan_steps meta-tool ----------
+
+def test_plan_steps_broadcasts_plan_event(monkeypatch, state_log):
+    _stub_launch(monkeypatch)
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="p1", name="plan_steps",
+                                           args={"steps": ["open notepad", "type the note"]})]),
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app",
+                                           args={"name": "notepad"})]),
+        BrainResponse(text="On it, sir."),
+    ])
+    _make_brain(provider).think("make a note")
+
+    plans = [e for e in state_log if e["type"] == "plan"]
+    assert len(plans) == 1
+    assert plans[0]["steps"] == ["open notepad", "type the note"]
+    assert plans[0]["revision"] == 1
+    # once a plan exists, action step events carry step/total
+    action_steps = [e for e in state_log
+                    if e["type"] == "step" and e["tool"] == "launch_app"]
+    assert all(e["total"] == 2 for e in action_steps)
+
+
+def test_plan_revision_event(monkeypatch, state_log):
+    _stub_launch(monkeypatch)
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="p1", name="plan_steps",
+                                           args={"steps": ["a", "b"]})]),
+        BrainResponse(tool_calls=[ToolCall(id="p2", name="plan_steps",
+                                           args={"steps": ["a", "b2", "c"]})]),
+        BrainResponse(text="Revised."),
+    ])
+    _make_brain(provider).think("do the thing")
+    plans = [e for e in state_log if e["type"] == "plan"]
+    assert [p["revision"] for p in plans] == [1, 2]
+    assert plans[1]["steps"] == ["a", "b2", "c"]
+
+
+def test_unplanned_chain_tracks_with_null_total(monkeypatch, state_log):
+    """No plan_steps call -> chain still tracked honestly, total=None."""
+    _stub_launch(monkeypatch)
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app",
+                                           args={"name": "notepad"})]),
+        BrainResponse(text="Open."),
+    ])
+    _make_brain(provider).think("open notepad")
+    steps = [e for e in state_log if e["type"] == "step"]
+    assert steps and all(e["total"] is None and e["step"] is None for e in steps)
+
+
+def test_plan_steps_not_in_primitives_registry():
+    """plan_steps is a brain-level meta-tool: exposed in the brain's schema,
+    absent from the OS-facing primitives registry (no gate/verify wrapper)."""
+    from jarvis.brain import JarvisBrain
+    assert "plan_steps" not in primitives.PRIMITIVES
+    assert "plan_steps" in [t["name"] for t in JarvisBrain().tools()]
+
+
+def test_plan_steps_with_action_same_round_applies_first(monkeypatch, state_log):
+    """Risk register (plan condition #1): Gemini may return plan_steps AND an
+    action in ONE round — the plan must apply before the action executes, so
+    the action's EXECUTING detail and step events already carry /N."""
+    _stub_launch(monkeypatch)
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[
+            ToolCall(id="p1", name="plan_steps",
+                     args={"steps": ["open notepad", "type"]}),
+            ToolCall(id="t1", name="launch_app", args={"name": "notepad"}),
+        ]),
+        BrainResponse(text="Going."),
+    ])
+    _make_brain(provider).think("make a note")
+
+    details = [e["detail"] for e in state_log
+               if e["type"] == "state" and e["state"] == "executing"]
+    assert details == ["1/2 · launch_app"]
+    action_steps = [e for e in state_log
+                    if e["type"] == "step" and e["tool"] == "launch_app"]
+    assert [(e["step"], e["total"]) for e in action_steps] == [(1, 2), (2, 2)]
+
+
+def test_plan_steps_empty_is_failed_not_crash(state_log):
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="p1", name="plan_steps",
+                                           args={"steps": []})]),
+        BrainResponse(text="Hmm."),
+    ])
+    _make_brain(provider).think("plan nothing")
+    assert [e for e in state_log if e["type"] == "plan"] == []
+    steps = [e for e in state_log if e["type"] == "step"]
+    assert [e["status"] for e in steps] == ["start", "failed"]
+
+
 def test_direct_execute_without_chain_keeps_plain_detail(monkeypatch, state_log):
     """primitives.execute() outside any think() (no tracker) must behave
     exactly as before — plain tool-name detail."""
