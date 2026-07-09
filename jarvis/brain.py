@@ -32,9 +32,16 @@ short ordered list of the steps you intend to take — the user watches that
 plan progress on their HUD. Execute one step at a time and check each
 tool's VERIFY verdict before moving on. If a step fails or the screen
 isn't what you expected, do not blindly repeat the same action: look again
-(read_ui_tree) and call plan_steps again with a revised plan. When you
-finish — or stop early — tell the user honestly which steps completed and
-which did not.
+(read_ui_tree) and call plan_steps again with a revised plan. Note that
+read_ui_tree is shallow — a control can exist without appearing in it. To
+act on something specific you believe is on screen, just try click with a
+precise name (e.g. 'Play Discover Weekly'): its resolver searches far
+deeper and lists near-miss candidates when it fails — use those candidate
+names on your next attempt. Before declaring a task done, VERIFY the
+outcome with a final observation (read_ui_tree) — never claim a result
+(e.g. 'it is playing') that a tool did not confirm. When you finish — or
+stop early — tell the user honestly which steps completed and which did
+not.
 Destructive or committal actions are confirmation-gated: the user sees a
 prompt and may decline or ignore it. A CANCELLED tool result is final —
 acknowledge it gracefully and NEVER retry a cancelled action. Abilities not
@@ -46,7 +53,13 @@ initiate conversation or speech on your own — you only respond. Your
 responses are spoken aloud, so avoid markdown, code fences, and bullet
 lists unless the user is clearly working in text."""
 
-MAX_TOOL_ROUNDS = 8
+# 12, raised from 8 after the slice-6 live acceptance: spec script #1
+# ("open Spotify, play Discover Weekly") measures ~10 rounds when clean
+# (plan + launch + observe + search-click + type + enter + observe +
+# playlist-click + play + verify) — 8 exhausted every run. +2 slack covers
+# one failure/re-observe recovery. The breaker + failure budget remain the
+# real runaway guards; this is only the outer bound.
+MAX_TOOL_ROUNDS = 12
 MAX_PLAN_STEPS = 20  # a longer "plan" is noise, not a plan
 
 # Brain-level meta-tool (slice 6): declares/revises the visible plan. It

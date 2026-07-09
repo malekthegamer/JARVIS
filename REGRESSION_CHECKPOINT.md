@@ -57,6 +57,18 @@ Measured against the **7 primitives that exist today**: `launch_app`,
 > retitles its window to the playing track (added owning-process presence to
 > the launch verify). Spotify's UI is fully UIA-visible — the vision-fallback
 > concern above did not materialize.
+
+> **Round-12 update (2026-07-10, later):** MAX_TOOL_ROUNDS raised 8 → 12 and
+> the retitle bug fixed at its second site (`find_window_title` now also
+> matches by owning process, so `window="Spotify"` keeps working after the
+> title becomes the track name). With those plus a focus-first hint on
+> type_text and verify-before-claiming prompt guidance, **script #1 PASSED
+> cold, end-to-end**: plan(4 steps) → launch → click Search → type → Enter
+> (CONFIRM gated, approved) → observe → click "Discover Weekly playlist
+> icon" → click "Play button" → done in 11/12 rounds; playback mechanically
+> verified (Pause control + now-playing) with the Discover Weekly page open.
+> Script #1 verdict: ✅ **passing** (caveat: a similarly-named user playlist
+> exists; UIA can't distinguish which exact-match the resolver picked).
 | 2 | Close every browser tab except YouTube | ⛔ **Blocked** | No tab enumeration/close verb; `close_window` closes whole windows only, not individual tabs. |
 | 3 | Find yesterday's invoice PDF → email Sam | ⛔ **Blocked** | No file-search verb (only `delete_file`, caged to `data/agent_files/`); no email compose/attach/send verb. |
 | 4 | Turn brightness down + DND for a film | ⛔ **Blocked** | No `system_control` primitive exists at all. |

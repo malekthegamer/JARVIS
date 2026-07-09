@@ -102,6 +102,10 @@ def test_chain_step_events_ordered(monkeypatch, state_log):
     assert [(e["n"], e["status"]) for e in steps] == [
         (1, "start"), (1, "ok"), (2, "start"), (2, "ok")]
     assert all(e["tool"] == "launch_app" for e in steps)
+    # step events carry a compact args summary (Action Log's future feed —
+    # and the only way to diagnose live runs: WHAT did it click?)
+    assert steps[0]["args"] == "name=notepad"
+    assert steps[2]["args"] == "name=calculator"
     seqs = [e["seq"] for e in state_log]
     assert seqs == sorted(seqs)
     ends = [e for e in state_log if e["type"] == "chain_end"]

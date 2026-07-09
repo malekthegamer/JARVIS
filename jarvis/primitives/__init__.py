@@ -223,9 +223,12 @@ PRIMITIVES: dict[str, dict] = {
         "classify": jinput.classify_type,
         "schema": {
             "name": "type_text",
-            "description": ("Type text into the focused control of a window. Does NOT "
-                            "press Enter — newlines are ignored; to submit, ask to press "
-                            "Enter as a separate step. Provide the 'window' to type into."),
+            "description": ("Type text into the focused control of a window. If the "
+                            "target field isn't already focused, CLICK it first (a "
+                            "separate click step) — typing without focus lands nowhere. "
+                            "Does NOT press Enter — newlines are ignored; to submit, ask "
+                            "to press Enter as a separate step. Provide the 'window' to "
+                            "type into."),
             "parameters": {
                 "type": "object",
                 "properties": {

@@ -67,7 +67,8 @@ class ChainTracker:
     def begin_call(self, tool: str, args: dict | None = None) -> int:
         n = len(self.calls) + 1
         self.calls.append({"n": n, "tool": tool, "status": "start",
-                           "args_key": _args_key(args)})
+                           "args_key": _args_key(args),
+                           "args": _args_summary(args)})
         broadcaster.emit(self._step_event(n))
         return n
 
@@ -119,7 +120,7 @@ class ChainTracker:
     def _step_event(self, n: int) -> dict:
         call = self.calls[n - 1]
         return {"type": "step", "n": n, "tool": call["tool"],
-                "status": call["status"],
+                "status": call["status"], "args": call["args"],
                 "step": min(self.cursor + 1, len(self.steps)) if self.steps else None,
                 "total": len(self.steps) or None}
 
@@ -138,6 +139,14 @@ class ChainTracker:
                 "cursor": self.cursor,
                 "calls": [dict(c) for c in self.calls],
                 "aborted": self.aborted}
+
+
+def _args_summary(args: dict | None, limit: int = 90) -> str:
+    """Human-readable one-liner of a call's args, for step events / logs."""
+    if not args:
+        return ""
+    text = " ".join(f"{k}={v}" for k, v in args.items())
+    return text[:limit] + ("…" if len(text) > limit else "")
 
 
 def _args_key(args: dict | None) -> str:

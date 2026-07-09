@@ -115,3 +115,30 @@ def test_close_window_no_match_is_clean():
 
 def test_close_window_describe_none_when_no_match():
     assert windows.describe_close({"title": "xyzzy-window-that-does-not-exist"}) is None
+
+
+# ---------- slice 6 acceptance finding: process-name window matching ----------
+
+def test_find_window_title_matches_by_owning_process(monkeypatch):
+    """Spotify retitles its window to the playing track, so hint 'spotify'
+    stops matching by title mid-chain and every targeted action breaks.
+    A window must also match when its OWNING PROCESS is '<hint>.exe'."""
+    from jarvis.primitives import windows as jwindows
+
+    monkeypatch.setattr(jwindows, "_enum_windows",
+                        lambda: [("Kendrick Lamar - Not Like Us", 4242),
+                                 ("Untitled - Notepad", 777)])
+
+    class FakeProc:
+        def __init__(self, pid):
+            self._name = {4242: "Spotify.exe", 777: "Notepad.exe"}[pid]
+        def name(self):
+            return self._name
+
+    import psutil
+    monkeypatch.setattr(psutil, "Process", FakeProc)
+
+    assert jwindows.find_window_title("spotify") == "Kendrick Lamar - Not Like Us"
+    # title passes still win first, and unknown stays None
+    assert jwindows.find_window_title("notepad") == "Untitled - Notepad"
+    assert jwindows.find_window_title("xyzzy-nothing") is None

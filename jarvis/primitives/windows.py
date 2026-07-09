@@ -13,24 +13,51 @@ import time
 from jarvis.primitives.ui_tree import _co_init
 
 
+def _enum_windows() -> list[tuple[str, int]]:
+    """(title, owning pid) for every titled top-level window. [] on failure."""
+    _co_init()
+    out: list[tuple[str, int]] = []
+    try:
+        from pywinauto import Desktop  # lazy
+        for w in Desktop(backend="uia").windows():
+            try:
+                title = w.window_text()
+                if title.strip():
+                    out.append((title, w.element_info.process_id or 0))
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return out
+
+
 def find_window_title(title_substring: str) -> str | None:
-    """The actual title of the best-matching open window, or None."""
+    """The actual title of the best-matching open window, or None.
+    Passes: exact title, substring title, then OWNING PROCESS name —
+    apps like Spotify retitle their window to the playing track (slice-6
+    acceptance finding), so '<hint>.exe' as the window's process must
+    still match or every targeted action breaks mid-task."""
     needle = str(title_substring or "").strip().casefold()
     if not needle:
         return None
-    _co_init()
-    try:
-        from pywinauto import Desktop  # lazy
-        titles = [w.window_text() for w in Desktop(backend="uia").windows()
-                  if w.window_text().strip()]
-    except Exception:
-        return None
-    for title in titles:
+    windows = _enum_windows()
+    for title, _pid in windows:
         if title.casefold() == needle:
             return title
-    for title in titles:
+    for title, _pid in windows:
         if needle in title.casefold():
             return title
+    want = needle if needle.endswith(".exe") else needle + ".exe"
+    try:
+        import psutil
+        for title, pid in windows:
+            try:
+                if pid and psutil.Process(pid).name().casefold() == want:
+                    return title
+            except Exception:
+                continue
+    except Exception:
+        pass
     return None
 
 
