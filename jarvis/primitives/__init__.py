@@ -72,13 +72,22 @@ def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
 
 
 def _run_click(args: dict, gate_info: dict | None = None) -> str:
-    """Click, with screenshot-diff verify. Re-resolves at exec time and, if a
-    CONFIRM approval named a specific element, refuses if it changed."""
+    """Click, with screenshot-diff verify. Three cases, decided by gate_info:
+    - vision_point present → click those coords (vision fallback path);
+    - vision_failed present → the fast path AND vision both failed → clean fail;
+    - else → text fast path, re-resolving at exec time (slice-4 behaviour)."""
     target = str(args.get("target", ""))
     window = args.get("window")
-    expect = gate_info.get("expect_name") if gate_info else None
+    gi = gate_info or {}
+    if gi.get("vision_failed") and not gi.get("vision_point"):
+        return f"FAILED: couldn't find '{target}' — {gi['vision_failed']}."
+
     before = screen.capture_screen()
-    r = jinput.click(target, window_hint=window, expect_name=expect)
+    if gi.get("vision_point"):
+        r = jinput.click(target, window_hint=window, point=gi["vision_point"],
+                         expect_label=gi.get("vision_label"))
+    else:
+        r = jinput.click(target, window_hint=window, expect_name=gi.get("expect_name"))
     if not r["ok"]:
         return f"FAILED: {r['message']}"
     time.sleep(0.3)

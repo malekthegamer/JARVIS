@@ -282,3 +282,91 @@ def test_live_question_never_enters_executing(state_log):
     reply = brain.think("What is 2+2? Reply with just the number.")
     assert "4" in reply, reply
     assert all(e["state"] != "executing" for e in state_log), state_log
+
+# ---------- slice 5: vision-fallback click through the executor + agent loop ----------
+
+import numpy as _np
+
+
+def _stub_screen(monkeypatch):
+    monkeypatch.setattr(primitives.screen, "capture_screen",
+                        lambda: _np.zeros((4, 4, 3), dtype="uint8"))
+    monkeypatch.setattr(primitives.screen, "screenshot_diff", lambda a, b: 0.1)
+
+
+def test_run_click_routes_vision_point(monkeypatch):
+    _stub_screen(monkeypatch)
+    captured = {}
+    monkeypatch.setattr(
+        primitives.jinput, "click",
+        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None:
+            captured.update(point=point, label=expect_label) or
+            {"ok": True, "message": "Clicked the element."})
+    out = primitives._run_click(
+        {"target": "trash", "window": "IconPad"},
+        {"vision_point": (160, 260), "vision_label": "delete item"})
+    assert captured["point"] == (160, 260) and captured["label"] == "delete item"
+    assert out.startswith("OK")
+
+
+def test_run_click_vision_failed_never_clicks(monkeypatch):
+    _stub_screen(monkeypatch)
+    calls = {"n": 0}
+    monkeypatch.setattr(primitives.jinput, "click",
+                        lambda *a, **k: calls.__setitem__("n", calls["n"] + 1))
+    out = primitives._run_click(
+        {"target": "ghost", "window": "IconPad"},
+        {"vision_failed": "couldn't find it, even visually"})
+    assert out.startswith("FAILED") and calls["n"] == 0
+
+
+def test_vision_destructive_click_walks_confirm(monkeypatch, state_log, confirm_events):
+    """Full agent walk: fast path fails → vision destructive → CONFIRM →
+    approve → EXECUTING clicks the vision point. The gate is NOT bypassed."""
+    _stub_screen(monkeypatch)
+    monkeypatch.setattr(primitives.jinput, "resolve_target",
+                        lambda d, window_hint=None: {"ok": False, "message": "nf", "candidates": []})
+    from jarvis.primitives import vision as _vision
+    monkeypatch.setattr(_vision, "locate_and_classify",
+                        lambda d, window_hint=None: {"ok": True, "point": (160, 260),
+                        "label": "delete item", "tier": "confirm",
+                        "window_title": "IconPad", "confidence": 0.9})
+    clicked = {}
+    monkeypatch.setattr(primitives.jinput, "click",
+                        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None:
+                        clicked.update(point=point) or {"ok": True, "message": "Clicked."})
+
+    unsubscribe = _auto_resolver(approved=True)
+    try:
+        provider = ToolCallingProvider(tool_name="click",
+                                       tool_args={"target": "the trash icon", "window": "IconPad"})
+        brain = _make_brain(provider)
+        brain.think("click the trash icon in IconPad")
+    finally:
+        unsubscribe()
+
+    assert clicked.get("point") == (160, 260), "approved vision click must fire at the vision point"
+    states = [e["state"] for e in state_log]
+    assert states == ["thinking", "confirming", "executing", "thinking", "idle"]
+    assert "delete item" in confirm_events[0]["description"]
+
+
+def test_vision_safe_click_is_auto_no_modal(monkeypatch, state_log, confirm_events):
+    _stub_screen(monkeypatch)
+    monkeypatch.setattr(primitives.jinput, "resolve_target",
+                        lambda d, window_hint=None: {"ok": False, "message": "nf", "candidates": []})
+    from jarvis.primitives import vision as _vision
+    monkeypatch.setattr(_vision, "locate_and_classify",
+                        lambda d, window_hint=None: {"ok": True, "point": (50, 50),
+                        "label": "bold", "tier": "auto", "window_title": "IconPad",
+                        "confidence": 0.95})
+    monkeypatch.setattr(primitives.jinput, "click",
+                        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None:
+                        {"ok": True, "message": "Clicked."})
+    provider = ToolCallingProvider(tool_name="click",
+                                   tool_args={"target": "the bold icon", "window": "IconPad"})
+    brain = _make_brain(provider)
+    brain.think("click the bold icon")
+    states = [e["state"] for e in state_log]
+    assert "confirming" not in states and "executing" in states
+    assert confirm_events == []

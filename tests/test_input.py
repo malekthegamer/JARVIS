@@ -269,3 +269,146 @@ def test_enter_and_ctrl_enter_gate_chat_submit():
     """Pressing Enter (send a chat message) must not slip through as AUTO."""
     assert jinput.classify_press({"combo": "enter", "window": "Discord"})["tier"] == "confirm"
     assert jinput.classify_press({"combo": "ctrl+enter", "window": "Slack"})["tier"] == "confirm"
+
+
+# ---------- slice 5: vision fallback wiring (mocked vision) ----------
+
+from jarvis.primitives import vision as jvision
+
+
+def _fast_found(name, title="Untitled - Notepad", dialog=False):
+    return lambda desc, window_hint=None: {
+        "ok": True, "element_name": name, "control_type": "Button",
+        "window_title": title, "window_is_dialog": dialog,
+        "rect": (0, 0, 10, 10), "mid_point": (5, 5)}
+
+
+def _fast_fail():
+    return lambda desc, window_hint=None: {"ok": False, "message": "not found",
+                                           "candidates": []}
+
+
+def test_fast_path_wins_vision_not_called(monkeypatch):
+    """Script 2: a text-labelled button resolves fast; vision NEVER runs."""
+    monkeypatch.setattr(jinput, "resolve_target", _fast_found("File", dialog=False))
+    calls = {"n": 0}
+    monkeypatch.setattr(jvision, "locate_and_classify",
+                        lambda d, window_hint=None: calls.__setitem__("n", calls["n"] + 1))
+    info = jinput.classify_click({"target": "File", "window": "Notepad"})
+    assert calls["n"] == 0, "vision must not run when the fast path names an element"
+    assert info["tier"] == "auto" and "vision_point" not in info
+
+
+def test_empty_name_resolution_triggers_vision(monkeypatch):
+    monkeypatch.setattr(jinput, "resolve_target", _fast_found("   "))  # whitespace name
+    calls = {"n": 0}
+    monkeypatch.setattr(jvision, "locate_and_classify",
+                        lambda d, window_hint=None: calls.__setitem__("n", calls["n"] + 1) or
+                        {"ok": True, "point": (1, 1), "label": "bold", "tier": "auto",
+                         "window_title": "App", "confidence": 0.9})
+    jinput.classify_click({"target": "icon", "window": "App"})
+    assert calls["n"] == 1, "an empty accessible name must fall through to vision"
+
+
+def test_vision_destructive_is_confirm(monkeypatch):
+    monkeypatch.setattr(jinput, "resolve_target", _fast_fail())
+    monkeypatch.setattr(jvision, "locate_and_classify",
+                        lambda d, window_hint=None: {"ok": True, "point": (160, 260),
+                        "label": "delete item", "tier": "confirm",
+                        "window_title": "IconPad", "confidence": 0.9})
+    info = jinput.classify_click({"target": "the trash", "window": "IconPad"})
+    assert info["tier"] == "confirm"
+    assert info["vision_point"] == (160, 260)
+    assert "delete item" in info["description"] and "visual" in info["description"].lower()
+
+
+def test_vision_safe_is_auto(monkeypatch):
+    monkeypatch.setattr(jinput, "resolve_target", _fast_fail())
+    monkeypatch.setattr(jvision, "locate_and_classify",
+                        lambda d, window_hint=None: {"ok": True, "point": (50, 50),
+                        "label": "bold", "tier": "auto", "window_title": "IconPad",
+                        "confidence": 0.95})
+    info = jinput.classify_click({"target": "bold", "window": "IconPad"})
+    assert info["tier"] == "auto" and info["vision_point"] == (50, 50)
+
+
+def test_vision_terminal_backstop(monkeypatch):
+    """A 'safe' vision label in a terminal window is still CONFIRM."""
+    monkeypatch.setattr(jinput, "resolve_target", _fast_fail())
+    monkeypatch.setattr(jvision, "locate_and_classify",
+                        lambda d, window_hint=None: {"ok": True, "point": (10, 10),
+                        "label": "clear", "tier": "auto", "window_title": "Command Prompt",
+                        "confidence": 0.9})
+    info = jinput.classify_click({"target": "x", "window": "cmd"})
+    assert info["tier"] == "confirm"
+
+
+def test_vision_no_match_fails_open_to_clean_failure(monkeypatch):
+    monkeypatch.setattr(jinput, "resolve_target", _fast_fail())
+    monkeypatch.setattr(jvision, "locate_and_classify",
+                        lambda d, window_hint=None: {"ok": False,
+                        "reason": "couldn't find it, even visually"})
+    info = jinput.classify_click({"target": "ghost", "window": "IconPad"})
+    assert info["tier"] == "auto" and info.get("vision_failed")
+    assert "vision_point" not in info
+
+
+# ---------- click(point=) execution guards ----------
+
+class _FakeRect:
+    def __init__(self, l, t, r, b):
+        self.left, self.top, self.right, self.bottom = l, t, r, b
+
+
+class _FakeWin:
+    def __init__(self, rect):
+        self._r = rect
+    def rectangle(self):
+        return self._r
+    def set_focus(self):
+        pass
+    def restore(self):
+        pass
+
+
+def _wire_point_click(monkeypatch, rect, foreground=True, element=True):
+    monkeypatch.setattr(jinput, "_target_window", lambda wh: (_FakeWin(rect), "App"))
+    monkeypatch.setattr(jinput, "_acquire_focus", lambda w, t, attempts=4: True)
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda t: foreground)
+    monkeypatch.setattr(jinput, "_element_present_at", lambda p: element)
+
+
+def test_click_point_rejects_out_of_bounds(monkeypatch):
+    _wire_point_click(monkeypatch, _FakeRect(100, 200, 150, 250))
+    out = jinput.click("x", window_hint="App", point=(500, 500))
+    assert out["ok"] is False and "outside" in out["message"].lower()
+
+
+def test_click_point_rejects_when_no_element_there(monkeypatch):
+    _wire_point_click(monkeypatch, _FakeRect(0, 0, 1000, 1000), element=False)
+    out = jinput.click("x", window_hint="App", point=(50, 50))
+    assert out["ok"] is False and "clickable" in out["message"].lower()
+
+
+def test_click_point_aborts_on_focus_loss(monkeypatch):
+    _wire_point_click(monkeypatch, _FakeRect(0, 0, 1000, 1000), foreground=False)
+    out = jinput.click("x", window_hint="App", point=(50, 50))
+    assert out["ok"] is False
+
+
+def test_click_point_success_clicks_coords(monkeypatch):
+    import sys, types
+    _wire_point_click(monkeypatch, _FakeRect(0, 0, 1000, 1000))
+    clicked = {}
+    fake = types.SimpleNamespace(moveTo=lambda x, y: clicked.update(mv=(x, y)),
+                                 click=lambda x, y: clicked.update(cl=(x, y)))
+    monkeypatch.setitem(sys.modules, "pydirectinput", fake)
+    out = jinput.click("x", window_hint="App", point=(50, 60), expect_label="bold")
+    assert out["ok"] and clicked["cl"] == (50, 60)
+    assert "bold" in out["message"]
+
+
+def test_click_point_window_gone(monkeypatch):
+    monkeypatch.setattr(jinput, "_target_window", lambda wh: (None, None))
+    out = jinput.click("x", window_hint="App", point=(50, 60))
+    assert out["ok"] is False

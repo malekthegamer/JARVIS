@@ -388,13 +388,69 @@ def _combo_to_send_keys(combo: str) -> str:
     return prefix + named.get(key, key)
 
 
+def _element_present_at(point) -> bool:
+    """True if a visible, enabled UIA element is at `point` (execution-time
+    hit-test for vision clicks — catches coords that map to nothing)."""
+    _co_init()
+    try:
+        from pywinauto import Desktop
+        el = Desktop(backend="uia").from_point(int(point[0]), int(point[1]))
+        return bool(el.is_visible() and el.is_enabled())
+    except Exception:
+        return False
+
+
+def _click_xy(x: int, y: int, label: str) -> dict:
+    try:
+        import pydirectinput
+        pydirectinput.moveTo(x, y)
+        pydirectinput.click(x, y)
+        return {"ok": True, "message": f"Clicked {label}."}
+    except Exception:
+        pass
+    try:
+        import pyautogui
+        pyautogui.click(x, y)
+        return {"ok": True, "message": f"Clicked {label}."}
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't click at ({x},{y}): {exc}"}
+
+
+def _click_at_point(point, window_hint: str | None, expect_label: str | None) -> dict:
+    """Click a vision-provided point, with the same safety re-checks as a text
+    click: window focused, point still inside the window, a real element there.
+    Never reuses coords blind — every guard must pass first."""
+    win, title = _target_window(window_hint)
+    if win is None:
+        return {"ok": False, "message": "the target window is gone — not clicking."}
+    if not _acquire_focus(win, title):
+        return {"ok": False, "message": "couldn't focus the target window — not clicking."}
+    try:
+        r = win.rectangle()
+        if not (r.left <= point[0] <= r.right and r.top <= point[1] <= r.bottom):
+            return {"ok": False,
+                    "message": "the visual target is outside the window now — not clicking."}
+    except Exception:
+        pass
+    if not _refocus_foreground(title):
+        return {"ok": False, "message": "focus moved before the click — aborted."}
+    if not _element_present_at(point):
+        return {"ok": False,
+                "message": "nothing clickable is at that spot anymore — not clicking."}
+    return _click_xy(int(point[0]), int(point[1]), expect_label or "the element")
+
+
 def click(description: str, window_hint: str | None = None,
-          expect_name: str | None = None) -> dict:
-    """Resolve a description and click its center. Tier decided upstream; this
-    fn assumes approval already happened for CONFIRM-tier targets. It RE-
-    resolves at execution time (never reuses stale coordinates); if the caller
-    passed the name that was approved, a fresh resolution to a different
-    element aborts — the user approved a specific target, not a description."""
+          expect_name: str | None = None, point=None,
+          expect_label: str | None = None) -> dict:
+    """Click an element. Two paths:
+    - point given (vision fallback): click those coords after re-verifying
+      focus + bounds + a real element is there (never reuse coords blind).
+    - otherwise (fast path): resolve the description by text and click its
+      centre, RE-resolving at execution time; if the caller passed the
+      approved name, a fresh resolution to a different element aborts."""
+    if point is not None:
+        return _click_at_point(point, window_hint, expect_label)
     r = resolve_target(description, window_hint=window_hint)
     if not r["ok"]:
         cands = r.get("candidates") or []
@@ -465,20 +521,39 @@ def _is_terminal(title: str) -> bool:
 
 
 def classify_click(args: dict) -> dict:
-    """Resolve the target so the tier reflects the REAL element, and the
-    modal names it. Resolution failure → auto (the click fn re-resolves and
-    fails cleanly without acting — no need to prompt for a no-op)."""
+    """Decide the tier for a click and locate its target.
+
+    FAST PATH (primary, unchanged): the UIA text resolver. If it names an
+    element, classify by text and we're done — vision never runs.
+
+    FALLBACK: if the fast path can't identify a NAMED element (not found,
+    ambiguous, or an icon with an empty accessible name), hand off to the
+    vision resolver. The vision tier runs through the SAME classifier inputs
+    (destructive regex + terminal backstop) unioned with vision's own risk —
+    a second entrance to the gate, never a bypass."""
     desc = str(args.get("target", ""))
     window = args.get("window")
+
     r = resolve_target(desc, window_hint=window)
-    if not r["ok"]:
-        return {"tier": "auto", "description": f"Click '{desc}'", "expect_name": None}
-    tier = _click_tier(r["element_name"], r.get("window_is_dialog", False))
-    if _is_terminal(r["window_title"]):
-        tier = "confirm"
-    label = r["element_name"] or desc
-    return {"tier": tier, "expect_name": r["element_name"],
-            "description": f"Click '{label}' in '{r['window_title']}'"}
+    if r["ok"] and (r["element_name"] or "").strip():
+        tier = _click_tier(r["element_name"], r.get("window_is_dialog", False))
+        if _is_terminal(r["window_title"]):
+            tier = "confirm"
+        return {"tier": tier, "expect_name": r["element_name"],
+                "description": f"Click '{r['element_name']}' in '{r['window_title']}'"}
+
+    # Fast path couldn't name a target → vision fallback.
+    from jarvis.primitives import vision
+    v = vision.locate_and_classify(desc, window_hint=window)
+    if not v["ok"]:
+        # Can't locate even visually. AUTO tier + no point → the click fn
+        # reports the failure cleanly; no pointless CONFIRM for a no-op.
+        return {"tier": "auto", "description": f"Click '{desc}'",
+                "expect_name": None, "vision_failed": v.get("reason", "not found")}
+    tier = "confirm" if _is_terminal(v["window_title"]) else v["tier"]
+    return {"tier": tier, "expect_name": None,
+            "vision_point": v["point"], "vision_label": v["label"],
+            "description": f"Click '{v['label']}' (identified visually) in '{v['window_title']}'"}
 
 
 def classify_type(args: dict) -> dict:
