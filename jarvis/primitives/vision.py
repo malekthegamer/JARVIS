@@ -11,6 +11,16 @@ entrance to the safety gate, never a bypass.
 Everything here fails closed and never raises: any capture/model/parse
 problem returns {"ok": False, "reason": ...} so the caller refuses to click
 rather than clicking blind.
+
+KNOWN LIMITATION — confabulation: gemini-3.1-flash-lite will invent a plausible
+control (with confidence 1.0) when asked to find something that ISN'T in the
+image; prompt engineering does not reliably stop this (verified 2026-07). So a
+found:false result is NOT guaranteed for a genuinely-absent target. The
+defenses are therefore downstream, not here: (1) the CONFIRM gate — a
+confabulated destructive/committal action still shows the user its label and
+waits for approval; (2) the execution-time from_point hit-test in
+input.click(point=). Confidence thresholding is useless against this (the model
+is overconfident), so min_confidence only guards the honest low-confidence case.
 """
 from __future__ import annotations
 
@@ -36,7 +46,8 @@ _PROMPT = (
     "application window. Find the control that best matches this description:\n"
     '  "{description}"\n'
     "Return JSON only. If you find it, set found=true and give:\n"
-    "- box: [x0,y0,x1,y1] pixel bounds of the control IN THIS IMAGE (top-left origin).\n"
+    "- box: the control's bounding box as [ymin, xmin, ymax, xmax], four integers "
+    "0-1000 normalized to the image size (the standard Gemini box format).\n"
     "- label: 2-4 words for what the control DOES (e.g. 'delete item', 'bold text', "
     "'send message', 'close window'). Describe the actual control you see, not the "
     "description above.\n"
@@ -44,7 +55,10 @@ _PROMPT = (
     "buys/posts — hard to undo), 'safe' (formatting/navigation/selection — easily "
     "reversible), or 'unsure' if you cannot tell what it does.\n"
     "- confidence: 0.0-1.0, how sure you are this is the right control.\n"
-    "If no control matches, set found=false. Never guess a box you are unsure of."
+    "CRITICAL: only set found=true for a control you can ACTUALLY SEE in the image. "
+    "If the image is blank, or contains no control matching the description, you MUST "
+    "set found=false. Do NOT invent, guess, or hallucinate a control that is not "
+    "visibly present — a wrong location is worse than admitting it isn't there."
 )
 
 _cached_client = None
@@ -53,13 +67,17 @@ _cached_key: str | None = None
 
 # ============================ pure helpers (unit-tested) ============================
 
-def _map_box_to_point(box, scale: float, offset_xy) -> tuple[int, int]:
-    """Centre of a downscaled-image box → absolute virtual-screen point.
-    orig = downscaled / scale; then add the window crop's top-left offset."""
+def _map_box_to_point(box, img_wh, offset_xy) -> tuple[int, int]:
+    """Gemini returns [ymin, xmin, ymax, xmax] normalized to 0-1000. Map the
+    box centre to an absolute virtual-screen point using the crop's pixel size
+    and its top-left offset. Normalized coords are resolution-independent, so
+    the downscale factor deliberately does NOT enter here."""
+    ymin, xmin, ymax, xmax = (float(v) for v in box)
+    w, h = img_wh
+    cx = (xmin + xmax) / 2.0 / 1000.0 * w
+    cy = (ymin + ymax) / 2.0 / 1000.0 * h
     ox, oy = offset_xy
-    cx = (float(box[0]) + float(box[2])) / 2.0
-    cy = (float(box[1]) + float(box[3])) / 2.0
-    return (int(round(ox + cx / scale)), int(round(oy + cy / scale)))
+    return (int(round(ox + cx)), int(round(oy + cy)))
 
 
 def _point_in_rect(point, rect) -> bool:
@@ -201,9 +219,10 @@ def locate_and_classify(description: str, window_hint: str | None = None) -> dic
         return {"ok": False, "reason": "couldn't capture the target window"}
     img, offset, rect, title = grabbed
 
+    h, w = img.shape[:2]
     max_edge = int(settings.get("vision.max_edge_px", 1024))
     try:
-        png, scale = _downscale_and_encode(img, max_edge)
+        png, _scale = _downscale_and_encode(img, max_edge)
     except Exception:
         return {"ok": False, "reason": "couldn't encode the screenshot"}
 
@@ -217,7 +236,7 @@ def locate_and_classify(description: str, window_hint: str | None = None) -> dic
     if not parsed.get("found"):
         return {"ok": False, "reason": f"couldn't find '{description}' on screen, even visually"}
 
-    point = _map_box_to_point(parsed["box"], scale, offset)
+    point = _map_box_to_point(parsed["box"], (w, h), offset)
     if not _point_in_rect(point, rect):
         return {"ok": False, "reason": "vision pointed outside the window bounds — ignored"}
 
