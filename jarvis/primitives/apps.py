@@ -24,10 +24,50 @@ APP_ALIASES = {
 }
 
 
+# Start Menu roots (user + all-users). Some installers — Spotify's per-user
+# desktop build among them (slice-6 acceptance finding) — register NO App
+# Paths key and aren't on PATH; their only launchable trace is a .lnk here.
+_START_MENU_DIRS = [
+    os.path.join(os.environ.get("APPDATA", ""),
+                 r"Microsoft\Windows\Start Menu\Programs"),
+    os.path.join(os.environ.get("PROGRAMDATA", ""),
+                 r"Microsoft\Windows\Start Menu\Programs"),
+]
+
+
+def _lnk_target(lnk_path: str) -> str | None:
+    """Resolve a .lnk shortcut to its target path (pywin32 ships with
+    pywinauto, so WScript.Shell is always available here)."""
+    try:
+        import win32com.client
+        shell = win32com.client.Dispatch("WScript.Shell")
+        return shell.CreateShortcut(lnk_path).TargetPath or None
+    except Exception:
+        return None
+
+
+def _resolve_shortcut(target: str) -> str | None:
+    """Start Menu fallback: an EXACT-name '<target>.lnk' whose target exists.
+    Exact match only — grabbing a similarly-named app and launching the wrong
+    thing is worse than a clean failure (fail closed)."""
+    want = target.lower()
+    want = want[:-4] if want.endswith(".exe") else want
+    for root_dir in _START_MENU_DIRS:
+        if not os.path.isdir(root_dir):
+            continue
+        for dirpath, _dirs, files in os.walk(root_dir):
+            for fn in files:
+                if fn.lower() == want + ".lnk":
+                    path = _lnk_target(os.path.join(dirpath, fn))
+                    if path and os.path.isfile(path):
+                        return path
+    return None
+
+
 def _resolve_executable(target: str) -> str | None:
     """Find a launchable path for `target`, or None. Checks, in order:
-    a direct/existing path, PATH (with common exe extensions), and the
-    Windows App Paths registry (where chrome/msedge/spotify/etc. register)."""
+    a direct/existing path, PATH (with common exe extensions), the Windows
+    App Paths registry, and finally an exact-name Start Menu shortcut."""
     if os.path.isfile(target):
         return target
     hit = shutil.which(target)
@@ -51,7 +91,7 @@ def _resolve_executable(target: str) -> str | None:
                 continue
     except Exception:
         pass
-    return None
+    return _resolve_shortcut(target)
 
 
 def _candidates(name: str) -> list[str]:

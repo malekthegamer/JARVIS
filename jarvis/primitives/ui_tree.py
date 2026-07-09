@@ -36,6 +36,28 @@ def window_present(title_substring: str) -> bool:
     return any(needle in title.lower() for title in list_windows())
 
 
+def window_present_for_process(exe_name: str) -> bool:
+    """Is any visible window OWNED by a process with this exe name?
+    Needed because some apps retitle their window away from their own name
+    (Spotify shows the playing track — slice-6 acceptance finding), which
+    false-negatives the title check. Never raises — False on failure."""
+    _co_init()
+    want = exe_name.lower()
+    try:
+        import psutil
+        from pywinauto import Desktop  # lazy
+        for w in Desktop(backend="uia").windows():
+            try:
+                pid = w.element_info.process_id
+                if pid and psutil.Process(pid).name().lower() == want:
+                    return True
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return False
+
+
 def read_ui_tree(max_windows: int = 8, max_depth: int = 2,
                  budget_s: float = 4.0) -> str:
     """Compact text listing of on-screen windows and their top controls,

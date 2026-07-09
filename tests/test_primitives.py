@@ -93,6 +93,66 @@ def test_mangled_names_resolve_to_notepad():
         assert path and "notepad" in path.lower(), (name, path)
 
 
+def test_window_present_for_process_notepad():
+    """Slice-6 acceptance finding: apps like Spotify retitle their window to
+    the playing track, so title-substring presence false-negatives. Presence
+    must also be checkable by OWNING PROCESS name."""
+    _kill_notepad()
+    time.sleep(0.5)
+    try:
+        assert apps.launch_app("notepad")["ok"]
+        deadline = time.time() + 12
+        while time.time() < deadline:
+            if ui_tree.window_present_for_process("notepad.exe"):
+                break
+            time.sleep(0.4)
+        else:
+            raise AssertionError("no window owned by notepad.exe appeared")
+    finally:
+        _kill_notepad()
+
+
+def test_window_present_for_process_absent():
+    assert ui_tree.window_present_for_process("xyzzy-nope-9000.exe") is False
+
+
+def test_start_menu_shortcut_fallback(tmp_path, monkeypatch):
+    """Slice-6 finding: some installers (Spotify's per-user desktop build)
+    register NO App Paths key and aren't on PATH — only a Start Menu .lnk.
+    The resolver must find those."""
+    menu = tmp_path / "Programs"
+    menu.mkdir()
+    (menu / "FakeTunes.lnk").write_bytes(b"stub")
+    exe = tmp_path / "FakeTunes.exe"
+    exe.write_bytes(b"MZ")
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(menu)])
+    monkeypatch.setattr(apps, "_lnk_target", lambda p: str(exe))
+    assert apps._resolve_executable("faketunes") == str(exe)
+
+
+def test_start_menu_shortcut_exact_match_only(tmp_path, monkeypatch):
+    """No fuzzy grabbing: 'faketunes' must NOT match 'FakeTunes Deluxe.lnk'
+    (fail closed — wrong-app launches are worse than a clean failure)."""
+    menu = tmp_path / "Programs"
+    menu.mkdir()
+    (menu / "FakeTunes Deluxe.lnk").write_bytes(b"stub")
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(menu)])
+    monkeypatch.setattr(apps, "_lnk_target", lambda p: r"C:\x\y.exe")
+    assert apps._resolve_executable("faketunes") is None
+
+
+def test_spotify_resolves_via_start_menu_on_this_machine():
+    """Machine-reality pin (the slice-6 acceptance blocker): Spotify here
+    exposes ONLY a Start Menu shortcut — resolution must still find it."""
+    import os
+    lnk = os.path.join(os.environ.get("APPDATA", ""),
+                       r"Microsoft\Windows\Start Menu\Programs\Spotify.lnk")
+    if not os.path.exists(lnk):
+        pytest.skip("Spotify not installed on this machine")
+    path, _ = apps.resolve_app("spotify")
+    assert path and path.lower().endswith("spotify.exe"), path
+
+
 def test_nonexistent_app_fails_clean():
     result = apps.launch_app("xyzzy-not-an-app-9000")
     assert result["ok"] is False

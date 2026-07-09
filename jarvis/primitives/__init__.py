@@ -38,10 +38,15 @@ def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
         needle = os.path.splitext(os.path.basename(result["resolved"]))[0]
 
     window_ok = False
+    exe = os.path.basename(result["resolved"]) if result["resolved"] else ""
     if needle:
         deadline = time.time() + WINDOW_WAIT_S
         while time.time() < deadline:
-            if ui_tree.window_present(needle):
+            # Title needle OR owning process: apps like Spotify retitle their
+            # window to the playing track, so the title check alone
+            # false-negatives (slice-6 acceptance finding).
+            if ui_tree.window_present(needle) \
+                    or ui_tree.window_present_for_process(exe):
                 window_ok = True
                 break
             time.sleep(0.4)
@@ -50,7 +55,8 @@ def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
 
     verify = []
     if needle:
-        verify.append(f"window matching '{needle}' present={window_ok}")
+        verify.append(f"window titled '{needle}' or owned by {exe} "
+                      f"present={window_ok}")
     verify.append(f"screen changed {frac:.1%}"
                   + ("" if frac >= DIFF_MEANINGFUL else " (below meaningful threshold)"))
     verdict = "VERIFIED" if (window_ok or (needle is None and frac >= DIFF_MEANINGFUL)) \
