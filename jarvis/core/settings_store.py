@@ -36,6 +36,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "confirm": {
         "timeout_s": 30,  # no answer within this window -> action cancelled
     },
+    "vision": {
+        # Vision FALLBACK for click targeting — only runs when the fast text
+        # path can't identify an element (see jarvis.primitives.vision).
+        "enabled": True,          # kill switch; off -> fast-path failure fails as before
+        "max_edge_px": 1024,      # downscale the window crop's longest edge to this
+        "min_confidence": 0.5,    # below this, fail closed to CONFIRM (never click blind)
+    },
     "history_max_messages": 40,
 }
 
