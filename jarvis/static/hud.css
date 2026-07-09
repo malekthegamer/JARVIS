@@ -111,6 +111,39 @@ body[data-state="listening"] .state-label { color: var(--amber); }
 body[data-state="executing"] .state-label { color: #B08CFF; } /* orb work-hue 265 */
 body[data-state="offline"]   .state-label { color: var(--text-dim); }
 
+/* ---------- chain strip (slice 6): the declared plan, progressing ---------- */
+.chain-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 14px;
+  max-width: min(640px, 92vw);
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+  opacity: 1;
+  transition: opacity 0.4s ease;
+}
+.chain-strip.hidden { display: none; }
+.chain-strip.fade { opacity: 0; }
+.chain-strip li {
+  color: var(--text-dim);
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+.chain-strip li::before { content: "· "; opacity: 0.7; }
+.chain-strip li[data-status="done"] { color: rgba(59, 232, 255, 0.55); }
+.chain-strip li[data-status="done"]::before { content: "✓ "; }
+.chain-strip li[data-status="current"] {
+  color: var(--cyan);
+  text-shadow: 0 0 10px rgba(59, 232, 255, 0.45);
+}
+.chain-strip li[data-status="current"]::before { content: "▸ "; }
+.chain-strip li[data-status="failed"],
+.chain-strip li[data-status="cancelled"] { color: var(--amber); }
+.chain-strip li[data-status="failed"]::before { content: "✕ "; }
+.chain-strip li[data-status="cancelled"]::before { content: "⊘ "; }
+
 .hint {
   font-size: 12.5px;
   color: var(--text-dim);

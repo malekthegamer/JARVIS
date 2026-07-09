@@ -45,6 +45,84 @@
     }, 1800);
   }
 
+  // ---------- chain strip (slice 6): declared plan + live progress ----------
+  const chainStrip = document.getElementById("chain-strip");
+  let chainSteps = []; // [{text, status: pending|current|done|failed|cancelled}]
+  let chainFadeTimer = null;
+
+  function renderChain() {
+    chainStrip.innerHTML = "";
+    for (const s of chainSteps) {
+      const li = document.createElement("li");
+      li.dataset.status = s.status;
+      li.textContent = s.text;
+      chainStrip.appendChild(li);
+    }
+    chainStrip.classList.toggle("hidden", chainSteps.length === 0);
+  }
+
+  function showChain(steps) {
+    clearTimeout(chainFadeTimer);
+    chainStrip.classList.remove("fade");
+    chainSteps = steps;
+    renderChain();
+  }
+
+  function chainMark(current, endStatus) {
+    // indices < current-1 done, current-1 gets endStatus (or "current")
+    chainSteps.forEach((s, i) => {
+      if (i < current - 1) s.status = "done";
+      else if (i === current - 1) s.status = endStatus || "current";
+      else s.status = "pending";
+    });
+    renderChain();
+  }
+
+  function hideChain(afterMs) {
+    clearTimeout(chainFadeTimer);
+    chainFadeTimer = setTimeout(() => {
+      chainStrip.classList.add("fade");
+      chainFadeTimer = setTimeout(() => {
+        chainSteps = [];
+        renderChain();
+        chainStrip.classList.remove("fade");
+      }, 450); // matches the CSS opacity transition
+    }, afterMs);
+  }
+
+  function onChainEvent(event) {
+    if (event.type === "plan") {
+      showChain(event.steps.map((t) => ({ text: t, status: "pending" })));
+      chainMark(1);
+    } else if (event.type === "step") {
+      if (!event.total || !chainSteps.length) return; // undeclared chain: label counter covers it
+      const bad = event.status === "failed" || event.status === "cancelled";
+      chainMark(event.step, bad ? event.status : null);
+    } else if (event.type === "chain_end") {
+      if (event.status === "done") {
+        chainSteps.forEach((s) => (s.status = "done"));
+      } else if (event.status !== "cancelled") {
+        // budget / exhausted / error: the step we were on did not finish
+        const cur = chainSteps.find((s) => s.status === "current");
+        if (cur) cur.status = "failed";
+      } // cancelled: the step is already marked by its step event
+      renderChain();
+      hideChain(event.status === "done" ? 2000 : 3500);
+    } else if (event.type === "chain") {
+      // snapshot replay on (re)connect
+      const steps = (event.steps || []).map((t, i) => {
+        let status = "pending";
+        if (i < event.cursor) status = "done";
+        else if (i === event.cursor)
+          status = event.aborted
+            ? (event.aborted === "cancelled" ? "cancelled" : "failed")
+            : "current";
+        return { text: t, status };
+      });
+      showChain(steps);
+    }
+  }
+
   // ---------- CONFIRM modal (fail closed: only Approve sends true) ----------
   const backdrop = document.getElementById("confirm-backdrop");
   const confirmDesc = document.getElementById("confirm-desc");
@@ -93,20 +171,13 @@
       body.classList.add("online");
       connText.textContent = "online";
     };
-    ws.onmessage = (msg) => {
-      const event = JSON.parse(msg.data);
-      if (event.type === "state") setState(event.state, event.detail);
-      else if (event.type === "transcript") addLine(event.who, event.text);
-      else if (event.type === "confirm_request") showConfirm(event);
-      else if (event.type === "confirm_resolved") hideConfirm();
-      else if (event.type === "error" && event.message === "busy")
-        flashHint("One moment — still working on the last one.");
-    };
+    ws.onmessage = (msg) => handleEvent(JSON.parse(msg.data));
     ws.onclose = () => {
       body.classList.remove("online");
       connText.textContent = "reconnecting";
       setState("offline");
       hideConfirm(); // a dead socket can't answer; server replays on reconnect
+      showChain([]); // stale plan is worse than none; server replays on reconnect
       setTimeout(connect, retryMs);
       retryMs = Math.min(retryMs * 2, 8000);
     };
@@ -125,8 +196,21 @@
     }
   }
 
-  // Test hook: lets verification tooling render any state deterministically.
+  function handleEvent(event) {
+    if (event.type === "state") setState(event.state, event.detail);
+    else if (event.type === "transcript") addLine(event.who, event.text);
+    else if (event.type === "confirm_request") showConfirm(event);
+    else if (event.type === "confirm_resolved") hideConfirm();
+    else if (event.type === "plan" || event.type === "step" ||
+             event.type === "chain_end" || event.type === "chain")
+      onChainEvent(event);
+    else if (event.type === "error" && event.message === "busy")
+      flashHint("One moment — still working on the last one.");
+  }
+
+  // Test hooks: let verification tooling render any state deterministically.
   window.__hudSetState = setState;
+  window.__hudEvent = handleEvent;
 
   document.getElementById("orb-button").addEventListener("click", pushToTalk);
   document.addEventListener("keydown", (e) => {

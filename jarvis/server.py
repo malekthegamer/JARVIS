@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from jarvis.brain import jarvis_brain
+from jarvis.core import chain
 from jarvis.core.confirmations import confirmations
 from jarvis.state import broadcaster
 from jarvis.voice.voice_manager import voice_manager
@@ -148,6 +149,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
         pending = confirmations.pending_event()
         if pending:
             await ws.send_json(pending)
+        # Mid-chain (re)connect: replay the chain so the strip re-renders
+        # (mirrors the confirm replay above).
+        tracker = chain.current()
+        if tracker and (tracker.steps or tracker.calls):
+            await ws.send_json(tracker.snapshot())
         while True:
             msg = await ws.receive_json()
             kind = msg.get("type")

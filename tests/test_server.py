@@ -257,6 +257,54 @@ def test_pending_confirm_replayed_to_new_connection(confirm_client):
     assert result["decision"].approved is False
 
 
+def test_ws_connect_replays_chain_snapshot(client):
+    """Slice 6: a HUD (re)connecting mid-chain must receive the chain state
+    so the strip re-renders — mirrors the confirm-modal replay."""
+    import time
+    from jarvis.core import chain
+
+    tracker = chain.start()
+    try:
+        tracker.set_plan(["open notepad", "type the note"])
+        n = tracker.begin_call("launch_app", {"name": "notepad"})
+        tracker.end_call(n, "ok")
+        time.sleep(0.1)  # let the fanout drain the pre-connect events
+        with client.websocket_connect("/ws") as ws:
+            hello = ws.receive_json()
+            assert hello["type"] == "state"
+            # Bound the wait: trigger a chat so a MISSING snapshot fails at
+            # the first chat-flow event instead of hanging receive_json()
+            # forever (the snapshot, when present, precedes chat events —
+            # it's sent in the connect handshake).
+            ws.send_json({"type": "chat", "text": "status report"})
+            snap = None
+            for _ in range(30):
+                e = ws.receive_json()
+                if e.get("type") == "chain":
+                    snap = e
+                    break
+                if e.get("type") == "transcript":
+                    break  # chat flow began — the handshake had no snapshot
+            assert snap is not None, "no chain snapshot in the WS handshake"
+            assert snap["steps"] == ["open notepad", "type the note"]
+            assert snap["cursor"] == 1
+            assert snap["aborted"] is None
+    finally:
+        chain.clear("done")
+
+
+def test_ws_connect_no_chain_no_snapshot(client):
+    """No live chain -> connect handshake is just the state sync."""
+    from jarvis.core import chain
+    assert chain.current() is None
+    with client.websocket_connect("/ws") as ws:
+        hello = ws.receive_json()
+        assert hello["type"] == "state"
+        ws.send_json({"type": "chat", "text": "status report"})
+        nxt = ws.receive_json()  # first event of the chat flow, not a chain snap
+        assert nxt["type"] != "chain"
+
+
 def test_huge_chat_is_truncated_not_fatal(client):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()
