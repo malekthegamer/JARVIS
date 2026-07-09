@@ -38,8 +38,11 @@ class ToolCallingProvider(BrainProvider):
 
 @pytest.fixture()
 def state_log():
+    """STATE events only — slice 6 rides plan/step/chain_end events through
+    the same broadcaster; this log keeps asserting the state walk."""
     events: list[dict] = []
-    unsubscribe = broadcaster.subscribe(events.append)
+    unsubscribe = broadcaster.subscribe(
+        lambda e: events.append(e) if e.get("type") == "state" else None)
     yield events
     unsubscribe()
 
@@ -66,7 +69,7 @@ def test_tool_round_walks_executing_state(monkeypatch, state_log):
     states = [e["state"] for e in state_log]
     assert states == ["thinking", "executing", "thinking", "idle"]
     detail = next(e["detail"] for e in state_log if e["state"] == "executing")
-    assert detail == "launch_app"
+    assert detail == "1 · launch_app"  # slice 6: chain step counter in the detail
     seqs = [e["seq"] for e in state_log]
     assert seqs == sorted(seqs)
     assert broadcaster.current is AgentState.IDLE

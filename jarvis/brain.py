@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import threading
 
+from jarvis.core import chain
 from jarvis.core.errors import ProviderError
 from jarvis.core.settings_store import settings
 from jarvis.providers import registry
@@ -67,13 +68,18 @@ class JarvisBrain:
     def think(self, user_message: str) -> str:
         with self._lock:
             broadcaster.set(AgentState.THINKING)
+            chain.start()  # one chain per interaction; ground truth for the HUD
+            status = "error"  # anything that escapes _think_inner ends the chain honestly
             try:
-                return self._think_inner(user_message)
+                reply = self._think_inner(user_message)
+                status = "done"
+                return reply
             except ProviderError as exc:
                 return exc.friendly()
             except Exception as exc:  # absolute last resort — never crash a run loop
                 return f"Something went wrong on my end: {exc}"
             finally:
+                chain.clear(status)  # even a crash emits the terminal chain_end
                 broadcaster.set(AgentState.IDLE)
 
     def _think_inner(self, user_message: str) -> str:
@@ -106,7 +112,11 @@ class JarvisBrain:
                 "tool_calls": [tc.as_dict() for tc in resp.tool_calls],
             })
             for tc in resp.tool_calls:
+                tracker = chain.current()
+                n = tracker.begin_call(tc.name) if tracker else 0
                 result = self._execute_tool(tc.name, tc.args)
+                if tracker:
+                    tracker.end_call(n, chain.status_from_result(str(result)))
                 self.history.append({
                     "role": "tool", "tool_call_id": tc.id, "name": tc.name,
                     "content": str(result)[:4000],

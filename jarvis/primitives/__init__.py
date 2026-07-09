@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import time
 
+from jarvis.core import chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
 from jarvis.primitives import apps, files, input as jinput, screen, ui_tree, windows
@@ -286,7 +287,9 @@ def execute(name: str, args: dict) -> str:
             cancelled = _gate(name, description)
             if cancelled is not None:
                 return cancelled
-        broadcaster.set(AgentState.EXECUTING, detail=name)
+        tracker = chain.current()
+        broadcaster.set(AgentState.EXECUTING,
+                        detail=tracker.detail(name) if tracker else name)
         try:
             return prim["fn"](args, gate_info)
         except Exception as exc:

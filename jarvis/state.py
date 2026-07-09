@@ -34,9 +34,16 @@ class StateBroadcaster:
     def set(self, state: AgentState, detail: str = "") -> dict:
         """Enter a state and notify every subscriber, in seq order."""
         with self._lock:
-            self._seq += 1
             self.current = state
-            event = {"type": "state", "state": state.value, "seq": self._seq, "detail": detail}
+            return self.emit({"type": "state", "state": state.value, "detail": detail})
+
+    def emit(self, event: dict) -> dict:
+        """Broadcast an arbitrary event (plan/step/chain_end, …) through the
+        SAME lock and seq stream as state events, so every consumer sees one
+        totally-ordered feed. Does not touch the state machine."""
+        with self._lock:
+            self._seq += 1
+            event = {**event, "seq": self._seq}
             for fn in list(self._subscribers):
                 try:
                     fn(event)
