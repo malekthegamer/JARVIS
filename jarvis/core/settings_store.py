@@ -49,6 +49,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,        # kill switch
         "interval_s": 2.0,      # tick period
     },
+    "shell": {
+        # run_shell (spec §1.2) — highest-risk verb. Every call is
+        # CONFIRM-gated on the verbatim command; a narrow denylist refuses
+        # catastrophic shapes outright.
+        "enabled": True,        # kill switch; off -> withheld from the model
+        "timeout_s": 30,        # execution wall-clock before the tree is killed
+    },
     "history_max_messages": 40,
 }
 

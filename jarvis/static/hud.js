@@ -233,6 +233,16 @@
   function showConfirm(event) {
     confirmId = event.id;
     confirmDesc.textContent = event.description;
+    // Slice 9: a verbatim shell command renders in a monospace box, never
+    // prose — textContent only (the command is untrusted input).
+    const cmdBox = document.getElementById("confirm-command");
+    if (event.command) {
+      cmdBox.textContent = event.command;
+      cmdBox.classList.remove("hidden");
+    } else {
+      cmdBox.textContent = "";
+      cmdBox.classList.add("hidden");
+    }
     backdrop.classList.remove("hidden");
     let remaining = Math.round(event.timeout_s || 30);
     confirmCount.textContent = remaining;

@@ -51,6 +51,44 @@ def test_approve_path(manager, events):
     assert events[1]["result"] == "approved"
 
 
+def test_command_field_present_when_passed(manager, events):
+    """Slice 9: an optional verbatim `command` rides the confirm_request +
+    replay so the modal can show it in a monospace box."""
+    t = _resolve_later(manager, events, approved=False)
+    manager.request("Run a shell command", timeout_s=2, command="echo hi & dir")
+    t.join()
+    req = next(e for e in events if e["type"] == "confirm_request")
+    assert req["command"] == "echo hi & dir"
+
+
+def test_command_field_absent_for_normal_confirms(manager, events):
+    """Existing confirms (delete_file, close_tabs, …) must be byte-identical —
+    no `command` key when none is passed."""
+    t = _resolve_later(manager, events, approved=False)
+    manager.request("Delete file 'x.txt'", timeout_s=2)
+    t.join()
+    req = next(e for e in events if e["type"] == "confirm_request")
+    assert "command" not in req
+
+
+def test_pending_event_carries_command(manager):
+    ev = threading.Event()
+    holder = {}
+
+    def worker():
+        holder["d"] = manager.request("Run a shell command", timeout_s=1,
+                                      command="whoami")
+    t = threading.Thread(target=worker)
+    t.start()
+    deadline = time.time() + 1
+    while time.time() < deadline and manager.pending_event() is None:
+        time.sleep(0.01)
+    pend = manager.pending_event()
+    assert pend is not None and pend["command"] == "whoami"
+    # let it resolve/expire cleanly
+    t.join()
+
+
 def test_decline_path(manager, events):
     t = _resolve_later(manager, events, approved=False)
     decision = manager.request("Close window 'Notepad'", timeout_s=2)

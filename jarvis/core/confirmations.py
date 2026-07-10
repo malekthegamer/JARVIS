@@ -61,19 +61,30 @@ class ConfirmationManager:
             except Exception:
                 pass
 
+    def _request_event(self, entry: dict) -> dict:
+        """The confirm_request payload. `command` (slice 9) is included ONLY
+        when present, so existing confirms stay byte-identical."""
+        event = {"type": "confirm_request", "id": entry["id"],
+                 "description": entry["description"], "timeout_s": entry["timeout_s"]}
+        if entry.get("command"):
+            event["command"] = entry["command"]
+        return event
+
     def pending_event(self) -> dict | None:
         """The confirm_request to replay to a (re)connecting HUD, or None."""
         with self._lock:
             if self._pending is None:
                 return None
-            p = self._pending
-            return {"type": "confirm_request", "id": p["id"],
-                    "description": p["description"], "timeout_s": p["timeout_s"]}
+            return self._request_event(self._pending)
 
     # ---------- the gate ----------
     def request(self, description: str,
-                timeout_s: float = DEFAULT_TIMEOUT_S) -> Decision:
-        """Block until the user answers or the timeout elapses. Fail closed."""
+                timeout_s: float = DEFAULT_TIMEOUT_S,
+                command: str | None = None) -> Decision:
+        """Block until the user answers or the timeout elapses. Fail closed.
+
+        `command` (optional, slice 9): a verbatim shell command the HUD renders
+        in a monospace box — additive, absent for every other confirm."""
         with self._lock:
             if self._pending is not None:
                 return Decision(False, "superseded")
@@ -81,14 +92,14 @@ class ConfirmationManager:
                 "id": uuid.uuid4().hex,
                 "description": description,
                 "timeout_s": timeout_s,
+                "command": command,
                 "event": threading.Event(),
                 "approved": False,
             }
             self._pending = entry
 
         try:
-            self._emit({"type": "confirm_request", "id": entry["id"],
-                        "description": description, "timeout_s": timeout_s})
+            self._emit(self._request_event(entry))
         except Exception:
             # Couldn't reliably show the prompt -> the user never saw it -> deny.
             with self._lock:

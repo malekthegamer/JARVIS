@@ -257,6 +257,33 @@ def test_pending_confirm_replayed_to_new_connection(confirm_client):
     assert result["decision"].approved is False
 
 
+def test_ws_confirm_request_carries_command(confirm_client):
+    """Slice 9: a shell confirm replayed over WS carries the verbatim
+    `command` field for the monospace modal box."""
+    client, _ = confirm_client
+    result = {}
+
+    def blocked_request():
+        result["d"] = confirmations.request("Run a shell command", timeout_s=5,
+                                            command="whoami /all")
+
+    t = threading.Thread(target=blocked_request)
+    t.start()
+    deadline = time.time() + 2
+    while time.time() < deadline and confirmations.pending_event() is None:
+        time.sleep(0.02)
+    try:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()  # state sync
+            replay = ws.receive_json()
+            assert replay["type"] == "confirm_request"
+            assert replay["command"] == "whoami /all"
+            ws.send_json({"type": "confirm_response", "id": replay["id"],
+                          "approved": False})
+    finally:
+        t.join()
+
+
 def test_ws_connect_replays_chain_snapshot(client):
     """Slice 6: a HUD (re)connecting mid-chain must receive the chain state
     so the strip re-renders — mirrors the confirm-modal replay."""

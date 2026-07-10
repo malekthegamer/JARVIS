@@ -373,6 +373,23 @@ body[data-state="offline"]   .state-label { color: var(--text-dim); }
   color: var(--text-bright);
   overflow-wrap: anywhere;
 }
+.confirm-command {
+  margin-top: 14px;
+  padding: 12px 14px;
+  max-height: 240px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-bright);
+  background: rgba(5, 7, 10, 0.6);
+  border: 1px solid rgba(255, 176, 32, 0.4);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.confirm-command.hidden { display: none; }
+
 .confirm-count {
   margin-top: 10px;
   font-family: var(--mono);

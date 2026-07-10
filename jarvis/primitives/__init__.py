@@ -480,7 +480,12 @@ _CANCEL_REASONS = {
 
 
 def tools_schema() -> list[dict]:
-    return [p["schema"] for p in PRIMITIVES.values()]
+    """Schemas the model may call. run_shell is withheld entirely when
+    shell.enabled is off — a disabled high-risk verb should not even be
+    advertised (a direct call still refuses via classify)."""
+    shell_on = settings.get("shell.enabled", True)
+    return [p["schema"] for n, p in PRIMITIVES.items()
+            if shell_on or n != "run_shell"]
 
 
 def execute(name: str, args: dict) -> str:
@@ -505,7 +510,8 @@ def execute(name: str, args: dict) -> str:
         if tier == "confirm":
             if description is None:
                 return "FAILED: nothing matching that to act on right now."
-            cancelled = _gate(name, description)
+            command = gate_info.get("command") if gate_info else None
+            cancelled = _gate(name, description, command=command)
             if cancelled is not None:
                 return cancelled
         tracker = chain.current()
@@ -539,14 +545,16 @@ def _decide_tier(prim: dict, args: dict) -> tuple[str, str | None, dict | None]:
     return tier, description, None
 
 
-def _gate(name: str, description: str) -> str | None:
+def _gate(name: str, description: str, command: str | None = None) -> str | None:
     """None = approved, proceed. A string = cancelled, return it as the tool
-    result. Any internal failure reads as cancelled (fail closed)."""
+    result. Any internal failure reads as cancelled (fail closed). `command`
+    (slice 9) is the verbatim shell command shown in the modal's mono box."""
     timeout_s = 0.0
     try:
         broadcaster.set(AgentState.CONFIRMING, detail=name)
         timeout_s = float(settings.get("confirm.timeout_s", 30))
-        decision = confirmations.request(description, timeout_s=timeout_s)
+        decision = confirmations.request(description, timeout_s=timeout_s,
+                                         command=command)
     except Exception:
         decision = Decision(False, "error")
     if decision.approved:

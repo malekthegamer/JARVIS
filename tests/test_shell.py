@@ -185,3 +185,91 @@ def test_output_truncated():
     r = shell.run_shell('cmd /c "for /L %i in (1,1,5000) do @echo line-%i"')
     assert len(r["message"]) < 6000
     assert "trunc" in r["message"].lower() or len(r["stdout"]) <= 4100
+
+
+# ---------- STAGE 3: gate integration + kill switch ----------
+
+import threading as _threading
+import time as _time2
+
+from jarvis.core.confirmations import confirmations as _confirmations
+from jarvis.core.settings_store import settings as _settings
+
+
+def _auto_resolve(approved: bool):
+    def responder(event):
+        if event.get("type") == "confirm_request":
+            _threading.Thread(target=lambda: (
+                _time2.sleep(0.05),
+                _confirmations.resolve(event["id"], approved))).start()
+    return _confirmations.subscribe(responder)
+
+
+def test_gate_walk_approve_runs():
+    """Approve -> the command actually runs (harmless echo)."""
+    unsub = _auto_resolve(True)
+    try:
+        out = primitives.execute("run_shell", {"command": "echo gated-approved-ok"})
+    finally:
+        unsub()
+    assert out.startswith("OK"), out
+    assert "gated-approved-ok" in out
+
+
+def test_gate_decline_does_not_run(monkeypatch):
+    """Decline -> the command never executes (spy proves it)."""
+    ran = []
+    monkeypatch.setattr(shell, "run_shell",
+                        lambda cmd: ran.append(cmd) or {"ok": True, "message": "x",
+                                                        "exit_code": 0, "stdout": "",
+                                                        "stderr": ""})
+    unsub = _auto_resolve(False)
+    try:
+        out = primitives.execute("run_shell", {"command": "echo should-not-run"})
+    finally:
+        unsub()
+    assert "CANCELLED" in out
+    assert ran == [], "declined command must NOT execute"
+
+
+def test_gate_timeout_does_not_run(monkeypatch):
+    ran = []
+    monkeypatch.setattr(shell, "run_shell",
+                        lambda cmd: ran.append(cmd) or {"ok": True, "message": "x",
+                                                        "exit_code": 0, "stdout": "",
+                                                        "stderr": ""})
+    _settings.set("confirm.timeout_s", 0.3, persist=False)
+    try:
+        out = primitives.execute("run_shell", {"command": "echo nope"})
+    finally:
+        _settings.set("confirm.timeout_s", 30, persist=False)
+    assert "CANCELLED" in out
+    assert ran == []
+
+
+def test_gate_carries_command_to_modal(monkeypatch):
+    """The gate must pass the VERBATIM command to the confirm event."""
+    seen = {}
+    unsub = _confirmations.subscribe(
+        lambda e: seen.update(cmd=e.get("command")) if e.get("type") == "confirm_request" else None)
+    approver = _auto_resolve(True)
+    try:
+        primitives.execute("run_shell", {"command": "echo verbatim-check"})
+    finally:
+        approver()
+        unsub()
+    assert seen.get("cmd") == "echo verbatim-check"
+
+
+def test_disabled_hidden_from_schema_and_refused():
+    from jarvis.brain import JarvisBrain
+    _settings.set("shell.enabled", False, persist=False)
+    try:
+        names = [t["name"] for t in JarvisBrain().tools()]
+        assert "run_shell" not in names, "disabled run_shell must not be advertised"
+        out = primitives.execute("run_shell", {"command": "echo hi"})
+        assert out.startswith("BLOCKED") and "disabled" in out.lower()
+    finally:
+        _settings.set("shell.enabled", True, persist=False)
+    # re-enabled: advertised again
+    assert "run_shell" in [t["name"] for t in JarvisBrain().tools()]
