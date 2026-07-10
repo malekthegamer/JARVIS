@@ -305,6 +305,81 @@ def test_ws_connect_no_chain_no_snapshot(client):
         assert nxt["type"] != "chain"
 
 
+# ---------- slice 7: telemetry emitter ----------
+
+import time as _time
+
+from jarvis.core.settings_store import settings as _settings
+
+
+@pytest.fixture()
+def fast_telemetry():
+    _settings.set("telemetry.interval_s", 0.05, persist=False)
+    yield
+    _settings.set("telemetry.interval_s", 2.0, persist=False)
+    _settings.set("telemetry.enabled", True, persist=False)
+
+
+def test_telemetry_emitted_when_client_connected(client, fast_telemetry):
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()  # state sync
+        telem = None
+        for _ in range(40):  # bounded: telemetry must arrive within ~2s
+            e = ws.receive_json()
+            if e.get("type") == "telemetry":
+                telem = e
+                break
+        assert telem is not None, "no telemetry within the bounded window"
+        assert isinstance(telem["cpu"], (int, float))
+        assert isinstance(telem["ram"], (int, float))
+        assert telem["ram_total_gb"] > 0
+        assert "seq" not in telem, "telemetry must bypass the broadcaster seq stream"
+
+
+def test_telemetry_sampler_idle_without_clients(client, fast_telemetry, monkeypatch):
+    """No connected HUD -> the sampler must not even run (no wasted CPU)."""
+    from jarvis import server
+    calls = {"n": 0}
+    real = server._sample_telemetry
+    monkeypatch.setattr(server, "_sample_telemetry",
+                        lambda: calls.__setitem__("n", calls["n"] + 1) or real())
+    _time.sleep(0.3)  # several ticks with zero clients
+    assert calls["n"] == 0
+
+
+def test_telemetry_disabled_by_setting(client, fast_telemetry, monkeypatch):
+    from jarvis import server
+    _settings.set("telemetry.enabled", False, persist=False)
+    calls = {"n": 0}
+    real = server._sample_telemetry
+    monkeypatch.setattr(server, "_sample_telemetry",
+                        lambda: calls.__setitem__("n", calls["n"] + 1) or real())
+    with client.websocket_connect("/ws") as ws:
+        ws.receive_json()
+        _time.sleep(0.3)
+    assert calls["n"] == 0
+
+
+def test_telemetry_bypasses_broadcaster(client, fast_telemetry):
+    """Telemetry must never reach broadcaster subscribers — the seq stream
+    and every state-machine consumer stay pure."""
+    from jarvis.state import broadcaster
+    seen: list[dict] = []
+    unsubscribe = broadcaster.subscribe(seen.append)
+    try:
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_json()
+            got = False
+            for _ in range(40):
+                if ws.receive_json().get("type") == "telemetry":
+                    got = True
+                    break
+            assert got
+    finally:
+        unsubscribe()
+    assert all(e.get("type") != "telemetry" for e in seen)
+
+
 def test_huge_chat_is_truncated_not_fatal(client):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()

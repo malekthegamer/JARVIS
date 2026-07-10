@@ -162,7 +162,8 @@ class JarvisBrain:
                 elif tracker:
                     n = tracker.begin_call(tc.name, tc.args or {})
                     result = self._execute_tool(tc.name, tc.args)
-                    tracker.end_call(n, chain.status_from_result(str(result)))
+                    tracker.end_call(n, chain.status_from_result(str(result)),
+                                     note=str(result))
                 else:
                     result = self._execute_tool(tc.name, tc.args)
                 self.history.append({

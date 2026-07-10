@@ -134,6 +134,28 @@ def test_parallel_calls_in_one_round_tracked_per_call(monkeypatch, state_log):
     assert len([e for e in state_log if e["type"] == "chain_end"]) == 1
 
 
+def test_step_end_event_carries_note(monkeypatch, state_log):
+    """Slice 7: the step-END event carries a compact verdict note (the
+    Action Log row's evidence) — additive field, sourced from the tool
+    result, truncated."""
+    monkeypatch.setitem(
+        primitives.PRIMITIVES["launch_app"], "fn",
+        lambda args, gi=None: "Launched notepad.exe (pid 1). VERIFY [VERIFIED]: "
+                              + "x" * 200)
+    provider = ScriptedProvider([
+        BrainResponse(tool_calls=[ToolCall(id="t1", name="launch_app",
+                                           args={"name": "notepad"})]),
+        BrainResponse(text="Done."),
+    ])
+    _make_brain(provider).think("open notepad")
+    steps = [e for e in state_log if e["type"] == "step"]
+    start, end = steps
+    assert start["status"] == "start" and end["status"] == "ok"
+    assert "note" in end
+    assert end["note"].startswith("Launched notepad.exe")
+    assert len(end["note"]) <= 91  # 90 + ellipsis
+
+
 def test_failed_result_marks_step_failed(monkeypatch, state_log):
     monkeypatch.setitem(primitives.PRIMITIVES["launch_app"], "fn",
                         lambda args, gi=None: "FAILED: no such app.")

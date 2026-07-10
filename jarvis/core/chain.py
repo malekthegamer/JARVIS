@@ -72,9 +72,13 @@ class ChainTracker:
         broadcaster.emit(self._step_event(n))
         return n
 
-    def end_call(self, n: int, status: str) -> None:
+    def end_call(self, n: int, status: str, note: str = "") -> None:
         call = self.calls[n - 1]
         call["status"] = status
+        # Compact verdict for the Action Log row (slice 7) — evidence the
+        # executor produced, never the model's prose.
+        note = " ".join(str(note).split())
+        call["note"] = note[:90] + ("…" if len(note) > 90 else "")
         if status == "failed":
             self.failures += 1
             self.last_failure = (call["tool"], call["args_key"])
@@ -119,10 +123,13 @@ class ChainTracker:
 
     def _step_event(self, n: int) -> dict:
         call = self.calls[n - 1]
-        return {"type": "step", "n": n, "tool": call["tool"],
-                "status": call["status"], "args": call["args"],
-                "step": min(self.cursor + 1, len(self.steps)) if self.steps else None,
-                "total": len(self.steps) or None}
+        event = {"type": "step", "n": n, "tool": call["tool"],
+                 "status": call["status"], "args": call["args"],
+                 "step": min(self.cursor + 1, len(self.steps)) if self.steps else None,
+                 "total": len(self.steps) or None}
+        if call.get("note"):
+            event["note"] = call["note"]
+        return event
 
     # ---------- rendering ----------
     def detail(self, tool: str) -> str:

@@ -27,6 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from jarvis.brain import jarvis_brain
 from jarvis.core import chain
 from jarvis.core.confirmations import confirmations
+from jarvis.core.settings_store import settings
 from jarvis.state import broadcaster
 from jarvis.voice.voice_manager import voice_manager
 
@@ -49,6 +50,77 @@ def _enqueue_threadsafe(event: dict) -> None:
     loop.call_soon_threadsafe(queue.put_nowait, event)
 
 
+# ---------- telemetry (slice 7, spec §2.3) ----------
+# Sampled ONLY while a HUD is connected. Events go straight into the WS
+# queue (the transcript path) — deliberately NOT through the broadcaster,
+# so the state seq stream stays pure.
+
+_gpu_last: dict = {}
+
+
+def _sample_telemetry() -> dict:
+    """CPU/RAM/foreground title. Runs in a worker thread; never raises."""
+    import psutil
+    event: dict = {"type": "telemetry"}
+    try:
+        event["cpu"] = psutil.cpu_percent(None)
+        vm = psutil.virtual_memory()
+        event["ram"] = vm.percent
+        event["ram_used_gb"] = round(vm.used / 2**30, 1)
+        event["ram_total_gb"] = round(vm.total / 2**30, 1)
+    except Exception:
+        pass
+    try:
+        import win32gui
+        event["window"] = win32gui.GetWindowText(
+            win32gui.GetForegroundWindow())[:80]
+    except Exception:
+        pass
+    return event
+
+
+def _sample_gpu() -> dict | None:
+    """nvidia-smi query (~90ms subprocess). None when unavailable."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3)
+        if out.returncode != 0:
+            return None
+        util, used, total = (x.strip() for x in
+                             out.stdout.strip().splitlines()[0].split(","))
+        return {"gpu": float(util),
+                "gpu_mem_used_gb": round(int(used) / 1024, 1),
+                "gpu_mem_total_gb": round(int(total) / 1024, 1)}
+    except Exception:
+        return None
+
+
+async def _telemetry_forever() -> None:
+    tick = 0
+    while True:
+        try:
+            interval = float(settings.get("telemetry.interval_s", 2.0))
+        except Exception:
+            interval = 2.0
+        await asyncio.sleep(max(interval, 0.05))
+        if not _clients or not settings.get("telemetry.enabled", True):
+            continue
+        try:
+            event = await asyncio.to_thread(_sample_telemetry)
+            if tick % 3 == 0:  # GPU is a subprocess — sample sparsely, cache
+                gpu = await asyncio.to_thread(_sample_gpu)
+                if gpu:
+                    _gpu_last.update(gpu)
+            event.update(_gpu_last)
+            _enqueue_threadsafe(event)
+        except Exception:
+            pass  # telemetry must never take the server down
+        tick += 1
+
+
 async def _fanout_forever() -> None:
     """Single consumer: preserves event order across all clients."""
     assert _events is not None
@@ -69,12 +141,14 @@ async def _lifespan(app: FastAPI):
     unsubscribe_state = broadcaster.subscribe(_enqueue_threadsafe)
     unsubscribe_confirm = confirmations.subscribe(_enqueue_threadsafe)
     fanout = asyncio.create_task(_fanout_forever())
+    telemetry = asyncio.create_task(_telemetry_forever())
     try:
         yield
     finally:
         unsubscribe_state()
         unsubscribe_confirm()
         fanout.cancel()
+        telemetry.cancel()
 
 
 app = FastAPI(lifespan=_lifespan)

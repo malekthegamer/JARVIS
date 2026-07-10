@@ -43,6 +43,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "max_edge_px": 1024,      # downscale the window crop's longest edge to this
         "min_confidence": 0.5,    # below this, fail closed to CONFIRM (never click blind)
     },
+    "telemetry": {
+        # HUD system readouts (spec §2.3). Sampled server-side ONLY while a
+        # HUD is connected; GPU (nvidia-smi subprocess) every 3rd tick.
+        "enabled": True,        # kill switch
+        "interval_s": 2.0,      # tick period
+    },
     "history_max_messages": 40,
 }
 
