@@ -56,6 +56,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,        # kill switch; off -> withheld from the model
         "timeout_s": 30,        # execution wall-clock before the tree is killed
     },
+    "memory": {
+        # Long-term cross-session memory (spec §1.5). Explicit-intent writes
+        # only; DPAPI-encrypted at rest; relevance-gated retrieval.
+        "enabled": True,
+        "retrieve_k": 5,             # max memories injected per message
+        "relevance_threshold": 1,    # min shared content-tokens to surface one
+    },
     "history_max_messages": 40,
 }
 
