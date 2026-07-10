@@ -15,7 +15,7 @@ from jarvis.core import chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
 from jarvis.primitives import (apps, files, input as jinput, screen, system,
-                               ui_tree, windows)
+                               tabs, ui_tree, windows)
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -78,6 +78,18 @@ def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
     r = files.search_files(query=str(args.get("query", "")),
                            ext=str(args.get("ext", "")),
                            within_days=args.get("within_days", 0))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_list_tabs(args: dict, gate_info: dict | None = None) -> str:
+    r = tabs.list_tabs(args.get("window"))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_close_tabs(args: dict, gate_info: dict | None = None) -> str:
+    r = tabs.close_tabs(window_hint=args.get("window"),
+                        keep_matching=args.get("keep_matching"),
+                        close_matching=args.get("close_matching"))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
@@ -256,6 +268,41 @@ PRIMITIVES: dict[str, dict] = {
                 },
             },
         },
+    },
+    "list_tabs": {
+        "fn": _run_list_tabs,
+        "tier": "auto",
+        "schema": {"name": "list_tabs",
+                   "description": ("List the open tabs (titles) of a browser "
+                                   "window. Give 'window' (part of the window "
+                                   "or any tab title) when several browser "
+                                   "windows are open."),
+                   "parameters": {"type": "object",
+                                  "properties": {"window": {"type": "string",
+                                                            "description": "Browser window hint (optional)"}},
+                                  }},
+    },
+    "close_tabs": {
+        "fn": _run_close_tabs,
+        "tier": "confirm",
+        "describe": tabs.describe_close_tabs,
+        "schema": {"name": "close_tabs",
+                   "description": ("Close browser TABS in one window (user must "
+                                   "approve the exact batch first). Provide "
+                                   "EITHER keep_matching (close all tabs except "
+                                   "those whose title contains this) OR "
+                                   "close_matching (close tabs whose title "
+                                   "contains this). For whole windows use "
+                                   "close_window instead."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "window": {"type": "string",
+                                                 "description": "Browser window hint (optional)"},
+                                      "keep_matching": {"type": "string",
+                                                        "description": "Keep tabs containing this; close the rest"},
+                                      "close_matching": {"type": "string",
+                                                         "description": "Close tabs containing this"},
+                                  }}},
     },
     "get_volume": {
         "fn": _run_get_volume,
