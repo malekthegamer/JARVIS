@@ -123,6 +123,106 @@
     }
   }
 
+  // ---------- Action Log panel (slice 7): the chain feed, persistent ----------
+  const logBody = document.getElementById("action-log");
+  const LOG_CAP = 80;
+  let logRowsByN = new Map(); // current chain's n -> <li> (cleared per chain)
+  let logRowCount = 0;
+
+  function logStick() {
+    return logBody.scrollTop + logBody.clientHeight >= logBody.scrollHeight - 12;
+  }
+  function logAppend(li) {
+    const stick = logStick();
+    logBody.appendChild(li);
+    while (logRowCount > LOG_CAP) {
+      const first = logBody.firstChild;
+      if (first.classList.contains("log-row")) logRowCount -= 1;
+      first.remove();
+    }
+    if (stick) logBody.scrollTop = logBody.scrollHeight;
+  }
+
+  function logPlan(e) {
+    const li = document.createElement("li");
+    li.className = "log-plan";
+    li.textContent = `PLAN · REV ${e.revision} · ${e.steps.length} STEPS`;
+    li.title = e.steps.join("  →  ");
+    logAppend(li);
+  }
+
+  function logStep(e) {
+    let li = logRowsByN.get(e.n);
+    if (!li) {
+      li = document.createElement("li");
+      li.className = "log-row";
+      for (const cls of ["log-tool", "log-args", "log-note"]) {
+        const s = document.createElement("span");
+        s.className = cls;
+        li.appendChild(s);
+        li.appendChild(document.createTextNode(" "));
+      }
+      logRowsByN.set(e.n, li);
+      logRowCount += 1;
+      logAppend(li);
+    }
+    li.dataset.status = e.status === "start" ? "running" : e.status;
+    li.querySelector(".log-tool").textContent = e.tool || "";
+    li.querySelector(".log-args").textContent = e.args || "";
+    if (e.note) li.querySelector(".log-note").textContent = "· " + e.note;
+    li.title = `${e.tool} ${e.args || ""} ${e.note || ""}`.trim();
+  }
+
+  function logChainEnd(e) {
+    // a chain can die with a step still "running" (crash/abort) — restyle
+    for (const li of logRowsByN.values()) {
+      if (li.dataset.status === "running")
+        li.dataset.status = e.status === "done" ? "ok"
+          : e.status === "cancelled" ? "cancelled" : "failed";
+    }
+    logRowsByN = new Map(); // next chain appends fresh rows (history stays)
+  }
+
+  function logHydrate(e) {
+    // WS connect snapshot of the live chain — rebuild its rows
+    logRowsByN = new Map();
+    if (e.revision) logPlan({ revision: e.revision, steps: e.steps || [] });
+    for (const c of e.calls || [])
+      logStep({ n: c.n, tool: c.tool, args: c.args, status: c.status, note: c.note });
+  }
+
+  // ---------- telemetry panel (slice 7, spec §2.3) ----------
+  function telSet(id, text, barId, pct) {
+    document.getElementById(id).textContent = text;
+    if (barId) {
+      const bar = document.getElementById(barId);
+      bar.style.width = Math.max(0, Math.min(100, pct || 0)) + "%";
+      bar.classList.toggle("hot", (pct || 0) >= 90);
+    }
+  }
+
+  function renderTelemetry(e) {
+    if (typeof e.cpu === "number")
+      telSet("tel-cpu", e.cpu.toFixed(0) + "%", "tel-cpu-bar", e.cpu);
+    if (typeof e.ram === "number")
+      telSet("tel-ram", `${e.ram.toFixed(0)}% · ${e.ram_used_gb}/${e.ram_total_gb}G`,
+             "tel-ram-bar", e.ram);
+    if (typeof e.gpu === "number")
+      telSet("tel-gpu", `${e.gpu.toFixed(0)}% · ${e.gpu_mem_used_gb}/${e.gpu_mem_total_gb}G`,
+             "tel-gpu-bar", e.gpu);
+    else if (document.getElementById("tel-gpu").textContent === "—")
+      telSet("tel-gpu", "—", "tel-gpu-bar", 0);
+    // window titles are untrusted strings — textContent only, never HTML
+    document.getElementById("tel-window").textContent = e.window || "";
+  }
+
+  const telClock = document.getElementById("tel-clock");
+  function tickClock() {
+    telClock.textContent = new Date().toLocaleTimeString("en-GB");
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
   // ---------- CONFIRM modal (fail closed: only Approve sends true) ----------
   const backdrop = document.getElementById("confirm-backdrop");
   const confirmDesc = document.getElementById("confirm-desc");
@@ -201,9 +301,15 @@
     else if (event.type === "transcript") addLine(event.who, event.text);
     else if (event.type === "confirm_request") showConfirm(event);
     else if (event.type === "confirm_resolved") hideConfirm();
+    else if (event.type === "telemetry") renderTelemetry(event);
     else if (event.type === "plan" || event.type === "step" ||
-             event.type === "chain_end" || event.type === "chain")
-      onChainEvent(event);
+             event.type === "chain_end" || event.type === "chain") {
+      onChainEvent(event); // the strip (transient, current plan)
+      if (event.type === "plan") logPlan(event);           // the log (persistent)
+      else if (event.type === "step") logStep(event);
+      else if (event.type === "chain_end") logChainEnd(event);
+      else logHydrate(event);
+    }
     else if (event.type === "error" && event.message === "busy")
       flashHint("One moment — still working on the last one.");
   }

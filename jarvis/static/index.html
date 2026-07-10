@@ -29,6 +29,27 @@
     <p class="line empty" id="empty-line">Awaiting first exchange.</p>
   </section>
 
+  <aside class="side-panel action-log" id="action-log-panel" aria-label="Action log">
+    <p class="panel-title">ACTION LOG</p>
+    <ol class="log-body" id="action-log" aria-live="polite"></ol>
+  </aside>
+
+  <aside class="side-panel telemetry" id="telemetry-panel" aria-label="System telemetry">
+    <p class="panel-title">SYSTEM</p>
+    <div class="tel-row"><span class="tel-label">CPU</span>
+      <span class="tel-value" id="tel-cpu">—</span>
+      <span class="tel-bar"><span class="tel-fill" id="tel-cpu-bar"></span></span></div>
+    <div class="tel-row"><span class="tel-label">RAM</span>
+      <span class="tel-value" id="tel-ram">—</span>
+      <span class="tel-bar"><span class="tel-fill" id="tel-ram-bar"></span></span></div>
+    <div class="tel-row"><span class="tel-label">GPU</span>
+      <span class="tel-value" id="tel-gpu">—</span>
+      <span class="tel-bar"><span class="tel-fill" id="tel-gpu-bar"></span></span></div>
+    <div class="tel-meta">
+      <span id="tel-clock">--:--:--</span>
+      <span class="tel-window" id="tel-window"></span></div>
+  </aside>
+
   <div class="confirm-backdrop hidden" id="confirm-backdrop">
     <div class="confirm-modal" role="alertdialog" aria-modal="true"
          aria-labelledby="confirm-title" aria-describedby="confirm-desc">
