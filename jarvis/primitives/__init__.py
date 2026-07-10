@@ -73,6 +73,13 @@ def _run_delete_file(args: dict, gate_info: dict | None = None) -> str:
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
+def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
+    r = files.search_files(query=str(args.get("query", "")),
+                           ext=str(args.get("ext", "")),
+                           within_days=args.get("within_days", 0))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
     r = windows.close_window(str(args.get("title", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
@@ -176,6 +183,29 @@ PRIMITIVES: dict[str, dict] = {
                 "properties": {"name": {"type": "string",
                                         "description": "File name inside the agent workspace"}},
                 "required": ["name"],
+            },
+        },
+    },
+    "search_files": {
+        "fn": _run_search_files,
+        "tier": "auto",
+        "schema": {
+            "name": "search_files",
+            "description": ("Search the agent workspace (data/agent_files) for "
+                            "files by name, extension, and/or age. Read-only. "
+                            "Use when the user asks to find a file — e.g. "
+                            "\"yesterday's invoice PDF\" -> query='invoice', "
+                            "ext='pdf', within_days=2."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "Substring of the file name (optional)"},
+                    "ext": {"type": "string",
+                            "description": "File extension like 'pdf' (optional)"},
+                    "within_days": {"type": "number",
+                                    "description": "Only files modified within this many days (optional)"},
+                },
             },
         },
     },

@@ -142,3 +142,66 @@ def test_find_window_title_matches_by_owning_process(monkeypatch):
     # title passes still win first, and unknown stays None
     assert jwindows.find_window_title("notepad") == "Untitled - Notepad"
     assert jwindows.find_window_title("xyzzy-nothing") is None
+
+
+# ---------- slice 8 stage 1: search_files (AUTO, caged, read-only) ----------
+
+import os
+import time as _t
+
+import pytest as _pytest
+
+from jarvis.primitives import files as _files
+
+
+@_pytest.fixture()
+def tmp_workspace(tmp_path, monkeypatch):
+    ws = tmp_path / "agent_files"
+    ws.mkdir()
+    monkeypatch.setattr(_files, "AGENT_FILES_DIR", ws)
+    return ws
+
+
+def test_search_finds_by_name(tmp_workspace):
+    (tmp_workspace / "invoice_2026.pdf").write_text("x")
+    (tmp_workspace / "notes.txt").write_text("y")
+    r = _files.search_files(query="invoice")
+    assert r["ok"] and len(r["matches"]) == 1
+    assert r["matches"][0]["name"] == "invoice_2026.pdf"
+    assert "invoice_2026.pdf" in r["message"]
+
+
+def test_search_by_ext_and_age(tmp_workspace):
+    fresh = tmp_workspace / "fresh.pdf"
+    fresh.write_text("new")
+    old = tmp_workspace / "old.pdf"
+    old.write_text("old")
+    stale = _t.time() - 3 * 86400
+    os.utime(old, (stale, stale))
+    (tmp_workspace / "fresh.txt").write_text("t")
+    r = _files.search_files(ext="pdf", within_days=1)
+    assert r["ok"], r
+    assert [m["name"] for m in r["matches"]] == ["fresh.pdf"]
+
+
+def test_search_no_match_clean(tmp_workspace):
+    (tmp_workspace / "a.txt").write_text("x")
+    r = _files.search_files(query="unicorn")
+    assert r["ok"] and r["matches"] == []
+    assert "No files" in r["message"]
+
+
+def test_search_traversal_stays_caged(tmp_path, tmp_workspace):
+    # a juicy file OUTSIDE the workspace must be unreachable by any query
+    (tmp_path / "secret.txt").write_text("outside")
+    (tmp_workspace / "inside.txt").write_text("inside")
+    for q in ("../secret", "..\secret", "secret", "../", "C:\\"):
+        r = _files.search_files(query=q)
+        assert r["ok"]
+        assert all("secret" not in m["name"] for m in r["matches"]), (q, r)
+
+
+def test_search_empty_query_fails(tmp_workspace):
+    r = _files.search_files()
+    assert not r["ok"]
+    assert "name" in r["message"].lower() or "search" in r["message"].lower()
