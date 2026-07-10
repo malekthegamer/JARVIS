@@ -82,11 +82,19 @@ def test_live_failing_step_hits_budget_not_infinite(event_log, monkeypatch):
         primitives.PRIMITIVES["launch_app"], "fn",
         lambda args, gi=None: executed.append(args) or
         "FAILED: the app did not start (simulated fault).")
+    # A frustrated model may reach for a CONFIRM-tier tool (e.g. run_shell,
+    # slice 9) as an alternative; nobody approves it here, so keep the gate
+    # timeout short so that path can't stall the test.
+    from jarvis.core.settings_store import settings
+    settings.set("confirm.timeout_s", 1, persist=False)
 
     brain = JarvisBrain()
     t0 = time.time()
-    reply = brain.think("Open notepad, then open calculator. "
-                        "Keep trying until both are open.")
+    try:
+        reply = brain.think("Open notepad, then open calculator. "
+                            "Keep trying until both are open.")
+    finally:
+        settings.set("confirm.timeout_s", 30, persist=False)
     took = time.time() - t0
 
     assert reply, "think() must return, never hang"
@@ -94,7 +102,9 @@ def test_live_failing_step_hits_budget_not_infinite(event_log, monkeypatch):
     assert len(executed) <= MAX_TOOL_ROUNDS * 2, executed
     ends = [e for e in event_log if e["type"] == "chain_end"]
     assert len(ends) == 1, ends
-    # budget/exhausted = guard fired; done = the model gave up honestly.
-    assert ends[0]["status"] in ("budget", "exhausted", "done"), ends
+    # Any bounded terminal state proves the guards fired and it did NOT loop:
+    # budget/exhausted (retry guards), done (gave up honestly), or cancelled
+    # (it tried a gated tool and the unapproved gate stopped it).
+    assert ends[0]["status"] in ("budget", "exhausted", "done", "cancelled"), ends
     print(f"[live] hostile: {len(executed)} executions, "
           f"end={ends[0]['status']}, {took:.0f}s, reply: {reply[:160]}")
