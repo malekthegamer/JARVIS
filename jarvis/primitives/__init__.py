@@ -14,7 +14,8 @@ import time
 from jarvis.core import chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
-from jarvis.primitives import apps, files, input as jinput, screen, ui_tree, windows
+from jarvis.primitives import (apps, files, input as jinput, screen, system,
+                               ui_tree, windows)
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -78,6 +79,53 @@ def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
                            ext=str(args.get("ext", "")),
                            within_days=args.get("within_days", 0))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_get_volume(args: dict, gate_info: dict | None = None) -> str:
+    r = system.get_volume()
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_set_volume(args: dict, gate_info: dict | None = None) -> str:
+    """Set + verify by reading the level back (act -> verify doctrine)."""
+    r = system.set_volume(args.get("level"))
+    if not r["ok"]:
+        return "FAILED: " + r["message"]
+    back = system.get_volume()
+    verify = (f"VERIFY: readback {back['level']}%."
+              if back["ok"] else "VERIFY: could not read back.")
+    return f"OK: {r['message']} {verify}"
+
+
+def _run_set_mute(args: dict, gate_info: dict | None = None) -> str:
+    r = system.set_mute(bool(args.get("muted", True)))
+    if not r["ok"]:
+        return "FAILED: " + r["message"]
+    back = system.get_volume()
+    verify = (f"VERIFY: muted={back['muted']}."
+              if back["ok"] else "VERIFY: could not read back.")
+    return f"OK: {r['message']} {verify}"
+
+
+def _run_media_key(args: dict, gate_info: dict | None = None) -> str:
+    r = system.media_key(str(args.get("key", "")))
+    suffix = " (no readback available for media keys)" if r["ok"] else ""
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"] + suffix
+
+
+def _run_get_brightness(args: dict, gate_info: dict | None = None) -> str:
+    r = system.get_brightness()
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_set_brightness(args: dict, gate_info: dict | None = None) -> str:
+    r = system.set_brightness(args.get("level"))
+    if not r["ok"]:
+        return "FAILED: " + r["message"]
+    back = system.get_brightness()
+    verify = (f"VERIFY: readback {back['level']}%."
+              if back["ok"] else "VERIFY: could not read back.")
+    return f"OK: {r['message']} {verify}"
 
 
 def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
@@ -208,6 +256,65 @@ PRIMITIVES: dict[str, dict] = {
                 },
             },
         },
+    },
+    "get_volume": {
+        "fn": _run_get_volume,
+        "tier": "auto",
+        "schema": {"name": "get_volume",
+                   "description": "Read the system volume level and mute state.",
+                   "parameters": {"type": "object", "properties": {}}},
+    },
+    "set_volume": {
+        "fn": _run_set_volume,
+        "tier": "auto",
+        "schema": {"name": "set_volume",
+                   "description": ("Set the system volume to a level from 0 to 100. "
+                                   "Out-of-range values are clamped."),
+                   "parameters": {"type": "object",
+                                  "properties": {"level": {"type": "number",
+                                                           "description": "Target volume 0-100"}},
+                                  "required": ["level"]}},
+    },
+    "set_mute": {
+        "fn": _run_set_mute,
+        "tier": "auto",
+        "schema": {"name": "set_mute",
+                   "description": "Mute (true) or unmute (false) the system audio.",
+                   "parameters": {"type": "object",
+                                  "properties": {"muted": {"type": "boolean",
+                                                           "description": "true = mute, false = unmute"}},
+                                  "required": ["muted"]}},
+    },
+    "media_key": {
+        "fn": _run_media_key,
+        "tier": "auto",
+        "schema": {"name": "media_key",
+                   "description": ("Press a hardware media key: play_pause, next, "
+                                   "prev, or stop. Controls whatever is playing."),
+                   "parameters": {"type": "object",
+                                  "properties": {"key": {"type": "string",
+                                                         "description": "play_pause | next | prev | stop"}},
+                                  "required": ["key"]}},
+    },
+    "get_brightness": {
+        "fn": _run_get_brightness,
+        "tier": "auto",
+        "schema": {"name": "get_brightness",
+                   "description": ("Read the display brightness. May be unsupported "
+                                   "on desktop monitors — reports that honestly."),
+                   "parameters": {"type": "object", "properties": {}}},
+    },
+    "set_brightness": {
+        "fn": _run_set_brightness,
+        "tier": "auto",
+        "schema": {"name": "set_brightness",
+                   "description": ("Set display brightness 0-100 (clamped). May be "
+                                   "unsupported on desktop monitors — reports that "
+                                   "honestly instead of pretending."),
+                   "parameters": {"type": "object",
+                                  "properties": {"level": {"type": "number",
+                                                           "description": "Target brightness 0-100"}},
+                                  "required": ["level"]}},
     },
     "close_window": {
         "fn": _run_close_window,
