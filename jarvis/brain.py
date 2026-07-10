@@ -12,6 +12,7 @@ import threading
 
 from jarvis.core import chain
 from jarvis.core.errors import ProviderError
+from jarvis.core.memory import memory_store
 from jarvis.core.settings_store import settings
 from jarvis.providers import registry
 from jarvis.providers.brain.base import BrainResponse
@@ -42,6 +43,13 @@ outcome with a final observation (read_ui_tree) — never claim a result
 (e.g. 'it is playing') that a tool did not confirm. When you finish — or
 stop early — tell the user honestly which steps completed and which did
 not.
+Long-term memory: you can remember (remember), list (recall), and forget
+(forget) durable facts across sessions. Call remember ONLY when the user
+explicitly asks you to remember or note something for the future — NEVER
+store things they didn't ask you to keep, and never infer facts about them
+to save silently. If facts you remember appear in your instructions, use
+them only when relevant to the current request and do NOT volunteer stored
+personal facts unprompted.
 Destructive or committal actions are confirmation-gated: the user sees a
 prompt and may decline or ignore it. A CANCELLED tool result is final —
 acknowledge it gracefully and NEVER retry a cancelled action. Abilities not
@@ -81,12 +89,39 @@ PLAN_STEPS_SCHEMA = {
     },
 }
 
+# Brain-level memory meta-tools (slice 10). Like plan_steps, they touch no OS
+# surface — intercepted in _execute_tool, absent from the primitives registry.
+MEMORY_SCHEMAS = [
+    {"name": "remember",
+     "description": ("Store a durable fact in long-term memory. Call this ONLY "
+                     "when the user explicitly asks you to remember or note "
+                     "something for the future (e.g. 'remember that I…'). Never "
+                     "store facts the user did not ask you to keep."),
+     "parameters": {"type": "object",
+                    "properties": {"text": {"type": "string",
+                                            "description": "The fact to remember, in the user's terms"}},
+                    "required": ["text"]}},
+    {"name": "recall",
+     "description": ("List what you currently hold in long-term memory. Use when "
+                     "the user asks what you remember about them."),
+     "parameters": {"type": "object", "properties": {}}},
+    {"name": "forget",
+     "description": ("Remove a stored memory the user asks you to forget. If the "
+                     "query matches more than one memory you'll be given the "
+                     "candidates to disambiguate — never delete the wrong one."),
+     "parameters": {"type": "object",
+                    "properties": {"query": {"type": "string",
+                                             "description": "Words identifying the memory to forget"}},
+                    "required": ["query"]}},
+]
+
 
 class JarvisBrain:
     def __init__(self) -> None:
         self.history: list[dict] = []
         self._lock = threading.RLock()
         self._provider_override = None  # tests inject a fake here
+        self.memory = memory_store      # tests inject a temp store here
 
     # ---------- provider / prompt ----------
     def provider(self):
@@ -98,12 +133,25 @@ class JarvisBrain:
             raise ProviderError("generic", name, "unknown brain provider")
         return provider
 
-    def system_prompt(self) -> str:
-        return BASE_SYSTEM_PROMPT
+    def system_prompt(self, memory_block: str = "") -> str:
+        return BASE_SYSTEM_PROMPT + (memory_block or "")
 
     def tools(self) -> list[dict]:
         from jarvis import primitives  # lazy — text-only paths skip the import
-        return primitives.tools_schema() + [PLAN_STEPS_SCHEMA]
+        extra = [PLAN_STEPS_SCHEMA]
+        if settings.get("memory.enabled", True):
+            extra += MEMORY_SCHEMAS
+        return primitives.tools_schema() + extra
+
+    def _memory_block(self, user_message: str) -> str:
+        """Relevance-gated memory for THIS message — '' when nothing is
+        relevant (so unrelated conversations stay clean). Never raises."""
+        if not settings.get("memory.enabled", True):
+            return ""
+        try:
+            return self.memory.format_for_prompt(self.memory.retrieve(user_message))
+        except Exception:
+            return ""  # a memory failure must never break think()
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str) -> str:
@@ -129,10 +177,12 @@ class JarvisBrain:
         self.history.append({"role": "user", "content": user_message})
         self._trim()
 
+        # Retrieve relevant long-term memory ONCE per message (not per round).
+        prompt = self.system_prompt(self._memory_block(user_message))
         tools = (self.tools() or None) if provider.supports_tools else None
         for _round in range(MAX_TOOL_ROUNDS):
             try:
-                resp: BrainResponse = provider.generate(self.history, self.system_prompt(), tools=tools)
+                resp: BrainResponse = provider.generate(self.history, prompt, tools=tools)
             except ProviderError as exc:
                 if tools and exc.kind in ("bad_response", "generic"):
                     # Some models/providers choke on tool schemas — retry plain.
@@ -185,8 +235,40 @@ class JarvisBrain:
     def _execute_tool(self, name: str, args: dict) -> str:
         if name == "plan_steps":
             return self._plan_steps(args or {})
+        if name in ("remember", "recall", "forget"):
+            return self._memory_tool(name, args or {})
         from jarvis import primitives  # lazy
         return primitives.execute(name, args or {})
+
+    def _memory_tool(self, name: str, args: dict) -> str:
+        """remember / recall / forget. Never raises; forget never guesses."""
+        try:
+            if name == "remember":
+                text = str(args.get("text", "")).strip()
+                if not text:
+                    return "FAILED: nothing to remember was given."
+                rec = self.memory.add(text)
+                return f"OK: Remembered — \"{rec['text']}\"."
+            if name == "recall":
+                items = self.memory.all()
+                if not items:
+                    return "OK: You haven't asked me to remember anything yet."
+                listing = "; ".join(f"[{i}] {r['text']}"
+                                    for i, r in enumerate(items, 1))
+                return f"OK: I remember {len(items)} thing(s): {listing}."
+            # forget
+            query = str(args.get("query", "")).strip()
+            res = self.memory.delete(query)
+            if res["status"] == "deleted":
+                return f"OK: Forgotten — \"{res['removed']['text']}\"."
+            if res["status"] == "none":
+                return "OK: I don't have a memory matching that — nothing removed."
+            cands = "; ".join(f"[{i}] {c['text']}"
+                              for i, c in enumerate(res["candidates"], 1))
+            return (f"AMBIGUOUS: that matches {len(res['candidates'])} memories — "
+                    f"{cands}. Ask the user which one to forget; nothing removed.")
+        except Exception as exc:
+            return f"FAILED: memory operation couldn't complete ({exc})."
 
     def _plan_steps(self, args: dict) -> str:
         """Meta-tool: record + broadcast the declared plan. Never raises."""

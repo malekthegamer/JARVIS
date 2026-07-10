@@ -102,6 +102,129 @@ def test_history_trims_to_limit():
     assert brain.history[0]["role"] == "user"  # never starts mid-exchange
 
 
+# ---------- slice 10: long-term memory integration ----------
+
+from jarvis.providers.brain.base import ToolCall
+
+
+class CapturingProvider(BrainProvider):
+    """Records the system_prompt it was handed; returns plain text."""
+    supports_tools = True
+
+    def __init__(self, reply="Noted, sir."):
+        self.reply = reply
+        self.system_prompts: list[str] = []
+
+    def is_configured(self):
+        return True
+
+    def generate(self, messages, system_prompt, tools=None):
+        self.system_prompts.append(system_prompt)
+        return BrainResponse(text=self.reply)
+
+
+class ScriptedToolProvider(BrainProvider):
+    """Round 1: emit the given tool call. Round 2: final prose."""
+    supports_tools = True
+
+    def __init__(self, name, args):
+        self.tc = ToolCall(id="m1", name=name, args=args)
+        self.rounds = 0
+        self.tool_results: list[str] = []
+
+    def is_configured(self):
+        return True
+
+    def generate(self, messages, system_prompt, tools=None):
+        self.rounds += 1
+        if self.rounds == 1:
+            return BrainResponse(tool_calls=[self.tc])
+        self.tool_results = [m["content"] for m in messages if m["role"] == "tool"]
+        return BrainResponse(text="Done, sir.")
+
+
+@pytest.fixture()
+def mem_brain(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    brain = _make_brain(CapturingProvider())
+    brain.memory = MemoryStore(tmp_path / "mem.bin")
+    return brain
+
+
+def test_relevant_memory_injected_into_system_prompt(mem_brain):
+    mem_brain.memory.add("I am allergic to peanuts")
+    mem_brain.think("what am I allergic to?")
+    prompt = mem_brain.provider().system_prompts[-1]
+    assert "peanuts" in prompt
+    assert "REMEMBER ABOUT THE USER" in prompt
+
+
+def test_unrelated_query_no_memory_block(mem_brain):
+    mem_brain.memory.add("I am allergic to peanuts")
+    mem_brain.think("what is the capital of France?")
+    prompt = mem_brain.provider().system_prompts[-1]
+    assert "peanuts" not in prompt
+    assert "REMEMBER ABOUT THE USER" not in prompt
+
+
+def test_remember_tool_persists(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    store = MemoryStore(tmp_path / "mem.bin")
+    brain = _make_brain(ScriptedToolProvider("remember",
+                                             {"text": "I take my coffee black"}))
+    brain.memory = store
+    brain.think("remember that I take my coffee black")
+    assert any("coffee black" in r["text"] for r in store.all())
+    # and it survives a restart (fresh instance, same file)
+    assert any("coffee black" in r["text"]
+               for r in MemoryStore(tmp_path / "mem.bin").all())
+
+
+def test_recall_tool_lists(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    store = MemoryStore(tmp_path / "mem.bin")
+    store.add("I am allergic to peanuts")
+    store.add("my car is a blue Civic")
+    brain = _make_brain(ScriptedToolProvider("recall", {}))
+    brain.memory = store
+    brain.think("what do you remember about me?")
+    listing = " ".join(brain.provider().tool_results)
+    assert "peanuts" in listing and "Civic" in listing
+
+
+def test_forget_tool_removes_with_readback(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    store = MemoryStore(tmp_path / "mem.bin")
+    store.add("I am allergic to peanuts")
+    store.add("my flight is on Tuesday")
+    brain = _make_brain(ScriptedToolProvider("forget", {"query": "peanuts"}))
+    brain.memory = store
+    brain.think("forget that I'm allergic to peanuts")
+    assert not any("peanuts" in r["text"] for r in store.all())
+    assert any("peanuts" in tr for tr in brain.provider().tool_results)  # readback
+
+
+def test_forget_tool_ambiguous_deletes_nothing(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    store = MemoryStore(tmp_path / "mem.bin")
+    store.add("I take my coffee black")
+    store.add("I drink my coffee at 8am")
+    brain = _make_brain(ScriptedToolProvider("forget", {"query": "coffee"}))
+    brain.memory = store
+    brain.think("forget my coffee thing")
+    assert len(store.all()) == 2, "ambiguous forget must delete nothing"
+    result = " ".join(brain.provider().tool_results).lower()
+    assert "which" in result or "match" in result  # asks the user to disambiguate
+
+
+def test_memory_error_does_not_break_think(mem_brain, monkeypatch):
+    """A memory-subsystem failure must never break the reply loop."""
+    monkeypatch.setattr(mem_brain.memory, "retrieve",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+    reply = mem_brain.think("hello there")
+    assert reply and "boom" not in reply  # degraded to no-memory, still answered
+
+
 def test_live_gemini_ping():
     """The real thing: one live round-trip through the actual provider."""
     from jarvis import config
