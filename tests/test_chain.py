@@ -349,6 +349,86 @@ def workspace_file():
     f.unlink(missing_ok=True)
 
 
+@pytest.fixture()
+def confirm_events():
+    log: list[dict] = []
+    unsubscribe = confirmations.subscribe(log.append)
+    yield log
+    unsubscribe()
+
+
+def test_chain_midplan_run_shell_needs_own_confirm_no_leak(monkeypatch, state_log,
+                                                           confirm_events, workspace_file):
+    """Slice 9: a run_shell mid-chain must get its OWN confirm at the moment it
+    runs — a chain whose earlier step was approved MUST NOT pre-authorize it.
+    Resolver approves the delete but declines the shell; shell must not run."""
+    from jarvis.primitives import shell
+    ran = []
+    monkeypatch.setattr(shell, "run_shell",
+                        lambda cmd: ran.append(cmd) or {"ok": True, "message": "x",
+                                                        "exit_code": 0, "stdout": "",
+                                                        "stderr": ""})
+
+    def selective(event):
+        if event.get("type") == "confirm_request":
+            approve = "delete" in event["description"].lower()  # yes to delete, no to shell
+            threading.Thread(target=lambda: (_time.sleep(0.05),
+                             confirmations.resolve(event["id"], approve))).start()
+    unsub = confirmations.subscribe(selective)
+    try:
+        provider = ScriptedProvider([
+            BrainResponse(tool_calls=[ToolCall(id="p", name="plan_steps",
+                          args={"steps": ["delete the file", "run a shell command"]})]),
+            BrainResponse(tool_calls=[ToolCall(id="t1", name="delete_file",
+                          args={"name": "chain-gate.txt"})]),
+            BrainResponse(tool_calls=[ToolCall(id="t2", name="run_shell",
+                          args={"command": "echo should-not-run"})]),
+            BrainResponse(text="Deleted the file; you declined the shell command, sir."),
+        ])
+        brain = _make_brain(provider)
+        brain.think("delete the file then run a shell command")
+    finally:
+        unsub()
+
+    reqs = [e for e in confirm_events if e["type"] == "confirm_request"]
+    assert len(reqs) == 2, "each gated step must raise its OWN modal (no leak)"
+    assert any(r.get("command") == "echo should-not-run" for r in reqs), \
+        "run_shell must raise its own confirm carrying the verbatim command"
+    assert not workspace_file.exists(), "the approved delete should have happened"
+    assert ran == [], "the declined shell command must NEVER execute"
+    shell_result = next(m["content"] for m in reversed(brain.history)
+                        if m["role"] == "tool" and m["name"] == "run_shell")
+    assert "CANCELLED" in shell_result
+
+
+def test_approve_everything_still_cannot_run_denylisted(monkeypatch, state_log,
+                                                        confirm_events):
+    """Hostile: a user (auto-resolver) that approves EVERYTHING still cannot
+    run a denylisted command — the denylist sits BENEATH approval, refusing
+    before any modal is shown."""
+    from jarvis.primitives import shell
+    monkeypatch.setattr(shell, "run_shell",
+                        lambda cmd: (_ for _ in ()).throw(
+                            AssertionError("denylisted command must never execute")))
+    unsub = _auto_resolver(approved=True)  # approve anything that asks
+    try:
+        provider = ScriptedProvider([
+            BrainResponse(tool_calls=[ToolCall(id="t1", name="run_shell",
+                          args={"command": "rm -rf /"})]),
+            BrainResponse(text="I refused that one, sir."),
+        ])
+        brain = _make_brain(provider)
+        brain.think("wipe the system drive")
+    finally:
+        unsub()
+
+    result = next(m["content"] for m in reversed(brain.history)
+                  if m["role"] == "tool" and m["name"] == "run_shell")
+    assert result.startswith("BLOCKED"), result
+    assert [e for e in confirm_events if e["type"] == "confirm_request"] == [], \
+        "a denylisted command must never even reach the approval modal"
+
+
 def test_identical_retry_after_failure_is_blocked_not_executed(monkeypatch, state_log):
     """The breaker: an exact (tool, args) repeat of a just-FAILED call must
     NOT reach the primitive — the model gets a synthetic BLOCKED result."""
