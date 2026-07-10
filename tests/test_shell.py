@@ -109,3 +109,79 @@ def test_empty_command_refused():
 def test_run_shell_is_registered_confirm_tier():
     assert "run_shell" in primitives.PRIMITIVES
     assert "classify" in primitives.PRIMITIVES["run_shell"]
+
+
+# ---------- STAGE 2: execution engine (honest output + timeout tree-kill) ----------
+# Harmless commands only. cmd.exe semantics (this project is Windows).
+
+import time
+
+
+def test_echo_ok_captures_stdout():
+    r = shell.run_shell("echo hello-from-shell")
+    assert r["ok"] is True
+    assert r["exit_code"] == 0
+    assert "hello-from-shell" in r["stdout"]
+    assert "exit 0" in r["message"] and "hello-from-shell" in r["message"]
+
+
+def test_nonzero_exit_is_failed_with_code():
+    r = shell.run_shell("cmd /c exit 3")
+    assert r["ok"] is False
+    assert r["exit_code"] == 3
+    assert "3" in r["message"]
+
+
+def test_partial_success_stdout_plus_nonzero_is_failed():
+    """A command that prints THEN fails must never read as OK, but its output
+    is still reported."""
+    r = shell.run_shell("echo partial-output & cmd /c exit 7")
+    assert r["ok"] is False, r
+    assert r["exit_code"] == 7
+    assert "partial-output" in r["stdout"]
+    assert "partial-output" in r["message"]
+
+
+def test_stderr_captured():
+    # `dir` on a nonexistent path writes to stderr and exits nonzero
+    r = shell.run_shell("dir C:\\no-such-path-zzz-9000")
+    assert r["ok"] is False
+    assert r["stderr"].strip() != ""
+    assert "stderr" in r["message"].lower()
+
+
+def test_timeout_kills_tree_and_reports():
+    """A command that outlives the timeout is killed (tree) and reported as a
+    timeout — it must NOT hang, and no child may linger."""
+    settings_before = None
+    from jarvis.core.settings_store import settings as _s
+    _s.set("shell.timeout_s", 1.5, persist=False)
+    try:
+        t0 = time.time()
+        # ping sleeps ~10s; must be cut off near 1.5s
+        r = shell.run_shell("ping -n 10 127.0.0.1")
+        elapsed = time.time() - t0
+    finally:
+        _s.set("shell.timeout_s", 30, persist=False)
+    assert r["ok"] is False
+    assert "tim" in r["message"].lower()  # "timed out"
+    assert elapsed < 6, f"did not return promptly ({elapsed:.1f}s) — tree not killed?"
+    # the CHILD (ping) must be gone too — a bare kill would leave it running
+    import psutil
+    time.sleep(0.5)
+    pings = [p.pid for p in psutil.process_iter(["name"])
+             if (p.info["name"] or "").lower() == "ping.exe"]
+    assert not pings, f"ping child survived the tree kill: {pings}"
+
+
+def test_bad_command_never_raises():
+    r = shell.run_shell("this-is-not-a-real-command-zzz9000")
+    assert r["ok"] is False
+    assert isinstance(r["message"], str)
+
+
+def test_output_truncated():
+    # emit a lot of lines; result must be capped, not unbounded
+    r = shell.run_shell('cmd /c "for /L %i in (1,1,5000) do @echo line-%i"')
+    assert len(r["message"]) < 6000
+    assert "trunc" in r["message"].lower() or len(r["stdout"]) <= 4100

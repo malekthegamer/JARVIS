@@ -19,11 +19,14 @@ confirming a safe command beats a broad denylist that breeds false confidence.
 from __future__ import annotations
 
 import re
+import subprocess
 
 from jarvis import config
 from jarvis.core.settings_store import settings
 
 SHELL_LABEL = "cmd.exe"
+CLIP = 2000            # max chars kept per stream (payload discipline)
+DEFAULT_TIMEOUT_S = 30
 
 
 def _norm(cmd: str) -> str:
@@ -121,6 +124,74 @@ def classify_run_shell(args: dict) -> dict:
                            f"what it will do."}
 
 
+def _clip(text: str) -> str:
+    text = text or ""
+    return text if len(text) <= CLIP else text[:CLIP] + " …[truncated]"
+
+
+def _kill_tree(pid: int) -> None:
+    """Kill the process AND its children — a bare kill leaves the shell's
+    grandchildren (e.g. a spawned ping) alive."""
+    try:
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
+                       capture_output=True, timeout=10)
+    except Exception:
+        pass
+
+
+def _timeout_s() -> float:
+    try:
+        return max(0.2, float(settings.get("shell.timeout_s", DEFAULT_TIMEOUT_S)))
+    except Exception:
+        return float(DEFAULT_TIMEOUT_S)
+
+
 def run_shell(command: str) -> dict:
-    """Execute one shell command and report honestly. Implemented in Stage 2."""
-    raise NotImplementedError("run_shell execution lands in slice-9 Stage 2")
+    """Run one cmd.exe command and report HONESTLY. exit 0 is the only success;
+    any non-zero exit is a failure even with stdout. A command that outlives
+    the timeout has its whole process tree killed. Never raises.
+
+    Returns {ok, exit_code, stdout, stderr, message}."""
+    command = str(command or "").strip()
+    if not command:
+        return {"ok": False, "exit_code": None, "stdout": "", "stderr": "",
+                "message": "no command given."}
+    timeout = _timeout_s()
+    try:
+        proc = subprocess.Popen(
+            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, errors="replace")
+    except Exception as exc:
+        return {"ok": False, "exit_code": None, "stdout": "", "stderr": "",
+                "message": f"couldn't start the command: {exc}"}
+
+    timed_out = False
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_tree(proc.pid)
+        try:
+            out, err = proc.communicate(timeout=5)
+        except Exception:
+            out, err = "", ""
+
+    code = proc.returncode
+    out, err = _clip(out or ""), _clip(err or "")
+
+    def _tail() -> str:
+        bits = []
+        if out.strip():
+            bits.append(f"stdout: {out.strip()}")
+        if err.strip():
+            bits.append(f"stderr: {err.strip()}")
+        return (" " + " ".join(bits)) if bits else ""
+
+    if timed_out:
+        return {"ok": False, "exit_code": code, "stdout": out, "stderr": err,
+                "message": f"timed out after {timeout:g}s (process tree killed)."
+                           + _tail()}
+
+    ok = code == 0
+    return {"ok": ok, "exit_code": code, "stdout": out, "stderr": err,
+            "message": f"exit {code}." + _tail()}
