@@ -14,8 +14,8 @@ import time
 from jarvis.core import chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
-from jarvis.primitives import (apps, files, input as jinput, screen, system,
-                               tabs, ui_tree, windows)
+from jarvis.primitives import (apps, files, input as jinput, screen, shell,
+                               system, tabs, ui_tree, windows)
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -78,6 +78,11 @@ def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
     r = files.search_files(query=str(args.get("query", "")),
                            ext=str(args.get("ext", "")),
                            within_days=args.get("within_days", 0))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_shell(args: dict, gate_info: dict | None = None) -> str:
+    r = shell.run_shell(str(args.get("command", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
@@ -266,6 +271,25 @@ PRIMITIVES: dict[str, dict] = {
                     "within_days": {"type": "number",
                                     "description": "Only files modified within this many days (optional)"},
                 },
+            },
+        },
+    },
+    "run_shell": {
+        "fn": _run_shell,
+        "classify": shell.classify_run_shell,
+        "schema": {
+            "name": "run_shell",
+            "description": ("Run a shell command (cmd.exe) on the user's PC. "
+                            "EVERY call requires explicit user approval of the "
+                            "exact command first; a few catastrophic commands "
+                            "are refused outright. Use ONLY when the user asks "
+                            "to run a command / script, and prefer a dedicated "
+                            "tool when one exists."),
+            "parameters": {
+                "type": "object",
+                "properties": {"command": {"type": "string",
+                                           "description": "The exact command line to run"}},
+                "required": ["command"],
             },
         },
     },
@@ -474,6 +498,10 @@ def execute(name: str, args: dict) -> str:
     gate_info = None
     try:
         tier, description, gate_info = _decide_tier(prim, args)
+        if tier == "blocked":
+            # The spec's third tier: refused outright. NEVER gates (no
+            # approvable modal) and NEVER runs — the command dies here.
+            return description or "BLOCKED: refused."
         if tier == "confirm":
             if description is None:
                 return "FAILED: nothing matching that to act on right now."

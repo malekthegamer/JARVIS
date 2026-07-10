@@ -33,6 +33,7 @@ PERCEPTION_TOOLS = frozenset({"read_ui_tree", "plan_steps"})
 # A tool result is a hard failure iff the wrapper said so explicitly.
 _FAIL_PREFIX = "FAILED"
 _CANCEL_PREFIX = "CANCELLED"
+_BLOCKED_PREFIX = "BLOCKED"  # denylisted / disabled — render as failed, not ok
 
 
 def status_from_result(result: str) -> str:
@@ -43,6 +44,8 @@ def status_from_result(result: str) -> str:
         return "failed"
     if text.startswith(_CANCEL_PREFIX):
         return "cancelled"
+    if text.startswith(_BLOCKED_PREFIX):
+        return "failed"
     return "ok"
 
 
