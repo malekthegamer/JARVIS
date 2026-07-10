@@ -120,6 +120,14 @@ def set_brightness(level) -> dict:
     try:
         import screen_brightness_control as sbc
         sbc.set_brightness(int(clamped))
-        return {"ok": True, "message": f"Brightness set to {clamped:g}%{note}."}
+        # sbc silently no-ops when no display is addressable (found live in
+        # the slice-8 E2E: "set" claimed success on a monitor that can't be
+        # controlled). Success REQUIRES a readback — no evidence, no claim.
+        values = sbc.get_brightness()
+        if not values:
+            raise RuntimeError("no displays reported back")
+        return {"ok": True,
+                "message": f"Brightness set to {clamped:g}%{note} "
+                           f"(readback {values[0]}%)."}
     except Exception:
         return {"ok": False, "message": _UNSUPPORTED_BRIGHTNESS}

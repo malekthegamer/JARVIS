@@ -69,6 +69,24 @@ Measured against the **7 primitives that exist today**: `launch_app`,
 > verified (Pause control + now-playing) with the Discover Weekly page open.
 > Script #1 verdict: ✅ **passing** (caveat: a similarly-named user playlist
 > exists; UIA can't distinguish which exact-match the resolver picked).
+
+> **Slice-8 update (2026-07-10): scripts #2 and #4 run live.**
+> - **Script #2 (close every tab except YouTube): ✅ passing.** New
+>   `list_tabs`/`close_tabs` primitives (UIA on the running browser's tab
+>   strip; CONFIRM gates ONCE per batch with the resolved count/kept/sample
+>   titles in the modal). Live: 4-tab isolated Chrome → modal named
+>   "Close 3 tab(s)… keeping 1 (JTab YouTube Film)" → approved → only the
+>   YouTube tab survived (VERIFY: 4 before, 1 remain).
+> - **Script #4 (volume/brightness/DND for a film): ⚠ partial by hardware &
+>   scope.** `set_volume 20` ✅ (readback-verified); `set_brightness` fails
+>   HONESTLY on this monitor (no laptop panel, DDC/CI unresponsive —
+>   sbc.set silently no-ops, so success now REQUIRES a readback; the live
+>   run's false "OK" was caught and fixed). DND/Focus Assist deliberately
+>   out of scope (no clean Windows API). Media keys shipped
+>   (play_pause/next/prev/stop).
+> - **Script #3 (find invoice → email Sam): ⚠ half-unblocked.**
+>   `search_files` (AUTO, caged, name/ext/age filters) shipped; the email
+>   verb remains the blocker.
 | 2 | Close every browser tab except YouTube | ⛔ **Blocked** | No tab enumeration/close verb; `close_window` closes whole windows only, not individual tabs. |
 | 3 | Find yesterday's invoice PDF → email Sam | ⛔ **Blocked** | No file-search verb (only `delete_file`, caged to `data/agent_files/`); no email compose/attach/send verb. |
 | 4 | Turn brightness down + DND for a film | ⛔ **Blocked** | No `system_control` primitive exists at all. |
