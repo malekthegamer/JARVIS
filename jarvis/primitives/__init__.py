@@ -153,6 +153,18 @@ def _run_set_brightness(args: dict, gate_info: dict | None = None) -> str:
     return f"OK: {r['message']} {verify}"
 
 
+def _run_get_dnd(args: dict, gate_info: dict | None = None) -> str:
+    r = system.get_dnd()
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_set_dnd(args: dict, gate_info: dict | None = None) -> str:
+    """Drive the real DND toggle; system.set_dnd already confirms by readback
+    (act -> verify doctrine, like set_volume)."""
+    r = system.set_dnd(bool(args.get("enabled", True)))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
     r = windows.close_window(str(args.get("title", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
@@ -424,6 +436,30 @@ PRIMITIVES: dict[str, dict] = {
                                   "properties": {"level": {"type": "number",
                                                            "description": "Target brightness 0-100"}},
                                   "required": ["level"]}},
+    },
+    "get_dnd": {
+        "fn": _run_get_dnd,
+        "tier": "auto",
+        "schema": {"name": "get_dnd",
+                   "description": ("Read whether Do Not Disturb (notification "
+                                   "silencing) is currently on. Briefly opens the "
+                                   "Settings window to read the real toggle."),
+                   "parameters": {"type": "object", "properties": {}}},
+    },
+    "set_dnd": {
+        "fn": _run_set_dnd,
+        "tier": "auto",
+        "schema": {"name": "set_dnd",
+                   "description": ("Turn Do Not Disturb on or off (silences "
+                                   "notification pop-ups). Use for 'do not "
+                                   "disturb', 'silence notifications', or "
+                                   "setting up to watch a film. Briefly opens "
+                                   "the Settings window to flip the real toggle, "
+                                   "then confirms by reading it back."),
+                   "parameters": {"type": "object",
+                                  "properties": {"enabled": {"type": "boolean",
+                                                             "description": "true = on (silence), false = off"}},
+                                  "required": ["enabled"]}},
     },
     "close_window": {
         "fn": _run_close_window,

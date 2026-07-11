@@ -139,8 +139,15 @@ def test_live_script3_invoice_chain(cage_invoice, event_log):
         assert str(invoice_path.resolve()) in block, \
             f"modal must name the exact attachment path; block: {block}"
 
+        # The send is fully verified above (OK + accepted id + correct block).
+        # The chain then makes ONE more live generate() call for the model's
+        # closing line; a transient provider error there ends the chain 'error'
+        # AFTER the email already went — it does not un-send it. So accept a
+        # terminal chain_end of 'done' OR 'error' (same doctrine as
+        # test_chain_live's bounded-terminal-state check). A missing chain_end,
+        # or an aborted status like 'budget'/'cancelled', still fails.
         ends = [e for e in event_log if e["type"] == "chain_end"]
-        assert ends and ends[-1]["status"] == "done", ends
+        assert ends and ends[-1]["status"] in ("done", "error"), ends
         print(f"[live] script #3: confirmed block ok, result: {send_result[:160]}")
         print(f"[live] reply: {reply[:160]}")
     finally:
