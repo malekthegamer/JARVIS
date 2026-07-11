@@ -5,9 +5,13 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-09
-**Tip commit at capture:** `a4aa50b` on `main` (after Slice 5 — vision fallback)
-**Scope:** deterministic suite + documented four-script feasibility baseline. **No live input fired** (no real mouse/keyboard driven on the desktop).
+**Checkpoint date:** 2026-07-11 (fresh full-suite run)
+**Tip commit at capture:** `3dfefa7` on `main` (after Slice 11 — email compose + send)
+**Scope:** full suite (deterministic + live/model + live-email) + the four-script
+status table below, each script's verdict backed by a documented live run.
+
+> Previous checkpoint (2026-07-09, `a4aa50b`, after slice 5): 193 passed,
+> 0 failed, 0 skipped in 175.07s.
 
 ---
 
@@ -15,32 +19,42 @@
 
 ```
 python -m pytest tests/ -q
-193 passed, 3 warnings in 175.07s (0:02:55)   # exit 0
+364 passed, 3 warnings in 313.53s (0:05:13)   # exit 0
 ```
 
 | Metric | Value |
 |---|---|
-| Passed | **193** |
+| Passed | **364** |
 | Failed | **0** |
 | Skipped | **0** |
-| Duration | **175.07s** (2:55) |
+| Duration | **313.53s** (5:13) |
 | Exit code | **0** |
 
-**0 skipped is significant:** the `GEMINI_API_KEY`-gated live/model tests ran and
-passed too — so this covers real Gemini tool-calling + the vision fallback, not
-just the deterministic core. (3 warnings are benign third-party deprecations:
+**0 skipped is significant:** the gated live tests ran and passed too — real
+Gemini tool-calling, the vision fallback, live chains against real apps, AND
+the two live Gmail sends (`test_email_live.py`, which requires
+`TEST_SELF_EMAIL` in `.env` + the OAuth token and emails the user's own
+address only). (3 warnings are benign third-party deprecations:
 `python_multipart`, `aifc`, `audioop`.)
 
 ---
 
-## 2. Four-script feasibility baseline (spec §1.6)
+## 2. Four-script status (spec §1.6) — current verdicts
 
-Measured against the **7 primitives that exist today**: `launch_app`,
-`read_ui_tree`, `delete_file`, `close_window`, `click`, `type_text`, `press_keys`.
+| # | Script | Verdict | Evidence |
+|---|--------|---------|----------|
+| 1 | Open Spotify → play Discover Weekly | ✅ **Passing** | Live cold run at 12 rounds (slice 6, round-12 update below); playback mechanically verified (Pause control + now-playing). Caveat: a similarly-named user playlist exists; UIA can't distinguish which exact-match the resolver picked. |
+| 2 | Close every browser tab except YouTube | ✅ **Passing** | Live 4-tab isolated Chrome run (slice 8 update below); only the YouTube tab survived, batch CONFIRM named count/kept/samples. |
+| 3 | Find yesterday's invoice PDF → email Sam | ✅ **Passing** | Live E2E `test_email_live.py::test_live_script3_invoice_chain` (slice 11 update below); Gmail accepted the message, modal showed verbatim recipient + exact attachment path. Runs in every full suite. |
+| 4 | Turn brightness down + DND for a film | ⚠ **Partial — NOT passing** | Volume ✅ (readback-verified) and media keys ✅. Brightness fails **honestly**: this monitor exposes no DDC/CI control (hardware, not code — `sbc.set` silently no-ops, so success requires a readback). **DND/Focus Assist does not exist** — deferred, no clean Windows API; it needs its own slice before this script can pass. |
 
-| # | Script | Verdict | Reason |
-|---|--------|---------|--------|
-| 1 | Open Spotify → play Discover Weekly | ⚠ **Partially runnable** | `launch_app` → `read_ui_tree` → `click` all exist. Spotify's custom-rendered UI likely defeats the accessibility tree → forces the vision fallback (flaky). App install status **unverified** — `launch_app`'s registry/App-Paths resolver is the authority and it was not driven this checkpoint. |
+**History — how each verdict was reached** (kept verbatim; the table above is
+the current state):
+
+> **Slice-5 baseline (2026-07-09):** script #1 was ⚠ partially runnable
+> (primitives existed; Spotify's UI exposure and install status unverified),
+> scripts #2–#4 ⛔ blocked on missing verbs (tabs, file-search+email,
+> system_control).
 
 > **Slice-6 update (2026-07-10, live acceptance runs):** script #1 was driven
 > live 3× through the real pipeline after the multi-step chain loop landed.
@@ -101,34 +115,31 @@ Measured against the **7 primitives that exist today**: `launch_app`,
 > "accepted", never "delivered" — send-only scope can't verify delivery).
 > Chain ended `done`. Suite at this checkpoint: **364 passed, 0 failed,
 > 0 skipped.**
-| 2 | Close every browser tab except YouTube | ⛔ **Blocked** | No tab enumeration/close verb; `close_window` closes whole windows only, not individual tabs. |
-| 3 | Find yesterday's invoice PDF → email Sam | ⛔ **Blocked** | No file-search verb (only `delete_file`, caged to `data/agent_files/`); no email compose/attach/send verb. |
-| 4 | Turn brightness down + DND for a film | ⛔ **Blocked** | No `system_control` primitive exists at all. |
 
-**Hostile check:** grep of `tests/` for these scenarios (`spotify`, `discover
-weekly`, `brightness`, `dnd`, `invoice`, `youtube`, `browser tab`) returned **no
-matches** — so no scripted regression was silently "passing" these. The blocks
-are unbuilt scope (Handoff §7 item 4), **not** breakage.
+**Regression coverage note:** script #3 is the only one wired into the suite
+as a live acceptance test (`test_email_live.py`). Scripts #1 and #2 were
+verified by documented live runs, not by tests that re-run every suite —
+their guardrail is the deterministic tests over their primitives
+(tabs/apps/input/chain). A regression in #1/#2 end-to-end behavior would NOT
+turn the suite red; re-drive them live when their primitives change.
 
 ---
 
 ## 3. Known gaps carried forward
 
-These primitives must land before scripts #2–#4 can become real end-to-end
-acceptance tests:
-
-- **Tab enumeration + per-tab close** — unblocks script #2 (`close_window` closes
-  whole windows only).
-- **File-search** (by date + type, outside the `data/agent_files/` cage) —
-  needed for script #3.
-- **Email** compose / attach / send — needed for script #3 (hits the CONFIRM gate
-  on send).
-- **`system_control`** (brightness, DND, and the wider volume/media/clipboard
-  set) — unblocks script #4.
-
-Script #1 needs no new primitives to *attempt*, but its reliability depends on
-Spotify's accessibility exposure and the vision fallback; treat it as flaky until
-hardened.
+- **Script #4 is the only spec script not passing.** Remaining blockers:
+  **DND/Focus Assist** (verb doesn't exist — no clean public Windows API,
+  needs its own deliberately-designed slice) and **brightness on this
+  monitor** (hardware: no DDC/CI response; the code's honest failure is
+  correct behavior, and no software slice can fix the panel).
+- **Email limits (slice 11, documented + test-pinned):** "accepted by
+  server" is the strongest verifiable claim; the verbatim modal is the only
+  control over a prompt-injected composition; Google test-mode OAuth tokens
+  expire after 7 days unless the app is published to production; send-only,
+  one recipient, one caged attachment.
+- **run_shell denylist is a backstop, not a boundary** (obfuscation-tested);
+  vision can confabulate (gate + `from_point` are the defense); memory
+  retrieval is lexical.
 
 ---
 
@@ -136,10 +147,14 @@ hardened.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q          # expect: 193 passed, 0 failed, 0 skipped (needs GEMINI_API_KEY + a desktop)
+python -m pytest tests/ -q   # expect: 364 passed, 0 failed, 0 skipped (~5:15)
+                             # needs: a real desktop, GEMINI_API_KEY,
+                             # TEST_SELF_EMAIL + data/email OAuth token
+                             # (sends 2 live emails to your own address),
+                             # and it launches/kills Notepad + a throwaway Chrome
 ```
 
-The four-script table is a **static feasibility assessment** against the
-primitive registry (`jarvis/primitives/__init__.py`) — re-derive it by listing
-`PRIMITIVES` and mapping each script's required verbs. Promote a script from
-Blocked/Partial to a live acceptance test only once its primitives exist.
+The four-script table in §2 is backed by the documented live runs quoted
+below it. Re-verify a script by re-driving it live (script #3 re-runs
+automatically inside the suite); promote #4 only when a DND slice lands and
+a live run passes.
