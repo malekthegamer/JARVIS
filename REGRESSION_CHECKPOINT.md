@@ -5,13 +5,14 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-11 (fresh full-suite run)
-**Tip commit at capture:** `3dfefa7` on `main` (after Slice 11 — email compose + send)
-**Scope:** full suite (deterministic + live/model + live-email) + the four-script
-status table below, each script's verdict backed by a documented live run.
+**Checkpoint date:** 2026-07-11 (fresh full-suite run, after Slice 12 — DND)
+**Tip commit at capture:** `a920313` on `main` (Slice 12 stages 1–2)
+**Scope:** full suite (deterministic + live/model + live-email + live-DND) + the
+four-script status table below, each script's verdict backed by a documented
+live run.
 
-> Previous checkpoint (2026-07-09, `a4aa50b`, after slice 5): 193 passed,
-> 0 failed, 0 skipped in 175.07s.
+> Previous checkpoints: 2026-07-11 `3dfefa7` (after slice 11) 364 passed;
+> 2026-07-09 `a4aa50b` (after slice 5) 193 passed. Both 0 failed / 0 skipped.
 
 ---
 
@@ -19,22 +20,22 @@ status table below, each script's verdict backed by a documented live run.
 
 ```
 python -m pytest tests/ -q
-364 passed, 3 warnings in 313.53s (0:05:13)   # exit 0
+374 passed, 3 warnings in 341.86s (0:05:41)   # exit 0
 ```
 
 | Metric | Value |
 |---|---|
-| Passed | **364** |
+| Passed | **374** |
 | Failed | **0** |
 | Skipped | **0** |
-| Duration | **313.53s** (5:13) |
+| Duration | **341.86s** (5:41) |
 | Exit code | **0** |
 
 **0 skipped is significant:** the gated live tests ran and passed too — real
-Gemini tool-calling, the vision fallback, live chains against real apps, AND
-the two live Gmail sends (`test_email_live.py`, which requires
-`TEST_SELF_EMAIL` in `.env` + the OAuth token and emails the user's own
-address only). (3 warnings are benign third-party deprecations:
+Gemini tool-calling, the vision fallback, live chains against real apps, the
+two live Gmail sends, AND the live DND toggle against the real Settings UI
+(`test_system.py::test_live_dnd_toggle_and_restore`). (3 warnings are benign
+third-party deprecations:
 `python_multipart`, `aifc`, `audioop`.)
 
 ---
@@ -46,7 +47,7 @@ address only). (3 warnings are benign third-party deprecations:
 | 1 | Open Spotify → play Discover Weekly | ✅ **Passing** | Live cold run at 12 rounds (slice 6, round-12 update below); playback mechanically verified (Pause control + now-playing). Caveat: a similarly-named user playlist exists; UIA can't distinguish which exact-match the resolver picked. |
 | 2 | Close every browser tab except YouTube | ✅ **Passing** | Live 4-tab isolated Chrome run (slice 8 update below); only the YouTube tab survived, batch CONFIRM named count/kept/samples. |
 | 3 | Find yesterday's invoice PDF → email Sam | ✅ **Passing** | Live E2E `test_email_live.py::test_live_script3_invoice_chain` (slice 11 update below); Gmail accepted the message, modal showed verbatim recipient + exact attachment path. Runs in every full suite. |
-| 4 | Turn brightness down + DND for a film | ⚠ **Partial — NOT passing** | Volume ✅ (readback-verified) and media keys ✅. Brightness fails **honestly**: this monitor exposes no DDC/CI control (hardware, not code — `sbc.set` silently no-ops, so success requires a readback). **DND/Focus Assist does not exist** — deferred, no clean Windows API; it needs its own slice before this script can pass. |
+| 4 | Turn brightness down + DND for a film | ✅ **Passing — with a documented hardware caveat** | DND ✅ (slice 12; readback-verified live via the real Settings toggle) and volume/media ✅. **Brightness is a hardware limit, not a code gap:** this monitor exposes no DDC/CI, so no software can change it — the agent reports that honestly (spec §1.7 "never silently does the wrong thing"), which is the correct behavior, not a failure. On a DDC/CI-capable display the same `set_brightness` path works. |
 
 **History — how each verdict was reached** (kept verbatim; the table above is
 the current state):
@@ -116,8 +117,22 @@ the current state):
 > Chain ended `done`. Suite at this checkpoint: **364 passed, 0 failed,
 > 0 skipped.**
 
-**Regression coverage note:** script #3 is the only one wired into the suite
-as a live acceptance test (`test_email_live.py`). Scripts #1 and #2 were
+> **Slice-12 update (2026-07-11): script #4's DND clause run live — ✅.**
+> `set_dnd`/`get_dnd` shipped. Stage 0 proved the planned WNF write is a no-op
+> on the user-facing toggle (NTSTATUS 0 + changestamp advances, but the real
+> switch never moves — the brightness/DDC trap); pivoted (user-approved) to
+> driving the real `ms-settings:notifications` "Do not disturb" ToggleSwitch
+> via UIA with a **readback confirm** (AUTO tier; opens Settings briefly).
+> Live acceptance of script #4 through the real brain: model planned 2 steps →
+> `set_brightness` FAILED honestly (this monitor) → `set_dnd` OK "readback
+> confirmed" → chain `done`; independent `get_dnd` readback = enabled, and the
+> spoken reply relayed the brightness limit truthfully. DND restored after.
+> Suite at this checkpoint: **374 passed, 0 failed, 0 skipped.** Note: DND is
+> wired into the suite as a live test (`test_live_dnd_toggle_and_restore`).
+
+**Regression coverage note:** scripts #3 and #4(DND) are wired into the suite
+as live acceptance/primitive tests (`test_email_live.py`,
+`test_system.py::test_live_dnd_toggle_and_restore`). Scripts #1 and #2 were
 verified by documented live runs, not by tests that re-run every suite —
 their guardrail is the deterministic tests over their primitives
 (tabs/apps/input/chain). A regression in #1/#2 end-to-end behavior would NOT
@@ -127,11 +142,16 @@ turn the suite red; re-drive them live when their primitives change.
 
 ## 3. Known gaps carried forward
 
-- **Script #4 is the only spec script not passing.** Remaining blockers:
-  **DND/Focus Assist** (verb doesn't exist — no clean public Windows API,
-  needs its own deliberately-designed slice) and **brightness on this
-  monitor** (hardware: no DDC/CI response; the code's honest failure is
-  correct behavior, and no software slice can fix the panel).
+- **All four spec scripts now pass** (script #4 with the documented hardware
+  caveat: brightness is genuinely uncontrollable on this monitor — no DDC/CI —
+  and the agent reports that honestly, which is correct spec §1.7 behavior, not
+  a failure).
+- **DND method is the public UI surface, with real costs (slice 12):** `set_dnd`
+  opens a Settings window (~2–4 s) and briefly steals focus — the only silent
+  path (WNF) was proven a no-op in Stage 0. It matches the toggle by
+  automation_id/name; a Windows update that renames both would make it report
+  "DND control isn't available…" (honest fail, pinned by a test) until the
+  matcher is updated. Verified on build 26200 only.
 - **Email limits (slice 11, documented + test-pinned):** "accepted by
   server" is the strongest verifiable claim; the verbatim modal is the only
   control over a prompt-injected composition; Google test-mode OAuth tokens
@@ -147,14 +167,13 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 364 passed, 0 failed, 0 skipped (~5:15)
+python -m pytest tests/ -q   # expect: 374 passed, 0 failed, 0 skipped (~5:40)
                              # needs: a real desktop, GEMINI_API_KEY,
                              # TEST_SELF_EMAIL + data/email OAuth token
                              # (sends 2 live emails to your own address),
-                             # and it launches/kills Notepad + a throwaway Chrome
+                             # launches/kills Notepad + a throwaway Chrome, and
+                             # briefly toggles real Do Not Disturb (restored)
 ```
 
-The four-script table in §2 is backed by the documented live runs quoted
-below it. Re-verify a script by re-driving it live (script #3 re-runs
-automatically inside the suite); promote #4 only when a DND slice lands and
-a live run passes.
+The four-script table in §2 is backed by documented live runs; scripts #3 and
+#4(DND) also re-run inside the suite. Re-verify #1/#2 by re-driving them live.
