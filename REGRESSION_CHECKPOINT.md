@@ -87,6 +87,20 @@ Measured against the **7 primitives that exist today**: `launch_app`,
 > - **Script #3 (find invoice → email Sam): ⚠ half-unblocked.**
 >   `search_files` (AUTO, caged, name/ext/age filters) shipped; the email
 >   verb remains the blocker.
+
+> **Slice-11 update (2026-07-11): script #3 run live — ✅ passing.**
+> `send_email` shipped (Gmail API, `gmail.send` scope only, OAuth token
+> DPAPI-encrypted; CONFIRM on the VERBATIM To/Subject/exact-attachment-path/
+> full-body block — no model summary; attachments caged to
+> `data/agent_files/`; kill switch `email.enabled`). Live E2E
+> (`tests/test_email_live.py::test_live_script3_invoice_chain`): the real
+> model found a yesterday-dated invoice PDF via `search_files`, the modal's
+> block named the recipient and the exact resolved attachment path, the
+> auto-approver verified the To: line before approving (live tests send ONLY
+> to `TEST_SELF_EMAIL`), and Gmail ACCEPTED the message (id returned;
+> "accepted", never "delivered" — send-only scope can't verify delivery).
+> Chain ended `done`. Suite at this checkpoint: **364 passed, 0 failed,
+> 0 skipped.**
 | 2 | Close every browser tab except YouTube | ⛔ **Blocked** | No tab enumeration/close verb; `close_window` closes whole windows only, not individual tabs. |
 | 3 | Find yesterday's invoice PDF → email Sam | ⛔ **Blocked** | No file-search verb (only `delete_file`, caged to `data/agent_files/`); no email compose/attach/send verb. |
 | 4 | Turn brightness down + DND for a film | ⛔ **Blocked** | No `system_control` primitive exists at all. |

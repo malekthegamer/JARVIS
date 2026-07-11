@@ -48,10 +48,11 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 326 as of slice 10; it only grows.)
+  failure with better manners. (Baseline N = 364 as of slice 11; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
-  Chrome, and takes ~5 min. Live/model tests are gated on `GEMINI_API_KEY`; with
-  the key present they run (0 skipped).
+  Chrome, sends live-test email to `TEST_SELF_EMAIL`, and takes ~5 min.
+  Live/model tests are gated on `GEMINI_API_KEY` (email-live also on
+  `TEST_SELF_EMAIL` + the Gmail token); with those present they run (0 skipped).
 - Inner loop while iterating: run only the touched files, e.g.
   `python -m pytest tests/test_memory.py tests/test_brain.py -q`.
 - Paste the real command + real result. Never assert green from memory.

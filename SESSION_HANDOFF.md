@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-11, after **Slice 10 (long-term memory)**. Tip commit: `38a7a0e` on `main`.
+> Last updated: 2026-07-11, after **Slice 11 (email compose + send)**. See `git log --oneline` for the tip.
 
 ---
 
@@ -9,10 +9,10 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is now codified in **`CLAUDE.md`** (auto-loaded — the discipline below runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with examples).
 
-- **Built & working (slices 1–10):** voice loop, reactive HUD with a live **Action Log + telemetry**, PC-control primitives (launch/close/read-screen/click/type/press), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, a **vision fallback** for icon-only controls, real **multi-step agentic chains** (visible plan, replan, retry guards), **wider primitives** (browser tab list/close, caged file search, volume/media/brightness), **`run_shell`** (denylist + verbatim-command confirm + tree-kill timeout), and **encrypted long-term memory**. **326 tests passing (0 failed, 0 skipped).**
-- **Live app right now:** `python run.py` serves a HUD at `http://127.0.0.1:8000`. Brain = Gemini `gemini-3.1-flash-lite`. Only `GEMINI_API_KEY` is configured.
-- **The 4 spec acceptance scripts (§1.6):** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email ⚠ (file-search done, **email verb is the blocker**), #4 volume+brightness+DND ⚠ (volume/media ✅, brightness honestly unsupported on this monitor, **DND deferred — no clean Windows API**). Status tracked in `REGRESSION_CHECKPOINT.md`.
-- **Not built yet:** email/compose, DND/Focus Assist, web/browser automation beyond tab-close, wake word (real engine), tray app, and memory refinements (semantic retrieval, pinned prefs). See §7.
+- **Built & working (slices 1–11):** voice loop, reactive HUD with a live **Action Log + telemetry**, PC-control primitives (launch/close/read-screen/click/type/press), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, a **vision fallback** for icon-only controls, real **multi-step agentic chains** (visible plan, replan, retry guards), **wider primitives** (browser tab list/close, caged file search, volume/media/brightness), **`run_shell`** (denylist + verbatim-command confirm + tree-kill timeout), **encrypted long-term memory**, and **`send_email`** (Gmail API `gmail.send`-scope OAuth, verbatim-message confirm, caged attachments). **364 tests passing (0 failed, 0 skipped).**
+- **Live app right now:** `python run.py` serves a HUD at `http://127.0.0.1:8000`. Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL` (live-email-test recipient), plus the Gmail OAuth artifacts under `data/email/`.
+- **The 4 spec acceptance scripts (§1.6):** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email Sam ✅ (slice 11, live-verified), #4 volume+brightness+DND ⚠ (volume/media ✅, brightness honestly unsupported on this monitor, **DND deferred — no clean Windows API**). Status tracked in `REGRESSION_CHECKPOINT.md`.
+- **Not built yet:** inbox reading/triage, DND/Focus Assist, web/browser automation beyond tab-close, wake word (real engine), tray app, and memory refinements (semantic retrieval, pinned prefs). See §7.
 
 ---
 
@@ -63,6 +63,11 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 
 ---
 
+### Slice 11 — Email compose + send (spec §1.6 script #3)
+- `primitives/email.py` — `send_email` (CONFIRM): the **first outward-reaching, irreversible verb**, treated like run_shell. Validation fails closed BEFORE the modal (single RFC-plausible recipient, CR/LF header-injection refusal, empty-message refusal, attachment caged to `data/agent_files/` via `files._contained`). The modal's mono box shows a **mechanically-built verbatim block** — To / Subject / exact resolved attachment path + size / FULL body, never truncated, **no model summary** (slice-9 doctrine; reused the `command` confirm field — hud.css needed nothing, the slice-9 box was already pre-wrap + scroll).
+- **Transport:** Gmail API, **`gmail.send` scope only** (least privilege — user-approved over SMTP app-password), OAuth token **DPAPI-encrypted** at `data/email/token.bin`; runtime NEVER opens a consent browser mid-chain (no token → honest FAILED naming the setup: put the OAuth client at `data/email/credentials.json`, run `python -m jarvis.primitives.email` once). The runner **re-validates after approval** (vanished attachment → clean FAILED, nothing sent). `email.enabled` kill switch withholds the tool from the schema. Success = "**accepted** by the server (message id …)" — never "delivered".
+- **Binding test rule:** live tests send ONLY to `TEST_SELF_EMAIL` (from `.env`, never hardcoded); the chain test's auto-approver declines any modal whose To: differs. Script #3 live E2E passed: model → search_files → CONFIRM (block named recipient + exact attachment path) → Gmail accepted (id returned) → chain `done`. Prompt gained: never guess/invent an address (+ fixed a stale "not yet wired up" claim about shell/system-settings).
+
 ## 3. Architecture & repo map
 
 ```
@@ -99,14 +104,19 @@ e:\J.A.R.V.I.S\
       tabs.py               ← list_tabs (AUTO) / close_tabs (CONFIRM)          (slice 8)
       system.py             ← volume/mute/media/brightness (AUTO)              (slice 8)
       shell.py              ← run_shell + denylist + classify (BLOCKED/CONFIRM) (slice 9)
+      email.py              ← send_email: validate/classify + verbatim block + Gmail (slice 11)
+                              also the one-time OAuth setup: python -m jarvis.primitives.email
     providers/              ← self-registering: brain/gemini, stt/google, tts/edge_tts+pyttsx3
     voice/                  ← capture.py (HARD-WON, DO NOT rewrite), playback.py, voice_manager.py
     static/                 ← the HUD (vanilla JS): index.html, hud.css, hud.js, orb.js, fonts/
                               chain strip, Action Log + telemetry panels, monospace shell-confirm box
 
-  tests/                    ← 326 tests. pytest. Live/model tests key-gated on GEMINI_API_KEY.
+  tests/                    ← 364 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+                              (+ TEST_SELF_EMAIL & the Gmail token for email-live).
     harness_hud_visual.py   ← Playwright DOM+screenshot HUD checker (slice 7+)
+    harness_email_modal.py  ← email CONFIRM modal vision harness (slice 11)
     harness_iconpad.py      ← Tk icon surface for the vision path (slice 5)
+    test_email.py test_email_live.py
     test_memory.py test_memory_live.py test_shell.py test_tabs.py test_system.py test_chain.py
     test_chain_live.py test_agent_loop.py test_vision.py test_input.py test_confirmations.py
     test_confirm_primitives.py test_primitives.py test_server.py test_state.py test_brain.py
@@ -137,7 +147,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser
 python run.py --no-open       # serve only; open http://127.0.0.1:8000 yourself
 
-python -m pytest tests/ -q    # full suite: 326 passed, 0 failed, 0 skipped (~5 min; launches/kills
+python -m pytest tests/ -q    # full suite: 364 passed, 0 failed, 0 skipped (~5 min; launches/kills
                               # Notepad + a throwaway Chrome; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
 ```
@@ -153,7 +163,8 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
 - **run_shell denylist is a BACKSTOP, not a boundary** — trivially defeated by obfuscation (tested). CONFIRM is the primary control. cmd.exe only (no PowerShell). No VM/sandbox isolation.
 - **Memory** retrieval is lexical — misses pure paraphrase (embeddings = future); stable "always-on" preferences aren't surfaced unless the query overlaps (future `pinned` flag); over-eager `remember` is mitigated (explicit-intent prompt + Action-Log visibility + `forget`), not eliminated; DPAPI ties decryptability to this Windows account.
 - **Brightness** genuinely unsupported on this monitor (honest failure is the shipped UX). **DND/Focus Assist** deferred — no clean Windows API.
-- **Script #3** needs an email verb; **script #4** needs DND.
+- **Email**: "accepted by server" is the strongest verifiable claim (send-only scope can't check delivery). The verbatim modal is the ONLY control over a prompt-injected composition — it depends on the user reading it. Google test-mode OAuth refresh tokens expire after **7 days** unless the OAuth app is published to production. Send-only, one recipient, one caged attachment; no inbox reading (deliberate).
+- **Script #4** needs DND.
 - **Focus**: a fullscreen exclusive app can block input; the code aborts honestly rather than fire into the wrong window.
 - **Flaky test note**: `test_chain_live.py::test_live_failing_step_hits_budget_not_infinite` is live-model-dependent; it accepts any bounded terminal state (budget/exhausted/done/cancelled). Re-run in isolation before calling any live test a regression.
 
@@ -179,13 +190,13 @@ The four-stage discipline runs automatically every session — **you do not need
 
 Pick one and plan it. In rough priority:
 
-1. **Email / compose** — unblocks spec script #3 ("find yesterday's invoice → email Sam"). Design the send as a CONFIRM-gated action; the file half (`search_files`) already exists.
-2. **DND / Focus Assist** — unblocks script #4's last clause. No clean public API — needs a deliberate approach (Focus Assist toggle via undocumented paths, or a scoped registry/notification approach); design carefully and flag the method.
-3. **Web / browser automation beyond tab-close** — navigate, read page content, fill forms (Playwright driving the real browser, or reuse the vision loop in-page). Enables richer scripts.
-4. **Wake word** — a real engine (Porcupine/openWakeWord), not substring matching. Then a **tray app** for always-on.
-5. **Memory refinements** — semantic/embedding retrieval (lexical misses paraphrase); a `pinned` always-on preferences category; a HUD memory-manager panel; per-memory sensitivity tags.
-6. **Vision hardening** — OCR/ensemble to cut confabulation & misidentification; i18n for the destructive vocab.
-7. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only); **undo / dry-run / persistent audit log**.
+1. **DND / Focus Assist** — unblocks script #4's last clause (the only spec script still ⚠). No clean public API — needs a deliberate approach (Focus Assist toggle via undocumented paths, or a scoped registry/notification approach); design carefully and flag the method.
+2. **Web / browser automation beyond tab-close** — navigate, read page content, fill forms (Playwright driving the real browser, or reuse the vision loop in-page). Enables richer scripts.
+3. **Wake word** — a real engine (Porcupine/openWakeWord), not substring matching. Then a **tray app** for always-on.
+4. **Memory refinements** — semantic/embedding retrieval (lexical misses paraphrase); a `pinned` always-on preferences category; a HUD memory-manager panel; per-memory sensitivity tags.
+5. **Vision hardening** — OCR/ensemble to cut confabulation & misidentification; i18n for the destructive vocab.
+6. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only); **undo / dry-run / persistent audit log**.
+7. **Email widenings** (each a deliberate slice, not a default): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface — treat like a new risk category again).
 
 Also deferred: ElevenLabs/Claude/OpenAI/Ollama/Whisper providers (they sit in `legacy/` until their slice).
 
@@ -193,6 +204,6 @@ Also deferred: ElevenLabs/Claude/OpenAI/Ollama/Whisper providers (they sit in `l
 
 ## 8. First moves in the new session
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **326** green (0 failed, 0 skipped).
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **364** green (0 failed, 0 skipped).
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status.
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode.
