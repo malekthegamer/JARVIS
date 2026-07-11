@@ -56,6 +56,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,        # kill switch; off -> withheld from the model
         "timeout_s": 30,        # execution wall-clock before the tree is killed
     },
+    "email": {
+        # send_email (spec §1.6 script #3) — the first outward-reaching verb.
+        # Every send is CONFIRM-gated on the verbatim message; attachments
+        # are caged to data/agent_files/. Off -> withheld from the model.
+        "enabled": True,
+    },
     "memory": {
         # Long-term cross-session memory (spec §1.5). Explicit-intent writes
         # only; DPAPI-encrypted at rest; relevance-gated retrieval.
