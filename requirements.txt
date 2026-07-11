@@ -9,6 +9,7 @@ requests>=2.31             # Ollama local HTTP API
 # Voice
 SpeechRecognition>=3.10    # shared capture + Google Web Speech STT
 PyAudio>=0.2.14            # raw mic capture (prebuilt wheels for cp312)
+openwakeword>=0.6          # "hey jarvis" wake word (slice 13; onnxruntime, no key)
 faster-whisper>=1.0        # local Whisper (GPU float16 on Blackwell, CPU fallback)
 edge-tts>=6.1              # free neural TTS (default voice out)
 pyttsx3>=2.90              # offline fallback TTS

@@ -158,3 +158,58 @@ def test_handle_wake_without_utterance_returns_idle_quietly(heard):
     assert text is None
     assert responded == [], "must not act on an empty follow-up"
     assert idled == [1], "must return to IDLE quietly"
+
+
+# ======================================================================
+# STAGE 2 — server wiring: the wake callback funnels through the SAME
+# _busy lock + _respond pipeline as push-to-talk (coexistence, no stacking),
+# and start/stop respect the wake.enabled kill switch. No real mic/model.
+# ======================================================================
+
+def test_server_wake_dropped_while_busy(monkeypatch):
+    """A wake trigger while an interaction holds _busy is DROPPED — no stacked
+    follow-up capture (coexistence with PTT/chat/confirm)."""
+    from jarvis import server
+    from jarvis.voice.voice_manager import voice_manager
+    called = []
+    monkeypatch.setattr(voice_manager, "listen",
+                        lambda timeout=8.0: called.append(1) or "x")
+    assert server._busy.acquire(blocking=False)
+    try:
+        server._on_wake()
+    finally:
+        server._busy.release()
+    assert called == [], "a wake while busy must not start a follow-up capture"
+
+
+def test_server_wake_real_utterance_responds(monkeypatch):
+    from jarvis import server
+    from jarvis.voice.voice_manager import voice_manager
+    monkeypatch.setattr(voice_manager, "listen", lambda timeout=8.0: "open notepad")
+    responded = []
+    monkeypatch.setattr(server, "_respond", lambda text: responded.append(text))
+    server._on_wake()
+    assert responded == ["open notepad"]
+    assert server._busy.acquire(blocking=False), "_busy must be released after"
+    server._busy.release()
+
+
+def test_server_wake_empty_followup_no_respond_idles(monkeypatch):
+    from jarvis import server
+    from jarvis.state import AgentState, broadcaster
+    from jarvis.voice.voice_manager import voice_manager
+    monkeypatch.setattr(voice_manager, "listen", lambda timeout=8.0: None)
+    responded = []
+    monkeypatch.setattr(server, "_respond", lambda text: responded.append(text))
+    server._on_wake()
+    assert responded == [], "empty follow-up must not reach the brain"
+    assert broadcaster.current is AgentState.IDLE
+
+
+def test_start_wake_noop_when_disabled(monkeypatch):
+    from jarvis import server
+    from jarvis.core.settings_store import settings
+    settings.set("wake.enabled", False, persist=False)
+    server.stop_wake()
+    server.start_wake()
+    assert server.wake_running() is False, "disabled wake must not start a listener"

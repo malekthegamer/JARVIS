@@ -28,7 +28,8 @@ from jarvis.brain import jarvis_brain
 from jarvis.core import chain
 from jarvis.core.confirmations import confirmations
 from jarvis.core.settings_store import settings
-from jarvis.state import broadcaster
+from jarvis.state import AgentState, broadcaster
+from jarvis.voice import wake
 from jarvis.voice.voice_manager import voice_manager
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -142,9 +143,11 @@ async def _lifespan(app: FastAPI):
     unsubscribe_confirm = confirmations.subscribe(_enqueue_threadsafe)
     fanout = asyncio.create_task(_fanout_forever())
     telemetry = asyncio.create_task(_telemetry_forever())
+    start_wake()  # no-op unless wake.enabled
     try:
         yield
     finally:
+        stop_wake()
         unsubscribe_state()
         unsubscribe_confirm()
         fanout.cancel()
@@ -171,6 +174,65 @@ def _respond(text: str) -> str:
     _enqueue_threadsafe({"type": "transcript", "who": "jarvis", "text": reply})
     voice_manager.speak(reply)
     return reply
+
+
+# ---------- wake word (slice 13) ----------
+# The wake listener funnels a triggered utterance through the SAME _busy lock
+# and _respond pipeline as push-to-talk and WS chat — so the two triggers
+# coexist and never stack. A wake that lands while an interaction is in flight
+# is dropped; a wake with no real follow-up returns to IDLE quietly.
+
+_wake_listener: wake.WakeListener | None = None
+
+
+def _on_wake() -> None:
+    """Called (on the listener thread) when the wake word fires. The listener
+    has already released the mic, so the follow-up capture owns it alone."""
+    if not _busy.acquire(blocking=False):
+        return  # PTT/chat/confirm mid-flight — drop this trigger, never stack
+    try:
+        from jarvis.core.settings_store import settings as _s
+        timeout = float(_s.get("wake.follow_up_timeout_s", 5))
+        wake.handle_wake(
+            listen=lambda t: voice_manager.listen(timeout=t),
+            respond=_respond,
+            set_idle=lambda: broadcaster.set(AgentState.IDLE),
+            timeout_s=timeout)
+    finally:
+        _busy.release()
+
+
+def wake_running() -> bool:
+    return bool(_wake_listener and _wake_listener.running)
+
+
+def start_wake() -> None:
+    """Start the always-on wake listener if enabled. Idempotent; never raises."""
+    global _wake_listener
+    if not settings.get("wake.enabled", False):
+        return
+    if wake_running():
+        return
+    try:
+        _wake_listener = wake.WakeListener(
+            on_wake=_on_wake,
+            threshold=float(settings.get("wake.threshold", 0.5)),
+            cooldown_s=float(settings.get("wake.cooldown_s", 2.0)))
+        _wake_listener.start()
+        print("  [wake] listening for 'hey jarvis'")
+    except Exception as exc:
+        print(f"  [wake] could not start: {exc}")
+        _wake_listener = None
+
+
+def stop_wake() -> None:
+    global _wake_listener
+    if _wake_listener is not None:
+        try:
+            _wake_listener.stop()
+        except Exception:
+            pass
+        _wake_listener = None
 
 
 # ---------- endpoints ----------

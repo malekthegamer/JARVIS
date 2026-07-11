@@ -69,6 +69,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "retrieve_k": 5,             # max memories injected per message
         "relevance_threshold": 1,    # min shared content-tokens to surface one
     },
+    "wake": {
+        # Wake word (slice 13) — an ALTERNATIVE trigger to push-to-talk, via
+        # openWakeWord ("hey jarvis"). Opt-in (off by default); when on, an
+        # always-on local listener starts with the server. Audio is processed
+        # locally and discarded pre-trigger (see jarvis.voice.wake).
+        "enabled": False,
+        "model": "hey_jarvis",       # pretrained openWakeWord model name
+        "threshold": 0.5,            # Stage-0: silence 0.000, speech 0.78–0.998
+        "follow_up_timeout_s": 5,    # how long to wait for the command after "hey jarvis"
+        "cooldown_s": 2.0,           # collapse a burst of frames into one wake
+    },
     "history_max_messages": 40,
 }
 
