@@ -14,8 +14,8 @@ import time
 from jarvis.core import chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
-from jarvis.primitives import (apps, files, input as jinput, screen, shell,
-                               system, tabs, ui_tree, windows)
+from jarvis.primitives import (apps, email as jemail, files, input as jinput,
+                               screen, shell, system, tabs, ui_tree, windows)
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -83,6 +83,14 @@ def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
 
 def _run_shell(args: dict, gate_info: dict | None = None) -> str:
     r = shell.run_shell(str(args.get("command", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_send_email(args: dict, gate_info: dict | None = None) -> str:
+    """send_email_checked re-validates the same args the modal showed (the
+    gate→run gap: an attachment can vanish, a setting can flip) — only a
+    still-valid message reaches the transport."""
+    r = jemail.send_email_checked(args)
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
@@ -293,6 +301,36 @@ PRIMITIVES: dict[str, dict] = {
             },
         },
     },
+    "send_email": {
+        "fn": _run_send_email,
+        "classify": jemail.classify_send_email,
+        "schema": {
+            "name": "send_email",
+            "description": ("Send an email from the user's Gmail account. "
+                            "EVERY send requires explicit user approval of the "
+                            "exact message (recipient, subject, body, "
+                            "attachment) first. ONE recipient. The optional "
+                            "attachment must be a file in the agent workspace "
+                            "(data/agent_files) — use search_files to find it. "
+                            "Use ONLY when the user asks to send an email. "
+                            "NEVER guess or invent an address — if you don't "
+                            "know the recipient's address, ask the user."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string",
+                           "description": "The recipient's email address (exactly one)"},
+                    "subject": {"type": "string",
+                                "description": "Subject line"},
+                    "body": {"type": "string",
+                             "description": "The full body text, exactly as it will be sent"},
+                    "attachment": {"type": "string",
+                                   "description": "Workspace file name to attach (optional)"},
+                },
+                "required": ["to", "subject", "body"],
+            },
+        },
+    },
     "list_tabs": {
         "fn": _run_list_tabs,
         "tier": "auto",
@@ -480,12 +518,15 @@ _CANCEL_REASONS = {
 
 
 def tools_schema() -> list[dict]:
-    """Schemas the model may call. run_shell is withheld entirely when
-    shell.enabled is off — a disabled high-risk verb should not even be
-    advertised (a direct call still refuses via classify)."""
-    shell_on = settings.get("shell.enabled", True)
-    return [p["schema"] for n, p in PRIMITIVES.items()
-            if shell_on or n != "run_shell"]
+    """Schemas the model may call. A disabled high-risk verb (run_shell,
+    send_email) is withheld entirely — not even advertised (a direct call
+    still refuses via classify)."""
+    withheld = set()
+    if not settings.get("shell.enabled", True):
+        withheld.add("run_shell")
+    if not settings.get("email.enabled", True):
+        withheld.add("send_email")
+    return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]
 
 
 def execute(name: str, args: dict) -> str:
