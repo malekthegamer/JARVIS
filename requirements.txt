@@ -16,9 +16,10 @@ pyttsx3>=2.90              # offline fallback TTS
 elevenlabs>=1.0            # premium TTS (optional key)
 pygame>=2.5                # audio playback for edge-tts / elevenlabs bytes
 
-# Web dashboard
+# Web dashboard + browser automation
 fastapi>=0.110
 uvicorn[standard]>=0.29
+playwright>=1.50            # browser automation (slice 14; then: playwright install chromium)
 
 # Skills — PC control & automation
 pyautogui>=0.9.54

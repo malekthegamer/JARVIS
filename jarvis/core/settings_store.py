@@ -80,6 +80,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "follow_up_timeout_s": 5,    # how long to wait for the command after "hey jarvis"
         "cooldown_s": 2.0,           # collapse a burst of frames into one wake
     },
+    "web": {
+        # Browser automation (slice 14) — a DEDICATED, isolated Playwright
+        # browser (fresh profile, NO user logins). Per-action gating: a
+        # cross-origin navigation and a committal in-page click are
+        # CONFIRM-gated; page content is treated as untrusted data. Off ->
+        # the verbs are withheld from the model (like shell/email).
+        "enabled": True,
+        "headless": False,      # visible by default so the user watches; tests force True
+        "timeout_s": 15,        # per-action wall-clock before an honest failure
+        "max_read_chars": 5000, # cap on returned page text
+    },
     "history_max_messages": 40,
 }
 
