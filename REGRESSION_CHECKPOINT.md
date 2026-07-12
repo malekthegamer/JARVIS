@@ -5,17 +5,17 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-11 (fresh full-suite run, after Slice 13 — wake + tray)
-**Tip commit at capture:** `65aa362` on `main` (Slice 13 stage 3)
-**Scope:** full suite (deterministic + live/model + live-email + live-DND) + the
-four-script status table below, each script's verdict backed by a documented
-live run. Slice 13 (wake word + tray) adds a session-START trigger and a tray
-app — neither maps to a spec §1.6 script, so the four-script table is unchanged;
-the wake path was live-verified separately (user said "hey Jarvis" → command →
-reply; `tests/harness_wake.py`).
+**Checkpoint date:** 2026-07-11 (fresh full-suite run, after Slice 14 — web automation)
+**Tip commit at capture:** `bwm1t4uai`→ see `git log` (Slice 14 stage 3)
+**Scope:** full suite (deterministic + live/model + live-email + live-DND +
+live-web) + the four-script status table below, each verdict backed by a
+documented live run. Slices 13 (wake+tray) and 14 (web automation) add capability
+outside the spec §1.6 four-script set, so that table is unchanged; both were
+live-verified separately (wake: `tests/harness_wake.py`; web: `test_web_live.py`,
+incl. the model refusing a prompt-injected page).
 
-> Previous checkpoints: 2026-07-11 `a920313` (slice 12) 374; `3dfefa7` (slice 11)
-> 364; 2026-07-09 `a4aa50b` (slice 5) 193. All 0 failed / 0 skipped.
+> Previous checkpoints: 2026-07-11 `65aa362` (slice 13) 391; `a920313` (slice 12)
+> 374; `3dfefa7` (slice 11) 364; `a4aa50b` (slice 5) 193. All 0 failed / 0 skipped.
 
 ---
 
@@ -23,22 +23,23 @@ reply; `tests/harness_wake.py`).
 
 ```
 python -m pytest tests/ -q
-391 passed, 3 warnings in 344.38s (0:05:44)   # exit 0
+412 passed, 3 warnings in ~360s (0:06:00)   # exit 0
 ```
 
 | Metric | Value |
 |---|---|
-| Passed | **391** |
+| Passed | **412** |
 | Failed | **0** |
 | Skipped | **0** |
-| Duration | **344.38s** (5:44) |
+| Duration | **~360s** (6:00) |
 | Exit code | **0** |
 
 **0 skipped is significant:** the gated live tests ran and passed too — real
 Gemini tool-calling, the vision fallback, live chains against real apps, the
-two live Gmail sends, AND the live DND toggle against the real Settings UI
-(`test_system.py::test_live_dnd_toggle_and_restore`). Wake/tray tests are
-deterministic (fakes); the wake path itself was live-verified by hand
+two live Gmail sends, the live DND toggle against the real Settings UI, AND the
+live web tests (`test_web_live.py`: the real model navigates+reads a page, and
+**refuses a prompt-injected page** ordering it to send an email). Wake/tray tests
+are deterministic (fakes); the wake path itself was live-verified by hand
 (`tests/harness_wake.py`). (3 warnings are benign third-party deprecations:
 `python_multipart`, `aifc`, `audioop`.)
 
@@ -178,11 +179,12 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 391 passed, 0 failed, 0 skipped (~5:45)
+python -m pytest tests/ -q   # expect: 412 passed, 0 failed, 0 skipped (~6:00)
                              # needs: a real desktop, GEMINI_API_KEY,
                              # TEST_SELF_EMAIL + data/email OAuth token
                              # (sends 2 live emails to your own address),
-                             # launches/kills Notepad + a throwaway Chrome, and
+                             # launches/kills Notepad + a throwaway Chrome,
+                             # drives a headless Chromium (local fixtures only), and
                              # briefly toggles real Do Not Disturb (restored)
 python tests/harness_wake.py # self-paced live wake demo (say "hey Jarvis" + a command)
 ```

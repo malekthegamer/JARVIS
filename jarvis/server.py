@@ -148,6 +148,11 @@ async def _lifespan(app: FastAPI):
         yield
     finally:
         stop_wake()
+        try:
+            from jarvis.primitives import web
+            web.session.close()  # never leave an orphan browser
+        except Exception:
+            pass
         unsubscribe_state()
         unsubscribe_confirm()
         fanout.cancel()
