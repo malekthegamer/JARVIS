@@ -91,6 +91,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "timeout_s": 15,        # per-action wall-clock before an honest failure
         "max_read_chars": 5000, # cap on returned page text
     },
+    "search": {
+        # Web search (slice 15) — keyless DuckDuckGo (ddgs). A pure read (AUTO);
+        # results are wrapped in the SAME untrusted-data boundary as page reads.
+        # Off -> the verb is withheld from the model.
+        "enabled": True,
+        "max_results": 5,
+    },
     "history_max_messages": 40,
 }
 
