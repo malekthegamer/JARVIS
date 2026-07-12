@@ -48,15 +48,16 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 412 as of slice 14; it only grows.)
+  failure with better manners. (Baseline N = 423 as of slice 15; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
   Chrome, drives a headless Playwright Chromium against local fixtures, sends
   live-test email to `TEST_SELF_EMAIL`, briefly toggles real Do Not Disturb
   (restored), and takes ~6 min. Live/model tests are gated on `GEMINI_API_KEY`
   (email-live also on `TEST_SELF_EMAIL` + the Gmail token); with those present
-  they run (0 skipped). (Wake-word/tray + web tests are deterministic — fakes /
-  local fixture servers, no real mic or live internet; the live wake demo is
-  `tests/harness_wake.py`.)
+  they run (0 skipped). **The gated live-search tests (`test_search_live.py`) hit
+  the real network (ddgs + a real site).** (Wake-word/tray + deterministic web/
+  search tests use fakes / local fixtures / mocked ddgs — no real mic or internet;
+  the live wake demo is `tests/harness_wake.py`.)
 - **Live-UIA flake note:** a few live tests (`test_input`, `test_tabs`,
   live-model chains) intermittently fail under load in a full run — real mouse/
   UIA/browser timing. Re-run the named test in isolation; if it passes there,
