@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-11, after **Slice 15 (web search / research)**. See `git log --oneline` for the tip.
+> Last updated: 2026-07-11, after **Slice 16 (vision hardening — measured)**. See `git log --oneline` for the tip.
 
 ---
 
@@ -99,6 +99,14 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **Gates intact downstream:** `web_search` being AUTO changes nothing — a chained `browse_navigate` still hits cross-origin CONFIRM, a `browse_click` of "Buy"/"Submit" still hits committal CONFIRM (test-pinned).
 - **Verified:** 9 deterministic tests (ddgs seam mocked — no network) + 2 gated live. **Live acceptance passed:** "capital of Australia" → web_search → "Canberra"; and a search→read chain (tool order `plan_steps, web_search, browse_navigate, read_page`) answered from the real python.org page.
 
+### Slice 16 — Vision hardening (the slice where MEASUREMENT changed the plan)
+- **Built the first-ever accuracy metric for the vision fallback**, and it overturned the approved design. `tests/harness_visionpad.py` (a canvas-drawn golden set ⇒ no UIA elements, so vision is FORCED, with exactly-known rects) + `tests/harness_vision_eval.py` (scores localization / confabulation / unsafe-AUTO / latency against ground truth). Three phases: **easy**, **BLANK canvas**, and **HARD** (dense 40px toolbar, lookalike save vs save-as, faint low-contrast buttons).
+- **The plan's centerpiece (a crop-verify 2nd model call) was NOT BUILT — measurement said it was unjustified.** Baseline: localization **1.0**, confabulation **0.0 even on a blank canvas** (the exact condition slice 5 blamed). It would have cost **2× latency/calls to fix nothing**. Slice 5's "the model confabulates at confidence 1.0" note **did not reproduce** on the current model+prompt.
+- **What the HARD benchmark DID find (and what shipped):** `unsafe_auto = 3/3` on a **Print** icon — located and labelled correctly but classified **AUTO**, so JARVIS would print without confirming. Same class as a direct probe showing **every non-English destructive verb → AUTO** ("Löschen"/"Supprimer"/"Eliminar"/"删除" would have **auto-clicked a delete**). Both are **vocabulary** gaps, not mechanism gaps.
+- **The fix:** one shared `input.is_committal_name()` (English + i18n Latin/Cyrillic via `\b`, + **CJK by substring** since `\b` can never match 删除), used by BOTH the fast path (`_click_tier`) and vision (`_tier_for`) so they can't drift. Zero latency, zero model cost, fail-safe direction only. **Measured: `unsafe_auto` 3 → 0; tier-correctness 0.958/0.833 → 1.0/1.0.**
+- **Residual limitation found and documented (not hidden):** *adjacent-icon mis-localization* — on a dense toolbar vision can LABEL correctly while POINTING one icon over (measured 5/5: asked for "paste", answered `'paste content'`, pointed at the neighbouring **copy** icon). A second look does NOT fix it (perception disagreement, not hallucination). So the CONFIRM modal can name the control you asked for while the click lands one icon over. The `from_point` hit-test only proves *something* clickable is there — **not** that it matches the approved label.
+- The `hard_hit_rate` 1.0 → 0.875 delta is that one ambiguous copy/paste case; the benchmark glyph was **deliberately NOT retuned after seeing the result** (that's how benchmarks get gamed).
+
 ## 3. Architecture & repo map
 
 ```
@@ -159,6 +167,10 @@ e:\J.A.R.V.I.S\
     harness_email_modal.py  ← email CONFIRM modal vision harness (slice 11)
     harness_wake.py         ← self-paced live "hey jarvis" demo (slice 13; you run it, you speak)
     harness_iconpad.py      ← Tk icon surface for the vision path (slice 5)
+    harness_visionpad.py    ← slice-16 GOLDEN SET: canvas controls w/ known rects
+                              (easy | --blank | --hard dense toolbar + lookalikes)
+    harness_vision_eval.py  ← slice-16 SCORER: localization / confabulation /
+                              unsafe-AUTO / latency vs ground truth. THE vision metric.
     test_web.py test_web_live.py test_search.py test_search_live.py
     test_wake.py test_tray.py
     test_email.py test_email_live.py
@@ -207,7 +219,8 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
 
 ## 5. Known gaps / limitations (honest, carried forward)
 
-- **Vision** can misidentify a destructive control as safe; confabulates on blank targets (gate + `from_point` are the defense); English-only destructive vocab; click-only. Staleness: one call per click.
+- **Vision (re-measured in slice 16 — the old claims here were stale):** confabulation on blank targets **did NOT reproduce** (0/9 measured); localization is 1.0 easy / 0.88 hard; the destructive vocab is **no longer English-only** (i18n + CJK, shared with the fast path). **Still real:** *adjacent-icon mis-localization* — it can label correctly but point at the neighbouring icon on a dense toolbar (5/5 measured), so the CONFIRM modal may name the right control while the click lands one over; and `from_point` only proves *something* clickable is at the point, not that it matches the approved label. Click-only; one call per click. Re-run `tests/harness_vision_eval.py` rather than trusting these numbers.
+- **Destructive vocabulary is curated, not exhaustive** — an unlisted language/verb still classifies AUTO on the fast path (vision's semantic `risk` field partially covers it). Over-gating is fail-safe; under-gating is the risk.
 - **run_shell denylist is a BACKSTOP, not a boundary** — trivially defeated by obfuscation (tested). CONFIRM is the primary control. cmd.exe only (no PowerShell). No VM/sandbox isolation.
 - **Memory** retrieval is lexical — misses pure paraphrase (embeddings = future); stable "always-on" preferences aren't surfaced unless the query overlaps (future `pinned` flag); over-eager `remember` is mitigated (explicit-intent prompt + Action-Log visibility + `forget`), not eliminated; DPAPI ties decryptability to this Windows account.
 - **Brightness** genuinely unsupported on this monitor (honest failure is the shipped UX; hardware, not code — works on a DDC/CI-capable display).
@@ -242,7 +255,7 @@ The four-stage discipline runs automatically every session — **you do not need
 All four spec §1.6 scripts now pass. Pick one and plan it. In rough priority:
 
 1. **Memory refinements** — semantic/embedding retrieval (lexical misses paraphrase); a `pinned` always-on preferences category; a HUD memory-manager panel; per-memory sensitivity tags.
-2. **Vision hardening** — OCR/ensemble to cut confabulation & misidentification; i18n for the destructive vocab.
+2. **Vision: adjacent-icon mis-localization** (the one residual slice-16 measured) — vision can label correctly but point one icon over on a dense toolbar. A crop-verify 2nd call does NOT fix it (measured: perception disagreement, not hallucination). A real fix would verify the element AT the point matches the approved label before clicking (extend `from_point`), or ask the model for the icon's index within the toolbar. *(OCR/Tesseract was investigated and deliberately rejected — the model is already multimodal and the binary isn't installed; confabulation, its supposed target, doesn't reproduce.)*
 3. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only); **undo / dry-run / persistent audit log**.
 4. **Email widenings** (each a deliberate slice, not a default): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface — treat like a new risk category again).
 5. **Web/search widenings** — a persistent-login browser mode (reuse the user's real session, a much bigger risk surface — its own deliberate slice); the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling proves annoying (a keyed API, guarded like slice 11's OAuth).

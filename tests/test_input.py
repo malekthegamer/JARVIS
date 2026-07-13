@@ -211,6 +211,62 @@ def test_click_tier_broadened_destructive_words(name):
     assert jinput._click_tier(name, False) == "confirm"
 
 
+# ---------- slice 16: vocabulary gaps found by the vision golden-set eval ----------
+# The hard-benchmark measured `unsafe_auto=3/3` on a Print icon (correctly located
+# and labelled, but classified AUTO — JARVIS would print without confirming), and
+# a direct probe showed every non-English destructive verb classifying AUTO.
+# Both are VOCABULARY gaps in the shared classifier, not mechanism gaps.
+
+@pytest.mark.parametrize("name", [
+    # German
+    "Löschen", "Entfernen", "Senden", "Kaufen", "Speichern", "Bezahlen",
+    # French
+    "Supprimer", "Effacer", "Envoyer", "Acheter", "Enregistrer", "Payer",
+    # Spanish / Portuguese / Italian
+    "Eliminar", "Borrar", "Enviar", "Comprar", "Guardar", "Pagar",
+    "Excluir", "Apagar", "Salvar", "Elimina", "Cancella", "Invia",
+    # Dutch / Polish / Turkish
+    "Verwijderen", "Verzenden", "Usuń", "Wyślij", "Sil", "Gönder",
+    # Cyrillic
+    "Удалить", "Отправить", "Купить",
+])
+def test_fastpath_non_english_destructive_names_confirm(name):
+    """A German 'Löschen' button MUST gate exactly like an English 'Delete'.
+    Before slice 16 every one of these classified AUTO — a delete that
+    auto-clicked with no confirmation on any non-English UI."""
+    assert jinput._click_tier(name, False) == "confirm"
+
+
+@pytest.mark.parametrize("name", ["删除", "发送", "购买", "保存", "提交",
+                                  "削除", "送信", "購入", "삭제", "전송"])
+def test_fastpath_cjk_destructive_names_confirm(name):
+    """CJK has no word boundaries, so `\\b` can never match it — these need
+    substring matching. Pinned separately because it's a different mechanism."""
+    assert jinput._click_tier(name, False) == "confirm"
+
+
+@pytest.mark.parametrize("name", ["Print", "Print…", "Print document",
+                                  "Drucken", "Imprimer", "Imprimir", "打印"])
+def test_fastpath_print_is_committal_confirm(name):
+    """MEASURED by the hard eval: the model labels a print icon correctly but
+    called it safe → AUTO. Printing is not undoable (paper/ink), so it is
+    committal and must gate."""
+    assert jinput._click_tier(name, False) == "confirm"
+
+
+@pytest.mark.parametrize("name", [
+    "Binary", "Combine", "Reserved", "Silent mode", "Details", "Open",
+    "Copy", "Undo", "Redo", "Zoom in", "Paste", "Bold", "Cancel", "Close",
+    "Preferences", "Sign in with Google",  # 'sign' IS gated — see below
+])
+def test_fastpath_safe_words_still_auto(name):
+    """No over-gating regression: the broadened vocabulary must not start firing
+    on innocuous controls. ('Sil' must not match 'Silent'; 'Details' must not
+    match any delete verb.)"""
+    expected = "confirm" if name == "Sign in with Google" else "auto"
+    assert jinput._click_tier(name, False) == expected
+
+
 @pytest.mark.parametrize("name", ["Binary", "Combine", "Reserved", "Format Painter"])
 def test_click_tier_no_false_positive_on_substrings(name):
     """Whole-word matching: 'bin' must not fire on 'Binary'/'Combine', and a
@@ -253,14 +309,20 @@ def test_safe_clicks_stay_auto_no_false_positive(monkeypatch):
 
 def test_known_blind_spots_are_documented_not_secretly_working(monkeypatch):
     """HONEST pin of current limitations. If any of these ever flips to
-    'confirm' (e.g. we add i18n or vision classification), update this test —
-    it exists so a real gap can't hide. These are NOT caught today:
-      - non-English labels ('Enviar'=send, 'Löschen'=delete)
-      - icon-only buttons with an empty accessible name
-      - 'OK'/'Yes' outside a UIA Dialog (dialog-scoped to avoid over-prompting)
+    'confirm', update this test — it exists so a real gap can't hide.
+
+    SLICE 16 UPDATE: the i18n blind spot this test used to pin is now CLOSED —
+    'Enviar' and 'Löschen' correctly gate (see
+    test_fastpath_non_english_destructive_names_confirm). The two remaining
+    blind spots below are still real and deliberately NOT caught:
+      - an icon-only button with an EMPTY accessible name (the fast path can't
+        name it; classify_click hands off to the vision fallback instead)
+      - 'OK'/'Yes' outside a UIA Dialog (dialog-scoped, to avoid over-prompting)
     """
-    assert _classify_click_with(monkeypatch, "Enviar")["tier"] == "auto"
-    assert _classify_click_with(monkeypatch, "Löschen")["tier"] == "auto"
+    # closed by slice 16 — kept here so a regression would be loud
+    assert _classify_click_with(monkeypatch, "Enviar")["tier"] == "confirm"
+    assert _classify_click_with(monkeypatch, "Löschen")["tier"] == "confirm"
+    # still-open, deliberate limits
     assert _classify_click_with(monkeypatch, "")["tier"] == "auto"
     assert _classify_click_with(monkeypatch, "OK", is_dialog=False)["tier"] == "auto"
 

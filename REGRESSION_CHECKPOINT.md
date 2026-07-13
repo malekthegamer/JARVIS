@@ -25,16 +25,40 @@ unchanged; each was live-verified separately (wake: `harness_wake.py`; web:
 
 ```
 python -m pytest tests/ -q
-423 passed, 3 warnings in 379.91s (0:06:19)   # exit 0
+489 passed, 3 warnings in 510.08s (0:08:30)   # exit 0
 ```
 
 | Metric | Value |
 |---|---|
-| Passed | **423** |
+| Passed | **489** |
 | Failed | **0** |
 | Skipped | **0** |
-| Duration | **379.91s** (6:19) |
+| Duration | **510.08s** (8:30) |
 | Exit code | **0** |
+
+### Vision-fallback accuracy (slice 16 — the first real metric)
+Measured by `tests/harness_vision_eval.py` against the VisionPad golden set
+(known rects). **Not** part of the suite (it drives the real model); re-run it
+rather than trusting this table.
+
+| Metric | Before | After | |
+|---|---|---|---|
+| Localization hit-rate (easy) | 1.00 | 1.00 | — |
+| Localization hit-rate (hard) | 1.00 | 0.875 | one ambiguous copy/paste glyph (see below) |
+| Tier correctness (easy / hard) | 0.958 / 0.833 | **1.00 / 1.00** | ✅ |
+| **Unsafe-AUTO** (destructive→auto) | **3** | **0** | ✅ the bug that shipped the fix |
+| Confabulation (populated / **blank**) | 0.00 / **0.00** | 0.00 / 0.00 | slice-5's flaw did NOT reproduce |
+| Latency / model calls | 7050 ms / 1 | 7176 ms / 1 | unchanged — no 2nd call added |
+
+- The **crop-verify second pass was deliberately NOT built**: with localization
+  at 1.0 and confabulation at 0.0 (even on a blank canvas), it would have cost
+  **2× latency/calls to fix nothing**.
+- **Residual limitation (documented, not hidden):** *adjacent-icon
+  mis-localization* — vision can LABEL correctly while POINTING one icon over on
+  a dense toolbar (5/5: asked for "paste", answered `'paste content'`, pointed at
+  the neighbouring **copy** icon). A second look does not fix it (perception
+  disagreement, not hallucination). That one case is the entire hard-hit-rate
+  delta; the benchmark glyph was **not** retuned after seeing the result.
 
 **0 skipped is significant:** the gated live tests ran and passed too — real
 Gemini tool-calling, the vision fallback, live chains against real apps, the

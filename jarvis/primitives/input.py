@@ -49,7 +49,44 @@ _DESTRUCTIVE_RE = re.compile(
     r"\b(send|unsend|submit|confirm|delete|erase|wipe|remove|trash|bin|"
     r"save|overwrite|replace|reset|discard|buy|purchase|pay|order|post|"
     r"publish|reply|share|sign|apply|install|uninstall|deactivate|"
-    r"unsubscribe|format|empty)\b")
+    # slice 16: 'print' was MEASURED unsafe by the vision golden-set eval — the
+    # model located and labelled a Print icon correctly but called it safe, so it
+    # classified AUTO. Printing is not undoable (paper/ink) ⇒ committal.
+    r"unsubscribe|format|empty|print|"
+    # ---- slice 16 i18n. Same MECHANISM (whole-word match on the resolved name),
+    # widened VOCABULARY. Before this, "Löschen"/"Supprimer"/"Eliminar" all
+    # classified AUTO — a delete button that auto-clicked on any non-English UI.
+    # Direction is fail-safe: an entry can only move a control toward CONFIRM.
+    r"löschen|loeschen|entfernen|senden|kaufen|speichern|bezahlen|bestellen|drucken|"
+    r"supprimer|effacer|envoyer|acheter|enregistrer|payer|commander|imprimer|"
+    r"eliminar|borrar|enviar|comprar|guardar|pagar|excluir|apagar|salvar|imprimir|"
+    r"elimina|cancella|invia|compra|salva|paga|stampa|"
+    r"verwijderen|verzenden|kopen|opslaan|"
+    r"usuń|usun|wyślij|wyslij|kup|zapisz|"
+    r"sil|gönder|gonder|satın|satin|kaydet|"
+    r"удалить|отправить|купить|сохранить|оплатить|отправка"
+    r")\b")
+
+# CJK/Korean have NO word boundaries, so `\b` can never match them — these are
+# matched as substrings instead (a different mechanism, same vocabulary intent).
+_CJK_DESTRUCTIVE = (
+    "删除", "刪除", "移除", "清空", "发送", "發送", "提交", "购买", "購買",
+    "保存", "儲存", "另存", "打印", "列印", "支付", "付款", "购物",
+    "削除", "送信", "購入", "印刷", "保存",
+    "삭제", "전송", "구매", "저장", "인쇄", "제출",
+)
+
+
+def is_committal_name(name: str) -> bool:
+    """The ONE committal/destructive vocabulary check — English + i18n + CJK.
+
+    Shared by the fast path (_click_tier, on the resolved UIA name) and the vision
+    fallback (vision._tier_for, on the model's label), so the two can never drift
+    apart. Fail-safe: a hit only ever moves a control toward CONFIRM."""
+    n = _norm(name)
+    if _DESTRUCTIVE_RE.search(n):
+        return True
+    return any(w in n for w in _CJK_DESTRUCTIVE)
 _DIALOG_COMMIT_RE = re.compile(r"\b(yes|ok|continue)\b")  # only inside a dialog
 _MODS = {"ctrl", "control", "alt", "shift", "win"}
 _AUTO_KEYS = {"up", "down", "left", "right", "tab", "esc", "escape",
@@ -497,7 +534,7 @@ def _click_tier(element_name: str, is_dialog: bool) -> str:
     n = _norm(element_name)
     if "don't save" in n or "don’t save" in n:
         return "confirm"
-    if _DESTRUCTIVE_RE.search(n):
+    if is_committal_name(element_name):  # English + i18n + CJK (slice 16)
         return "confirm"
     if is_dialog and _DIALOG_COMMIT_RE.search(n):
         return "confirm"

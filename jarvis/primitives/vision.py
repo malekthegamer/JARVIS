@@ -12,15 +12,34 @@ Everything here fails closed and never raises: any capture/model/parse
 problem returns {"ok": False, "reason": ...} so the caller refuses to click
 rather than clicking blind.
 
-KNOWN LIMITATION — confabulation: gemini-3.1-flash-lite will invent a plausible
-control (with confidence 1.0) when asked to find something that ISN'T in the
-image; prompt engineering does not reliably stop this (verified 2026-07). So a
-found:false result is NOT guaranteed for a genuinely-absent target. The
-defenses are therefore downstream, not here: (1) the CONFIRM gate — a
-confabulated destructive/committal action still shows the user its label and
-waits for approval; (2) the execution-time from_point hit-test in
-input.click(point=). Confidence thresholding is useless against this (the model
-is overconfident), so min_confidence only guards the honest low-confidence case.
+MEASURED ACCURACY (slice 16, `tests/harness_vision_eval.py` against the VisionPad
+golden set — re-run it, don't trust this comment):
+
+  localization hit-rate   1.00 easy / 0.88 hard      confabulation  0.00
+  tier correctness        1.00                       calls  1   ~7.1 s/locate
+
+- CONFABULATION did NOT reproduce. The slice-5 note claimed the model invents a
+  control at confidence 1.0 on an absent/blank target and that prompting can't
+  stop it. Measured on a BLANK canvas (the exact condition): 0/9 — it correctly
+  returns found=false. The anti-hallucination clause in _PROMPT appears to hold
+  on the current model. This is one golden set on one model, NOT a proof of
+  absence — keep the downstream defenses.
+- REAL, RESIDUAL LIMITATION — adjacent-icon mis-localization: on a dense toolbar
+  of small similar icons, vision can LABEL correctly while POINTING at the
+  neighbouring control (measured 5/5: asked for "the paste icon" it answered
+  'paste content' but pointed at the adjacent copy icon). A second look does not
+  fix this — it is a perception disagreement, not a hallucination, so the model
+  re-confirms the same answer. Consequence: the CONFIRM modal can name the
+  control you asked for while the click lands one icon over.
+- The defenses are therefore still DOWNSTREAM, not here: (1) the CONFIRM gate —
+  a risky action shows its label and waits for approval; (2) the execution-time
+  from_point hit-test in input.click(point=). NOTE the honest limit of (2): it
+  verifies that SOMETHING clickable is at the point, NOT that the element there
+  matches the label the user approved.
+- Confidence thresholding remains useless against an overconfident model, so
+  min_confidence only guards the honest low-confidence case.
+- Tiering shares ONE vocabulary with the fast path (input.is_committal_name):
+  English + i18n + CJK, so a vision-read "Löschen"/"Print" gates like "Delete".
 """
 from __future__ import annotations
 
@@ -113,7 +132,7 @@ def _parse_vision_json(text: str) -> dict | None:
 def _tier_for(label: str, risk: str, confidence, min_confidence: float) -> str:
     """The union rule (see plan 'the crux'). Any risky signal, or any
     uncertainty, → confirm. AUTO only when clearly identified AND safe."""
-    from jarvis.primitives.input import _DESTRUCTIVE_RE  # one classifier, two sources
+    from jarvis.primitives.input import is_committal_name  # one classifier, two sources
 
     risk = (risk or "").lower()
     if risk in ("destructive", "committal"):
@@ -122,7 +141,9 @@ def _tier_for(label: str, risk: str, confidence, min_confidence: float) -> str:
         return "confirm"
     if confidence is None or confidence < min_confidence:
         return "confirm"  # fail closed on uncertainty — never click an unknown control
-    if _DESTRUCTIVE_RE.search((label or "").lower()):
+    # Slice 16: the SAME vocabulary the fast path uses (English + i18n + CJK), so a
+    # vision-read "Löschen"/"Print" gates exactly like a text-labelled "Delete".
+    if is_committal_name(label or ""):
         return "confirm"
     return "auto"
 
