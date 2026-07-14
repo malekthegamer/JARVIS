@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-11 (fresh full-suite run, after Slice 15 — web search)
-**Tip commit at capture:** see `git log` (Slice 15 stage 3)
+**Checkpoint date:** 2026-07-11 (fresh full-suite run, after Slice 17 — pre-click verification)
+**Tip commit at capture:** `7c469e8` on `main` (Slice 17)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation) and 15 (web
@@ -15,7 +15,8 @@ unchanged; each was live-verified separately (wake: `harness_wake.py`; web:
 `test_web_live.py` incl. refusing a prompt-injected page; search:
 `test_search_live.py` incl. a search→navigate→read chain).
 
-> Previous checkpoints: 2026-07-11 `818a921` (slice 14) 412; `65aa362` (slice 13)
+> Previous checkpoints: `9c7638f` (slice 16) 489; (slice 15) 423;
+> `818a921` (slice 14) 412; `65aa362` (slice 13)
 > 391; `a920313` (slice 12) 374; `3dfefa7` (slice 11) 364; `a4aa50b` (slice 5)
 > 193. All 0 failed / 0 skipped.
 
@@ -228,7 +229,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 423 passed, 0 failed, 0 skipped (~6:20)
+python -m pytest tests/ -q   # expect: 504 passed, 0 failed, 0 skipped (~6:25)
                              # (live-search tests hit the real network: ddgs + a real site)
                              # needs: a real desktop, GEMINI_API_KEY,
                              # TEST_SELF_EMAIL + data/email OAuth token

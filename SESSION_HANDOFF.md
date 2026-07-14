@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-11, after **Slice 16 (vision hardening — measured)**. See `git log --oneline` for the tip.
+> Last updated: 2026-07-11, after **Slice 17 (pre-click point verification)**. See `git log --oneline` for the tip.
 
 ---
 
@@ -9,7 +9,8 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is now codified in **`CLAUDE.md`** (auto-loaded — the discipline below runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with examples).
 
-- **Built & working (slices 1–14):** voice loop, reactive HUD with a live **Action Log + telemetry**, PC-control primitives (launch/close/read-screen/click/type/press), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, a **vision fallback** for icon-only controls, real **multi-step agentic chains** (visible plan, replan, retry guards), **wider primitives** (browser tab list/close, caged file search, volume/media/brightness), **`run_shell`** (denylist + verbatim-command confirm + tree-kill timeout), **encrypted long-term memory**, **`send_email`** (Gmail API `gmail.send`-scope OAuth, verbatim-message confirm, caged attachments), **`set_dnd`/`get_dnd`** (real Settings DND toggle via UIA with readback), a **"hey Jarvis" wake word** (openWakeWord, local, privacy-contracted) + a minimal **system-tray app**, **web/browser automation** (isolated Playwright browser: navigate/read/fill/click, injection-boundaried page reads, cross-origin + committal-click gating), and **`web_search`** (keyless DuckDuckGo/ddgs; results reuse the same untrusted-data boundary; the model chains search→navigate→read). **423 tests passing (0 failed, 0 skipped).**
+- **Built & working (slices 1–17):** voice loop, reactive HUD with a live **Action Log + telemetry**, PC-control primitives (launch/close/read-screen/click/type/press), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, a **vision fallback** for icon-only controls, real **multi-step agentic chains** (visible plan, replan, retry guards), **wider primitives** (browser tab list/close, caged file search, volume/media/brightness), **`run_shell`** (denylist + verbatim-command confirm + tree-kill timeout), **encrypted long-term memory**, **`send_email`** (Gmail API `gmail.send`-scope OAuth, verbatim-message confirm, caged attachments), **`set_dnd`/`get_dnd`** (real Settings DND toggle via UIA with readback), a **"hey Jarvis" wake word** (openWakeWord, local, privacy-contracted) + a minimal **system-tray app**, **web/browser automation** (isolated Playwright browser: navigate/read/fill/click, injection-boundaried page reads, cross-origin + committal-click gating), **`web_search`** (keyless DuckDuckGo/ddgs; results reuse the same untrusted-data boundary; the model chains search→navigate→read), and a **measured, hardened vision path** (a real accuracy metric + golden set; i18n/CJK committal vocabulary shared with the fast path; **pre-click point verification** so the control you approve is the control that gets clicked). **504 tests passing (0 failed, 0 skipped).**
+- **Two durable measurement harnesses now exist** (they are the point, not an afterthought): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Vision claims are **numbers you can re-run**, not vibes — slice 16's measurement killed its own approved centerpiece, and slice 17's caught a 19.6% false-refusal bug in the first cut.
 - **Live app right now:** `python run.py` serves a HUD at `http://127.0.0.1:8000` (push-to-talk trigger). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL` (live-email-test recipient), plus the Gmail OAuth artifacts under `data/email/`. Wake word needs NO key (openWakeWord is local).
 - **All 4 spec acceptance scripts (§1.6) pass:** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email Sam ✅ (slice 11), #4 brightness+DND ✅ (slice 12) — with the honest caveat that brightness is uncontrollable on this monitor (no DDC/CI, hardware) so the agent reports it truthfully; DND is readback-verified. Status tracked in `REGRESSION_CHECKPOINT.md`.
 - **Not built yet:** inbox reading/triage, and memory refinements (semantic retrieval, pinned prefs). See §7.
@@ -167,7 +168,7 @@ e:\J.A.R.V.I.S\
     static/                 ← the HUD (vanilla JS): index.html, hud.css, hud.js, orb.js, fonts/
                               chain strip, Action Log + telemetry panels, monospace shell-confirm box
 
-  tests/                    ← 423 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                    ← 504 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -280,6 +281,6 @@ Also deferred: ElevenLabs/Claude/OpenAI/Ollama/Whisper providers (they sit in `l
 
 ## 8. First moves in the new session
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **423** green (0 failed, 0 skipped). If one live-UIA test flakes under load, re-run it in isolation before treating it as a regression.
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **504** green (0 failed, 0 skipped). If one live-UIA test flakes under load, re-run it in isolation before treating it as a regression.
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status (all now passing).
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode.
