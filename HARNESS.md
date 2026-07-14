@@ -113,6 +113,38 @@ asked.
   "is it playing", a volume readback, a tab count — not the model's own claim.
   Restore state afterward (volume, kill spawned apps, temp cleanup).
 
+## 6b. MEASURE — when "better" is a claim, make it a number (slices 16–17)
+For anything probabilistic (vision, a model's judgment, a heuristic), "hardened"
+is meaningless until it's a metric. **Build the metric BEFORE the fix — it may
+tell you not to build the fix.**
+
+- **Golden set with known ground truth.** Construct a surface *you* control, so
+  the right answer is not a matter of opinion: `tests/harness_visionpad.py` draws
+  controls on a canvas (⇒ no UIA elements, so the vision path is FORCED) and
+  reports their exact rects. Score against those rects, not against vibes.
+- **Escalate difficulty until it breaks.** An easy benchmark says "everything is
+  perfect" and teaches nothing. VisionPad has `easy` → `--blank` → `--hard`
+  (dense 40px toolbar, look-alike save/save-as, faint buttons) → `--tight`
+  (touching icons). The *easy* set showed 1.0 across the board; the *hard* set
+  immediately found a Print icon classified AUTO (would print with no confirm).
+- **ALWAYS report the COST metric next to the win.** A verifier that refuses
+  everything has a perfect catch-rate and is useless. So slice 17 reports
+  **false-refusal rate** beside catch-rate, and the bottom-line **wrong-click
+  rate**. The first cut looked great on catch-rate and was quietly refusing 19.6%
+  of *legitimate* clicks — only the cost metric exposed it.
+- **Baseline first, then the change, same cases, N reps** (live models are
+  stochastic — report rates, not single runs). Paste both tables verbatim.
+- **NEVER retune the benchmark after seeing the result.** Slice 16's copy/paste
+  glyph was genuinely ambiguous and dragged the score down; it was left alone and
+  the number reported. Tuning the test to flatter the code is how benchmarks get
+  gamed.
+- **Let the measurement overrule the plan.** Slice 16's approved centerpiece (a
+  crop-verify 2nd model call) was **not built**: measured confabulation was 0.0
+  even on a blank canvas, so it would have cost 2× latency to fix nothing. Say so
+  and ship the thing the numbers *did* justify.
+- Metrics harnesses are `harness_`-prefixed (not pytest-collected) because they
+  drive the real model: `harness_vision_eval.py`, `harness_click_verify_eval.py`.
+
 ## 7. Report — honestly
 End with: Objective / Status / Stages / Tests (with command) / Hostile pass /
 **Plan deviations (named)** / **Known gaps** / Next steps.
@@ -132,6 +164,18 @@ vision check (if visual) → **then** commit. Message body = *why* + any deviati
   to a diagnosis. (Ruled out memory-store pollution by probing it was empty,
   *then* found the real cause.)
 - **Root-cause over dismiss**: investigate surprises; don't wave them away.
+- **An untested inference must NEVER be written down as a fact.** Slice 16
+  recorded "a second look does not fix this — it's a perception disagreement, not
+  a hallucination" in `vision.py`, the checkpoint, the handoff *and* memory. It
+  was never tested. Slice 17 measured it and it was **false** (a *non-leading*
+  crop re-read names the control correctly 3/3) — a whole slice was nearly
+  mis-scoped by a confident guess that had hardened into documentation. If you
+  didn't run it, mark it "believed", not "measured".
+- **Ask the leading-question trap**: how you *phrase* a model's question changes
+  its answer. "Find the paste icon" (leading, whole window) biases it into
+  labelling the wrong glyph 'paste'; "what IS this?" (non-leading, isolated crop)
+  gets the truth. When a model seems confidently wrong, re-ask it neutrally
+  before concluding it *can't* know.
 - **Live testing finds what unit tests miss**: the biggest bugs surfaced only by
   running against real apps + the real model (a library's actual API shape, a
   "set" call that silently no-ops, an app that retitles its own window). When a
