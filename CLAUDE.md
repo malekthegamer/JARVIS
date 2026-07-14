@@ -48,7 +48,7 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 489 as of slice 16; it only grows.)
+  failure with better manners. (Baseline N = 504 as of slice 17; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
   Chrome, drives a headless Playwright Chromium against local fixtures, sends
   live-test email to `TEST_SELF_EMAIL`, briefly toggles real Do Not Disturb

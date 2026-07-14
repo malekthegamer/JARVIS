@@ -89,6 +89,124 @@ def test_no_upscale_small_image():
     assert scale == 1.0
 
 
+# ======================================================================
+# SLICE 17 — pre-click point verification.
+#
+# Slice 16 measured vision LABELLING a control correctly while POINTING at its
+# neighbour (asked "paste", answered 'paste content', pointed at the copy icon).
+# So the CONFIRM modal can name what you approved while the click lands one icon
+# over. verify_point is the last check before the click fires: it asks what is
+# ACTUALLY at the point, and refuses if that isn't what was approved.
+#
+# All seams mocked — no real model, no real UIA.
+# ======================================================================
+
+def _mock_uia(monkeypatch, name):
+    """UIA from_point returns an element with this accessible name ('' = the
+    canvas/icon case, where UIA is blind and the crop re-read must run)."""
+    monkeypatch.setattr(jv, "_uia_name_at", lambda point: name)
+
+
+def _mock_verify_model(monkeypatch, payload):
+    """The grounded crop re-read seam. `payload` is the parsed dict or None."""
+    calls = {"n": 0}
+
+    def fake(png, approved_label):
+        calls["n"] += 1
+        return payload
+    monkeypatch.setattr(jv, "_call_verify_json", fake)
+    return calls
+
+
+def _verify(point=(300, 400), window="IconPad", approved="paste content"):
+    return jv.verify_point(point, window, approved)
+
+
+def test_verify_uia_named_match_allows_without_model_call(monkeypatch):
+    """When UIA CAN name the element (real apps), the check is free — the model
+    is never called."""
+    _mock_uia(monkeypatch, "Paste content")
+    calls = _mock_verify_model(monkeypatch, {"actual_label": "x", "matches": False})
+    r = _verify(approved="paste content")
+    assert r["verified"] is True, r
+    assert calls["n"] == 0, "a UIA name match must skip the model call entirely"
+
+
+def test_verify_uia_named_mismatch_refuses(monkeypatch):
+    _mock_uia(monkeypatch, "Copy")
+    _mock_verify_model(monkeypatch, None)
+    r = _verify(approved="paste content")
+    assert r["verified"] is False
+    assert "copy" in r["actual_label"].lower()
+
+
+def test_verify_crop_match_allows(monkeypatch):
+    _mock_grab(monkeypatch)
+    _mock_uia(monkeypatch, "")  # canvas: UIA is blind
+    _mock_verify_model(monkeypatch, {"actual_label": "paste content", "matches": True})
+    r = _verify(approved="paste content")
+    assert r["verified"] is True, r
+
+
+def test_verify_crop_mismatch_refuses(monkeypatch):
+    """THE measured bug: approved 'paste content', but 'Copy' is actually there."""
+    _mock_grab(monkeypatch)
+    _mock_uia(monkeypatch, "")
+    _mock_verify_model(monkeypatch, {"actual_label": "Copy", "matches": False})
+    r = _verify(approved="paste content")
+    assert r["verified"] is False, r
+    assert r["actual_label"] == "Copy"
+    assert "paste content" in r["reason"] and "Copy" in r["reason"]
+
+
+def test_verify_risk_escalation_refuses(monkeypatch):
+    """Independent cross-check: even if the model SAYS it matches, a benign
+    approval must never be waved through onto a destructive control."""
+    _mock_grab(monkeypatch)
+    _mock_uia(monkeypatch, "")
+    _mock_verify_model(monkeypatch, {"actual_label": "delete item", "matches": True})
+    r = _verify(approved="zoom in")
+    assert r["verified"] is False, r
+    assert "delete item" in r["reason"]
+
+
+def test_verify_model_unavailable_fails_closed(monkeypatch):
+    _mock_grab(monkeypatch)
+    _mock_uia(monkeypatch, "")
+    _mock_verify_model(monkeypatch, None)  # unparseable / model down
+    r = _verify()
+    assert r["verified"] is False
+
+
+def test_verify_grab_failure_fails_closed(monkeypatch):
+    _mock_uia(monkeypatch, "")
+    monkeypatch.setattr(jv, "_grab_window", lambda w: None)
+    _mock_verify_model(monkeypatch, {"actual_label": "paste", "matches": True})
+    r = _verify()
+    assert r["verified"] is False
+
+
+def test_verify_disabled_setting_passes_through(monkeypatch):
+    """Kill switch: verification off → allow (today's behaviour), no model call."""
+    from jarvis.core.settings_store import settings
+    settings.set("vision.verify_click_point", False, persist=False)
+    calls = _mock_verify_model(monkeypatch, None)
+    try:
+        r = _verify()
+    finally:
+        settings.set("vision.verify_click_point", True, persist=False)
+    assert r["verified"] is True
+    assert calls["n"] == 0
+
+
+@pytest.mark.parametrize("point", [(0, 0), (399, 399), (200, 200)])
+def test_crop_around_point_is_clamped_to_image(point):
+    img = np.zeros((400, 400, 3), dtype=np.uint8)
+    box = jv._crop_around_point(img, point, pad=60)
+    x0, y0, x1, y1 = box
+    assert 0 <= x0 < x1 <= 400 and 0 <= y0 < y1 <= 400, box
+
+
 # ---------- orchestrator (both seams mocked) ----------
 
 def _mock_grab(monkeypatch, rect=(100, 200, 500, 600), title="IconPad"):

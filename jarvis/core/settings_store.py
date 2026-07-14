@@ -42,6 +42,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,          # kill switch; off -> fast-path failure fails as before
         "max_edge_px": 1024,      # downscale the window crop's longest edge to this
         "min_confidence": 0.5,    # below this, fail closed to CONFIRM (never click blind)
+        # Slice 17 — pre-click point verification. Vision can label a control
+        # correctly but POINT at its neighbour (measured slice 16), so the CONFIRM
+        # modal could name what you approved while the click landed one icon over.
+        # Before a vision click fires, re-check what is ACTUALLY at the point:
+        # free via UIA name where one exists, else a grounded crop re-read.
+        # Mismatch -> refuse, never click. Vision path only; fast text path untouched.
+        "verify_click_point": True,
+        "verify_pad_px": 46,      # crop half-size; enough context to ID a glyph,
+                                  # still centred on ONE control (measured: 34 was
+                                  # too tight — isolated crude icons got misread)
+        "verify_upscale": 6,      # zoom the crop so a 40px icon is legible
     },
     "telemetry": {
         # HUD system readouts (spec §2.3). Sampled server-side ONLY while a

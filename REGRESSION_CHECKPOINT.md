@@ -25,15 +25,15 @@ unchanged; each was live-verified separately (wake: `harness_wake.py`; web:
 
 ```
 python -m pytest tests/ -q
-489 passed, 3 warnings in 510.08s (0:08:30)   # exit 0
+504 passed, 3 warnings in 385.22s (0:06:25)   # exit 0
 ```
 
 | Metric | Value |
 |---|---|
-| Passed | **489** |
+| Passed | **504** |
 | Failed | **0** |
 | Skipped | **0** |
-| Duration | **510.08s** (8:30) |
+| Duration | **385.22s** (6:25) |
 | Exit code | **0** |
 
 ### Vision-fallback accuracy (slice 16 — the first real metric)
@@ -50,15 +50,38 @@ rather than trusting this table.
 | Confabulation (populated / **blank**) | 0.00 / **0.00** | 0.00 / 0.00 | slice-5's flaw did NOT reproduce |
 | Latency / model calls | 7050 ms / 1 | 7176 ms / 1 | unchanged — no 2nd call added |
 
-- The **crop-verify second pass was deliberately NOT built**: with localization
-  at 1.0 and confabulation at 0.0 (even on a blank canvas), it would have cost
-  **2× latency/calls to fix nothing**.
-- **Residual limitation (documented, not hidden):** *adjacent-icon
-  mis-localization* — vision can LABEL correctly while POINTING one icon over on
-  a dense toolbar (5/5: asked for "paste", answered `'paste content'`, pointed at
-  the neighbouring **copy** icon). A second look does not fix it (perception
-  disagreement, not hallucination). That one case is the entire hard-hit-rate
-  delta; the benchmark glyph was **not** retuned after seeing the result.
+- The **whole-window crop-verify pass was deliberately NOT built**: with
+  localization at 1.0 and confabulation at 0.0 (even on a blank canvas), it would
+  have cost **2× latency/calls to fix nothing**.
+- **Adjacent-icon mis-localization** — vision can LABEL correctly while POINTING
+  one icon over on a dense toolbar (asked for "paste", answered `'paste content'`,
+  pointed at the neighbouring **copy** icon). That one case is the entire
+  hard-hit-rate delta; the benchmark glyph was **not** retuned after seeing the
+  result. **CLOSED in slice 17** — see below.
+
+> ⚠ **CORRECTION (slice 17).** Slice 16 recorded here that "a second look does not
+> fix it (perception disagreement, not hallucination)". That was an **untested
+> inference and it is FALSE**. A *non-leading* re-read of a tight crop at the
+> actual point names it correctly ("Copy", 3/3). The original locate asks a
+> *leading* question over the whole window, which biases the label. That
+> distinction is the mechanism slice 17 ships.
+
+### Pre-click point verification (slice 17 — closes the above)
+`tests/harness_click_verify_eval.py`, 48 samples over the `--hard` and `--tight`
+(touching-icon) toolbars. A verifier that refuses everything would have a perfect
+catch rate and be useless, so **both** rates are reported.
+
+| Metric | Before (off) | After (on) | |
+|---|---|---|---|
+| **Wrong-click rate** (mis-localized **and clicked**) | **0.042** | **0.000** | ✅ the bottom line |
+| Catch rate (mis-localized → refused) | — | **1.00** | ✅ |
+| **False-refusal rate** (correct click wrongly refused) | 0.000 | **0.023** | the honest cost |
+| Latency / model calls (vision path only) | 4344 ms / 1 | 8763 ms / 2 | ~2×; 0 extra when UIA names the control |
+
+Default **ON**: a false refusal fails closed with an honest message and the model
+can re-observe; a wrong click silently hits a control the user never approved
+(possibly a destructive neighbour). Trading 2.3% honest refusals for 0% wrong
+clicks is the right side of that asymmetry. The fast text path is untouched.
 
 **0 skipped is significant:** the gated live tests ran and passed too — real
 Gemini tool-calling, the vision fallback, live chains against real apps, the

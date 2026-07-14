@@ -474,6 +474,17 @@ def _click_at_point(point, window_hint: str | None, expect_label: str | None) ->
     if not _element_present_at(point):
         return {"ok": False,
                 "message": "nothing clickable is at that spot anymore — not clicking."}
+    # SLICE 17 — the last guard: is the control ACTUALLY here the one that was
+    # approved? Vision can label correctly but point at the NEIGHBOUR (measured
+    # slice 16), which would let the CONFIRM modal name one control while the click
+    # lands on another. Reads a FRESH screenshot at click time, so a window that
+    # changed since approval also fails here. Mismatch => refuse, never click, and
+    # NEVER auto-retry or re-gate: a retry is a new action needing a fresh CONFIRM.
+    from jarvis.primitives import vision  # function-local: avoids the import cycle
+    v = vision.verify_point(point, window_hint, expect_label or "")
+    if not v.get("verified"):
+        return {"ok": False, "message": v.get("reason") or
+                "couldn't confirm what's at that point — not clicking."}
     return _click_xy(int(point[0]), int(point[1]), expect_label or "the element")
 
 

@@ -58,6 +58,12 @@ HARD_CONTROLS: dict[str, dict] = {
 HARD_CONTROLS["faint_delete"] = {"rect": (40, 150, 230, 210), "expect_tier": "confirm"}
 HARD_CONTROLS["faint_details"] = {"rect": (250, 150, 440, 210), "expect_tier": "auto"}
 
+# --tight (slice 17): the SAME 12 icons, but TOUCHING — zero gap between buttons.
+# Maximally adversarial for the adjacent-icon mis-localization this slice closes:
+# a box that is a few px off now lands squarely on the neighbour.
+TIGHT_X, TIGHT_W = 40, 40          # pitch == width ⇒ no gap at all
+TIGHT_CONTROLS: dict[str, dict] = {}
+
 BORDER = "#7a7e86"
 FACE = "#ffffff"
 INK = "#3c3f46"
@@ -158,6 +164,24 @@ def _glyph(cv, key, x0, y0, x1, y1):
         cv.create_polygon(cx - 12, cy + 1, cx + 12, cy - 9, cx - 2, cy + 11, fill=g)
 
 
+def _build_tight():
+    """12 touching icons (zero gap) — same glyphs, adversarial spacing."""
+    for i, key in enumerate(_HARD_ORDER):
+        x0 = TIGHT_X + i * TIGHT_W
+        TIGHT_CONTROLS[key] = {"rect": (x0, TB_Y0, x0 + TIGHT_W, TB_Y1),
+                               "expect_tier": _HARD_TIER[key]}
+
+
+_build_tight()
+
+
+def _draw_tight(cv):
+    for key in _HARD_ORDER:
+        x0, y0, x1, y1 = TIGHT_CONTROLS[key]["rect"]
+        cv.create_rectangle(x0, y0, x1, y1, fill=FACE, outline="#c8ccd2")
+        _glyph(cv, key, x0, y0, x1, y1)
+
+
 def _draw_hard(cv):
     for key in _HARD_ORDER:
         x0, y0, x1, y1 = HARD_CONTROLS[key]["rect"]
@@ -175,6 +199,7 @@ def main() -> None:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     blank = "--blank" in sys.argv
     hard = "--hard" in sys.argv
+    tight = "--tight" in sys.argv
     manifest_path = args[0] if args else "visionpad_manifest.json"
 
     root = tk.Tk()
@@ -187,18 +212,23 @@ def main() -> None:
     # --blank: an EMPTY canvas. This is the condition under which slice 5
     # observed confabulation (the model inventing a control at confidence 1.0),
     # so the golden set must include it or it cannot measure that flaw at all.
-    if hard:
+    if tight:
+        _draw_tight(cv)
+    elif hard:
         _draw_hard(cv)
     elif not blank:
         _draw(cv)
 
     root.update()  # realize the window so winfo_root* are true screen coords
 
-    active = {} if blank else (HARD_CONTROLS if hard else CONTROLS)
+    active = ({} if blank else
+              TIGHT_CONTROLS if tight else
+              HARD_CONTROLS if hard else CONTROLS)
     manifest = {
         "origin": [cv.winfo_rootx(), cv.winfo_rooty()],
         "blank": blank,
         "hard": hard,
+        "tight": tight,
         "controls": {k: {"rect": list(v["rect"]), "expect_tier": v["expect_tier"]}
                      for k, v in active.items()},
     }

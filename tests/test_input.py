@@ -211,6 +211,75 @@ def test_click_tier_broadened_destructive_words(name):
     assert jinput._click_tier(name, False) == "confirm"
 
 
+# ---------- slice 17: pre-click point verification (vision path only) ----------
+# The measured bug: vision labels a control correctly but points at its NEIGHBOUR,
+# so the CONFIRM modal names what you approved while the click lands one icon over.
+# _click_at_point must now refuse rather than click an unverified control.
+
+def _stub_click_guards(monkeypatch, click_spy):
+    """Let _click_at_point reach the verification step: window/focus/bounds/
+    element-present all pass; _click_xy is a spy that records if it ever fires."""
+    class FakeRect:
+        left, top, right, bottom = 0, 0, 1000, 1000
+
+    class FakeWin:
+        def rectangle(self):
+            return FakeRect()
+
+    monkeypatch.setattr(jinput, "_target_window", lambda h: (FakeWin(), "IconPad"))
+    monkeypatch.setattr(jinput, "_acquire_focus", lambda w, t: True)
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda t: True)
+    monkeypatch.setattr(jinput, "_element_present_at", lambda p: True)
+    monkeypatch.setattr(jinput, "_click_xy",
+                        lambda x, y, label: click_spy.append((x, y, label))
+                        or {"ok": True, "message": f"Clicked {label}."})
+
+
+def test_click_at_point_refuses_on_mismatch_and_never_clicks(monkeypatch):
+    """THE guarantee: a mis-localized point is NOT clicked. The spy proves no
+    click was ever sent — refusing must happen BEFORE the mouse moves."""
+    from jarvis.primitives import vision as jv
+    clicks = []
+    _stub_click_guards(monkeypatch, clicks)
+    monkeypatch.setattr(jv, "verify_point",
+                        lambda point, hint, label: {
+                            "verified": False, "actual_label": "Copy",
+                            "reason": "you approved 'paste content', but 'Copy' is "
+                                      "the control at that point — not clicking"})
+    r = jinput._click_at_point((500, 500), "IconPad", "paste content")
+    assert r["ok"] is False, r
+    assert clicks == [], "a mis-localized click must NEVER reach the mouse"
+    assert "Copy" in r["message"] and "paste content" in r["message"]
+
+
+def test_click_at_point_clicks_when_verified(monkeypatch):
+    from jarvis.primitives import vision as jv
+    clicks = []
+    _stub_click_guards(monkeypatch, clicks)
+    monkeypatch.setattr(jv, "verify_point",
+                        lambda point, hint, label: {
+                            "verified": True, "actual_label": "paste content",
+                            "reason": "confirmed"})
+    r = jinput._click_at_point((500, 500), "IconPad", "paste content")
+    assert r["ok"] is True, r
+    assert len(clicks) == 1 and clicks[0][:2] == (500, 500)
+
+
+def test_fast_text_path_does_not_verify(monkeypatch):
+    """Out of scope by design: the fast text path must not gain a model call or
+    change behaviour. verify_point raises if it is ever touched from there."""
+    from jarvis.primitives import vision as jv
+    monkeypatch.setattr(jv, "verify_point",
+                        lambda *a, **k: pytest.fail("fast path must not verify"))
+    # a text click resolves by name and goes through the non-point branch
+    monkeypatch.setattr(jinput, "resolve_target",
+                        lambda d, window_hint=None: {
+                            "ok": True, "element_name": "Bold", "window_title": "App",
+                            "window_is_dialog": False, "candidates": []})
+    info = jinput.classify_click({"target": "bold", "window": "App"})
+    assert info["tier"] == "auto"
+
+
 # ---------- slice 16: vocabulary gaps found by the vision golden-set eval ----------
 # The hard-benchmark measured `unsafe_auto=3/3` on a Print icon (correctly located
 # and labelled, but classified AUTO — JARVIS would print without confirming), and
@@ -433,11 +502,19 @@ class _FakeWin:
         pass
 
 
-def _wire_point_click(monkeypatch, rect, foreground=True, element=True):
+def _wire_point_click(monkeypatch, rect, foreground=True, element=True, verified=True):
     monkeypatch.setattr(jinput, "_target_window", lambda wh: (_FakeWin(rect), "App"))
     monkeypatch.setattr(jinput, "_acquire_focus", lambda w, t, attempts=4: True)
     monkeypatch.setattr(jinput, "_refocus_foreground", lambda t: foreground)
     monkeypatch.setattr(jinput, "_element_present_at", lambda p: element)
+    # Slice 17 added a final pre-click identity check. These slice-5 tests assert
+    # the *guard chain* around the click, so the new guard is stubbed as passing;
+    # its own refuse/allow behaviour is covered by the slice-17 tests above.
+    from jarvis.primitives import vision as _jv
+    monkeypatch.setattr(_jv, "verify_point",
+                        lambda point, hint, label: {
+                            "verified": verified, "actual_label": label or "",
+                            "reason": "stubbed"})
 
 
 def test_click_point_rejects_out_of_bounds(monkeypatch):
@@ -456,6 +533,20 @@ def test_click_point_aborts_on_focus_loss(monkeypatch):
     _wire_point_click(monkeypatch, _FakeRect(0, 0, 1000, 1000), foreground=False)
     out = jinput.click("x", window_hint="App", point=(50, 50))
     assert out["ok"] is False
+
+
+def test_click_point_rejects_when_verification_refuses(monkeypatch):
+    """Slice 17, inside the real click() path: even with every other guard
+    passing, an unverified point is refused and the mouse never moves."""
+    import sys, types
+    _wire_point_click(monkeypatch, _FakeRect(0, 0, 1000, 1000), verified=False)
+    clicked = {}
+    fake = types.SimpleNamespace(moveTo=lambda x, y: clicked.update(mv=(x, y)),
+                                 click=lambda x, y: clicked.update(cl=(x, y)))
+    monkeypatch.setitem(sys.modules, "pydirectinput", fake)
+    out = jinput.click("x", window_hint="App", point=(50, 60), expect_label="paste")
+    assert out["ok"] is False
+    assert clicked == {}, "refused click must never reach the mouse"
 
 
 def test_click_point_success_clicks_coords(monkeypatch):
