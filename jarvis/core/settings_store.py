@@ -109,6 +109,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,
         "max_results": 5,
     },
+    "audit": {
+        # Persistent audit log (slice 18) — every execute() call + memory
+        # mutation, durable JSONL at data/audit/ (plaintext envelope +
+        # DPAPI-encrypted args/result). Rotated files are never auto-deleted.
+        "enabled": True,
+        "max_file_mb": 5,           # rotate audit.jsonl aside at this size
+        "result_max_chars": 2000,   # payload result cap (args never truncated)
+    },
     "history_max_messages": 40,
 }
 
