@@ -103,8 +103,12 @@ def test_live_failing_step_hits_budget_not_infinite(event_log, monkeypatch):
     ends = [e for e in event_log if e["type"] == "chain_end"]
     assert len(ends) == 1, ends
     # Any bounded terminal state proves the guards fired and it did NOT loop:
-    # budget/exhausted (retry guards), done (gave up honestly), or cancelled
-    # (it tried a gated tool and the unapproved gate stopped it).
-    assert ends[0]["status"] in ("budget", "exhausted", "done", "cancelled"), ends
+    # budget/exhausted (retry guards), done (gave up honestly), cancelled
+    # (it tried a gated tool and the unapproved gate stopped it), or error
+    # (a transient provider fault mid-chain ended the run honestly — the
+    # slice-12 doctrine already applied to test_email_live; observed live at
+    # the slice-19 checkpoint, confirmed nondeterministic by isolated re-run).
+    assert ends[0]["status"] in ("budget", "exhausted", "done", "cancelled",
+                                 "error"), ends
     print(f"[live] hostile: {len(executed)} executions, "
           f"end={ends[0]['status']}, {took:.0f}s, reply: {reply[:160]}")

@@ -69,3 +69,56 @@ def test_live_remember_recall_and_no_pollution(tmp_path):
     assert "coffee" not in reply2.lower(), reply2
 
     assert b"black" not in path.read_bytes()  # encrypted at rest
+
+
+def test_live_paraphrase_retrieval_e2e(tmp_path):
+    """Slice 19: a PURE-PARAPHRASE query (zero shared content tokens) surfaces
+    the memory through the real semantic path and the real brain. Gated on
+    the API key + the local embedding model (both part of this machine's
+    configured environment, like the Gmail token)."""
+    from jarvis import config
+    from jarvis.core import embedder
+    if not config.get_api_key("gemini"):
+        pytest.skip("GEMINI_API_KEY not configured")
+    if not embedder.available():
+        pytest.skip("embedding model not set up (python -m jarvis.core.embedder --setup)")
+    from jarvis.brain import JarvisBrain
+    from jarvis.core.memory import MemoryStore
+    from jarvis.core.memory import _tokens
+    path = tmp_path / "sem.bin"
+
+    fact = "I take my coffee black with no sugar"
+    query = "how do I like my hot morning drink prepared?"
+    assert not set(_tokens(query)) & set(_tokens(fact)), \
+        "test invariant: the query must share ZERO content tokens with the fact"
+
+    b1 = JarvisBrain()
+    b1.memory = MemoryStore(path)
+    b1.memory.add(fact)
+    reply = b1.think(query)
+    assert "black" in reply.lower(), \
+        f"semantic retrieval should have surfaced the coffee fact; reply: {reply}"
+
+
+def test_live_pinned_pref_applies_unprompted_topic(tmp_path):
+    """Slice 19: a pinned preference shapes the reply on a COMPLETELY
+    unrelated request — the always-on block works end-to-end."""
+    from jarvis import config
+    if not config.get_api_key("gemini"):
+        pytest.skip("GEMINI_API_KEY not configured")
+    from jarvis.brain import JarvisBrain
+    from jarvis.core.memory import MemoryStore
+    path = tmp_path / "pin.bin"
+
+    b1 = JarvisBrain()
+    b1.memory = MemoryStore(path)
+    b1.think("From now on, always address me as Captain — remember that permanently.")
+    stored = MemoryStore(path).all()
+    assert any(r.get("pinned") for r in stored), \
+        f"the model should have stored a PINNED memory; store={stored}"
+
+    b2 = JarvisBrain()
+    b2.memory = MemoryStore(path)
+    reply = b2.think("what's two plus two?")
+    assert "captain" in reply.lower(), \
+        f"the pinned pref should shape an unrelated reply; got: {reply}"
