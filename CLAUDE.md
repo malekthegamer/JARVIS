@@ -48,7 +48,7 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 504 as of slice 17; it only grows.)
+  failure with better manners. (Baseline N = 530 as of slice 18; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
   Chrome, drives a headless Playwright Chromium against local fixtures, sends
   live-test email to `TEST_SELF_EMAIL`, briefly toggles real Do Not Disturb
@@ -68,6 +68,12 @@ python -m pytest tests/ -q
 - A failing live/model test: re-run it in isolation and read the actual
   assertion. Confirm regression vs. nondeterminism before dismissing it — do not
   call something flaky without evidence.
+- **Never run two full live suites back-to-back**: the second exhausts the
+  free-tier Gemini DAILY quota (429 RESOURCE_EXHAUSTED; resets midnight
+  Pacific / 07:00 UTC) and live tests fail in clusters. A single probe call
+  succeeding is a token trickle, NOT headroom — burst-probe (5 rapid calls)
+  before believing quota is back. The deterministic core is unaffected and
+  can be re-run freely.
 
 ---
 

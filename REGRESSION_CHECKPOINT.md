@@ -5,18 +5,20 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-11 (fresh full-suite run, after Slice 17 — pre-click verification)
-**Tip commit at capture:** `7c469e8` on `main` (Slice 17)
+**Checkpoint date:** 2026-07-15 (fresh full-suite run, after Slice 18 — audit log + dry-run)
+**Tip commit at capture:** `cbc17d8` on `main` (Slice 18 Stage 3)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
-by a documented live run. Slices 13 (wake+tray), 14 (web automation) and 15 (web
-search) add capability outside the spec §1.6 four-script set, so that table is
-unchanged; each was live-verified separately (wake: `harness_wake.py`; web:
-`test_web_live.py` incl. refusing a prompt-injected page; search:
-`test_search_live.py` incl. a search→navigate→read chain).
+by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
+search) and 18 (audit log + dry-run) add capability outside the spec §1.6
+four-script set, so that table is unchanged; each was live-verified separately
+(wake: `harness_wake.py`; web: `test_web_live.py` incl. refusing a
+prompt-injected page; search: `test_search_live.py` incl. a
+search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
+dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: `9c7638f` (slice 16) 489; (slice 15) 423;
-> `818a921` (slice 14) 412; `65aa362` (slice 13)
+> Previous checkpoints: `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
+> (slice 15) 423; `818a921` (slice 14) 412; `65aa362` (slice 13)
 > 391; `a920313` (slice 12) 374; `3dfefa7` (slice 11) 364; `a4aa50b` (slice 5)
 > 193. All 0 failed / 0 skipped.
 
@@ -26,16 +28,44 @@ unchanged; each was live-verified separately (wake: `harness_wake.py`; web:
 
 ```
 python -m pytest tests/ -q
-504 passed, 3 warnings in 385.22s (0:06:25)   # exit 0
+530 passed, 3 warnings in 384.48s (0:06:24)   # exit 0
 ```
 
 | Metric | Value |
 |---|---|
-| Passed | **504** |
+| Passed | **530** |
 | Failed | **0** |
 | Skipped | **0** |
-| Duration | **385.22s** (6:25) |
+| Duration | **384.48s** (6:24) |
 | Exit code | **0** |
+
+> **Run note (honest):** capturing this checkpoint took FOUR full-suite
+> attempts, all failures provider-side. Run 1: 529/530 — the one failure was
+> `test_email_live::test_live_script3_invoice_chain` on a live Gemini
+> rate-limit before any tool call (passed in isolation immediately after —
+> the documented flake profile of exactly that test). Run 2, started straight
+> after run 1: 5 live failures, all 429 RESOURCE_EXHAUSTED — two consecutive
+> live suites exhaust the free-tier Gemini daily quota. Run 3, started after
+> a SINGLE probe call succeeded: 12 live failures — one call passing is a
+> token trickle, not headroom; burst-probe (5 rapid calls) before believing
+> quota is back. Run 4 (recorded above): clean, on fresh post-reset quota
+> (resets midnight Pacific / 07:00 UTC) as the only consumer. The
+> deterministic core never failed once across all four attempts.
+
+### Persistent audit log + dry-run (slice 18 — spec §1.4's second half)
+Every `primitives.execute()` call — approved, declined, timed-out,
+superseded, BLOCKED, unknown-tool, crashed — plus `remember`/`forget`
+mutations now lands one durable JSONL line in `data/audit/` (plaintext
+envelope: ts/chain/tool/tier/gate/status/dry_run; DPAPI-encrypted
+args+result payload; rotation renames aside, never deletes; dump via
+`python -m jarvis.core.audit`). Gate outcomes are recorded from the raw
+`Decision.reason`, red-checked (removing the splice turns the
+declined/blocked tests red). `dry run:`-prefixed requests set a tracker
+flag that `execute()` enforces MECHANICALLY — zero primitives run, zero
+modals, zero memory mutations; argument-complete classifiers still run, so
+a denylisted command narrates BLOCKED even in a rehearsal. Live-verified:
+real model, "dry run: open notepad and type hello" — no Notepad appeared,
+every audit record `dry_run=true`.
 
 ### Vision-fallback accuracy (slice 16 — the first real metric)
 Measured by `tests/harness_vision_eval.py` against the VisionPad golden set
@@ -222,6 +252,17 @@ turn the suite red; re-drive them live when their primitives change.
 - **run_shell denylist is a backstop, not a boundary** (obfuscation-tested);
   vision can confabulate (gate + `from_point` are the defense); memory
   retrieval is lexical.
+- **Audit log (slice 18) residuals:** process death mid-primitive leaves that
+  action unrecorded (one line per action, no write-ahead record); an audit
+  write failure is loud (appended note) but does NOT block the action —
+  loud-but-alive over bricking the agent; `audit.enabled` can switch the
+  log off (the owner's right, but an off log records nothing).
+- **Dry-run (slice 18) limits:** only the leading `dry run:` prefix is
+  mechanically guaranteed (mid-sentence asks rely on the model, which is
+  inherently safe — not calling tools executes nothing); perception-dependent
+  verbs (click/type/press/tabs/web) narrate a conditional tier rather than
+  the real one, because prior dry steps never ran so the live screen can't
+  match the plan.
 
 ---
 
@@ -229,7 +270,9 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 504 passed, 0 failed, 0 skipped (~6:25)
+python -m pytest tests/ -q   # expect: 530 passed, 0 failed, 0 skipped (~6:15)
+                             # do NOT run twice back-to-back — a second full
+                             # live run inside ~15 min hits Gemini 429 quota
                              # (live-search tests hit the real network: ddgs + a real site)
                              # needs: a real desktop, GEMINI_API_KEY,
                              # TEST_SELF_EMAIL + data/email OAuth token
