@@ -236,3 +236,46 @@ def test_live_gemini_ping():
     assert reply, "empty reply from live Gemini"
     assert "isn't configured" not in reply and "hit a problem" not in reply, reply
     assert "4" in reply, reply
+
+
+# ---------------- pinned always-on preferences (slice 19 Stage 3) ----------
+
+def test_pinned_block_in_every_prompt(mem_brain):
+    mem_brain.memory.add("always address me as Captain", pinned=True)
+    mem_brain.think("what is the capital of France?")   # totally unrelated
+    prompt = mem_brain.provider().system_prompts[-1]
+    assert "Captain" in prompt and "STANDING PREFERENCES" in prompt
+
+
+def test_pinned_and_relevance_blocks_coexist(mem_brain):
+    mem_brain.memory.add("always address me as Captain", pinned=True)
+    mem_brain.memory.add("I am allergic to peanuts")
+    mem_brain.think("what am I allergic to?")
+    prompt = mem_brain.provider().system_prompts[-1]
+    assert "Captain" in prompt and "STANDING PREFERENCES" in prompt
+    assert "peanuts" in prompt and "REMEMBER ABOUT THE USER" in prompt
+    assert "volunteer" in prompt.lower()   # slice-10 framing stays verbatim
+
+
+def test_remember_pinned_tool_roundtrip(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    store = MemoryStore(tmp_path / "mem.bin")
+    brain = _make_brain(ScriptedToolProvider(
+        "remember", {"text": "always address me as Captain", "pinned": True}))
+    brain.memory = store
+    brain.think("from now on, always address me as Captain")
+    recs = store.all()
+    assert recs and recs[0].get("pinned") is True
+    assert any("pinned" in tr.lower() for tr in brain.provider().tool_results)
+
+
+def test_recall_marks_pinned(tmp_path):
+    from jarvis.core.memory import MemoryStore
+    store = MemoryStore(tmp_path / "mem.bin")
+    store.add("always address me as Captain", pinned=True)
+    store.add("I am allergic to peanuts")
+    brain = _make_brain(ScriptedToolProvider("recall", {}))
+    brain.memory = store
+    brain.think("what do you remember?")
+    listing = " ".join(brain.provider().tool_results)
+    assert "[pinned]" in listing and "Captain" in listing

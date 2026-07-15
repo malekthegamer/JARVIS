@@ -132,8 +132,16 @@ MEMORY_SCHEMAS = [
                      "something for the future (e.g. 'remember that I…'). Never "
                      "store facts the user did not ask you to keep."),
      "parameters": {"type": "object",
-                    "properties": {"text": {"type": "string",
-                                            "description": "The fact to remember, in the user's terms"}},
+                    "properties": {
+                        "text": {"type": "string",
+                                 "description": "The fact to remember, in the user's terms"},
+                        "pinned": {"type": "boolean",
+                                   "description": ("Set true ONLY when the user "
+                                                   "says this should ALWAYS apply "
+                                                   "('always…', 'from now on', "
+                                                   "'pin this'). Pinned facts are "
+                                                   "shown to you on every message.")},
+                    },
                     "required": ["text"]}},
     {"name": "recall",
      "description": ("List what you currently hold in long-term memory. Use when "
@@ -178,14 +186,20 @@ class JarvisBrain:
         return primitives.tools_schema() + extra
 
     def _memory_block(self, user_message: str) -> str:
-        """Relevance-gated memory for THIS message — '' when nothing is
-        relevant (so unrelated conversations stay clean). Never raises."""
+        """Pinned standing preferences (every message, slice 19) + the
+        relevance-gated block for THIS message ('' when nothing is relevant,
+        so unrelated conversations stay clean). Never raises."""
         if not settings.get("memory.enabled", True):
             return ""
         try:
-            return self.memory.format_for_prompt(self.memory.retrieve(user_message))
+            pinned = self.memory.format_pinned_for_prompt(self.memory.pinned())
         except Exception:
-            return ""  # a memory failure must never break think()
+            pinned = ""
+        try:
+            relevant = self.memory.format_for_prompt(self.memory.retrieve(user_message))
+        except Exception:
+            relevant = ""  # a memory failure must never break think()
+        return pinned + relevant
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str, dry_run: bool = False) -> str:
@@ -315,14 +329,18 @@ class JarvisBrain:
                 text = str(args.get("text", "")).strip()
                 if not text:
                     return "FAILED: nothing to remember was given."
-                rec = self.memory.add(text)
-                return f"OK: Remembered — \"{rec['text']}\"."
+                pinned = bool(args.get("pinned"))
+                rec = self.memory.add(text, pinned=pinned)
+                label = "Remembered (pinned — always applies)" if pinned \
+                    else "Remembered"
+                return f"OK: {label} — \"{rec['text']}\"."
             if name == "recall":
                 items = self.memory.all()
                 if not items:
                     return "OK: You haven't asked me to remember anything yet."
-                listing = "; ".join(f"[{i}] {r['text']}"
-                                    for i, r in enumerate(items, 1))
+                listing = "; ".join(
+                    f"[{i}]{' [pinned]' if r.get('pinned') else ''} {r['text']}"
+                    for i, r in enumerate(items, 1))
                 return f"OK: I remember {len(items)} thing(s): {listing}."
             # forget
             query = str(args.get("query", "")).strip()

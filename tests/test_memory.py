@@ -251,3 +251,55 @@ def test_lazy_backfill_embeds_legacy_records_once(store_path, monkeypatch, fake_
     # And the backfilled vec survives a restart (persisted once).
     fresh = MemoryStore(store_path)
     assert fresh.all()[0].get("vec"), "backfilled vector must be persisted"
+
+
+# ---------------- pinned always-on preferences (slice 19 Stage 3) ----------
+
+def test_add_pinned_stored(store_path):
+    s = MemoryStore(store_path)
+    rec = s.add("always address me as Captain", pinned=True)
+    assert rec.get("pinned") is True
+    assert MemoryStore(store_path).all()[0].get("pinned") is True  # survives restart
+    assert s.pinned() and s.pinned()[0]["id"] == rec["id"]
+
+
+def test_forget_removes_pinned(store_path):
+    s = MemoryStore(store_path)
+    s.add("always address me as Captain", pinned=True)
+    res = s.delete("captain")
+    assert res["status"] == "deleted"
+    assert s.pinned() == [] and s.all() == []
+
+
+def test_legacy_records_without_pinned_load_fine(store_path):
+    import json as _json
+    legacy = [{"id": "old00001", "text": "I am allergic to peanuts",
+               "kind": "fact", "created_at": "2026-01-01T00:00:00+00:00"}]
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    store_path.write_bytes(dpapi.protect(_json.dumps(legacy).encode("utf-8")))
+    s = MemoryStore(store_path)
+    assert len(s.all()) == 1 and s.pinned() == []
+    hits = s.retrieve("am I allergic to peanuts?")   # works without vec/pinned
+    assert hits and hits[0]["id"] == "old00001"
+
+
+def test_pinned_excluded_from_relevance_topk(store_path):
+    s = MemoryStore(store_path)
+    s.add("I am allergic to peanuts", pinned=True)
+    s.add("peanut butter goes in the top cupboard")
+    hits = s.retrieve("am I allergic to peanuts?")
+    assert all(not r.get("pinned") for r in hits), \
+        "pinned records are always-on via their own block, never top-k competitors"
+
+
+def test_format_pinned_block_framing_and_cap(store_path):
+    from jarvis.core.settings_store import settings
+    s = MemoryStore(store_path)
+    for i in range(12):
+        s.add(f"standing preference number {i}", pinned=True)
+    block = s.format_pinned_for_prompt(s.pinned())
+    assert "STANDING PREFERENCES" in block
+    cap = int(settings.get("memory.pinned_max", 10))
+    assert block.count("standing preference number") == cap  # newest capped
+    assert "number 11" in block and "number 0" not in block
+    assert s.format_pinned_for_prompt([]) == ""

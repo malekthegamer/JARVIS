@@ -128,6 +128,18 @@ class MemoryStore:
         with self._lock:
             return [dict(r) for r in self._records]
 
+    def pinned(self) -> list[dict]:
+        """Standing preferences (slice 19) — newest first. Always-on by the
+        user's explicit request at write time ('always…', 'pin this').
+        created_at is seconds-precision, so same-second writes tie — list
+        position (insertion order) breaks the tie for true recency."""
+        with self._lock:
+            recs = [(i, dict(r)) for i, r in enumerate(self._records)
+                    if r.get("pinned")]
+        recs.sort(key=lambda ir: (ir[1].get("created_at", ""), ir[0]),
+                  reverse=True)
+        return [r for _i, r in recs]
+
     def _match(self, query: str) -> list[dict]:
         q = set(_tokens(query))
         if not q:
@@ -244,6 +256,20 @@ class MemoryStore:
                 "volunteer or recite stored personal facts unprompted, and do not "
                 "bring up a sensitive fact in a context the user didn't raise.\n"
                 f"{lines}\n--- END MEMORY ---")
+
+    def format_pinned_for_prompt(self, records: list[dict]) -> str:
+        """Standing-preferences block (slice 19) — present on EVERY message,
+        because always-on surfacing is exactly what the user consented to by
+        pinning. Newest memory.pinned_max entries; empty when none pinned."""
+        if not records:
+            return ""
+        from jarvis.core.settings_store import settings
+        cap = int(settings.get("memory.pinned_max", 10))
+        lines = "\n".join(f"- {r['text']}" for r in records[:max(0, cap)])
+        return ("\n\n--- STANDING PREFERENCES ---\n"
+                "The user explicitly asked you to ALWAYS keep these in mind. "
+                "Apply them whenever they are applicable to what you say or do.\n"
+                f"{lines}\n--- END STANDING PREFERENCES ---")
 
 
 # One process-wide store (the brain injects/overrides this in tests).
