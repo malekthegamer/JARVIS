@@ -11,7 +11,7 @@ from __future__ import annotations
 import os
 import time
 
-from jarvis.core import chain
+from jarvis.core import audit, chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
 from jarvis.primitives import (apps, email as jemail, files, input as jinput,
@@ -686,6 +686,19 @@ def execute(name: str, args: dict) -> str:
     """Run one primitive. CONFIRM-tier primitives pass the fail-closed gate
     first; only an explicit user approval reaches EXECUTING. Never raises.
 
+    Every call — approved, declined, timed out, BLOCKED, unknown, crashed —
+    leaves one durable audit record (slice 18); the recording exit is here so
+    no return path can skip it."""
+    args = args or {}
+    outcome = {"tier": "unknown", "gate": None}
+    result = _execute_inner(name, args, outcome)
+    return _audit_record(name, args, outcome, result)
+
+
+def _execute_inner(name: str, args: dict, outcome: dict) -> str:
+    """The pre-slice-18 execute() body. Fills outcome["tier"]/["gate"] for
+    the audit record as facts become known.
+
     Tier is resolved two ways: a static "tier" (+ optional "describe"), or a
     dynamic "classify"(args) -> {tier, description, expect_name} that decides
     from the RESOLVED element / literal combo (so the model can't paraphrase a
@@ -693,10 +706,10 @@ def execute(name: str, args: dict) -> str:
     prim = PRIMITIVES.get(name)
     if prim is None:
         return f"Unknown tool: {name}"
-    args = args or {}
     gate_info = None
     try:
         tier, description, gate_info = _decide_tier(prim, args)
+        outcome["tier"] = tier
         if tier == "blocked":
             # The spec's third tier: refused outright. NEVER gates (no
             # approvable modal) and NEVER runs — the command dies here.
@@ -705,7 +718,7 @@ def execute(name: str, args: dict) -> str:
             if description is None:
                 return "FAILED: nothing matching that to act on right now."
             command = gate_info.get("command") if gate_info else None
-            cancelled = _gate(name, description, command=command)
+            cancelled, outcome["gate"] = _gate(name, description, command=command)
             if cancelled is not None:
                 return cancelled
         tracker = chain.current()
@@ -718,6 +731,30 @@ def execute(name: str, args: dict) -> str:
     finally:
         # Control returns to the model round; think()'s finally still lands IDLE.
         broadcaster.set(AgentState.THINKING)
+
+
+AUDIT_FAIL_NOTE = ("\n⚠ audit log write failed — this action is not in the "
+                   "permanent record.")
+
+
+def _audit_record(name: str, args: dict, outcome: dict, result: str) -> str:
+    """Write the durable record (slice 18). A write failure never blocks the
+    action, but is loud: the note is APPENDED (a prefix would corrupt
+    status_from_result's ground-truth parsing) so model + HUD + user see it."""
+    tracker = chain.current()
+    status = ("failed" if outcome["tier"] == "unknown"
+              else chain.status_from_result(result))
+    try:
+        ok = audit.audit_log.record(
+            tool=name, tier=outcome["tier"], gate=outcome["gate"],
+            status=status, dry_run=bool(outcome.get("dry_run")),
+            chain_id=tracker.chain_id if tracker else None,
+            args=args, result=result)
+    except Exception:
+        ok = False
+    if not ok:
+        result += AUDIT_FAIL_NOTE
+    return result
 
 
 def _decide_tier(prim: dict, args: dict) -> tuple[str, str | None, dict | None]:
@@ -739,10 +776,13 @@ def _decide_tier(prim: dict, args: dict) -> tuple[str, str | None, dict | None]:
     return tier, description, None
 
 
-def _gate(name: str, description: str, command: str | None = None) -> str | None:
-    """None = approved, proceed. A string = cancelled, return it as the tool
-    result. Any internal failure reads as cancelled (fail closed). `command`
-    (slice 9) is the verbatim shell command shown in the modal's mono box."""
+def _gate(name: str, description: str,
+          command: str | None = None) -> tuple[str | None, str]:
+    """(None, "approved") = proceed. (string, reason) = cancelled — return the
+    string as the tool result. Any internal failure reads as cancelled (fail
+    closed). `command` (slice 9) is the verbatim shell command shown in the
+    modal's mono box. The raw Decision.reason is returned so the audit record
+    (slice 18) keeps the true gate outcome, not the collapsed CANCELLED."""
     timeout_s = 0.0
     try:
         broadcaster.set(AgentState.CONFIRMING, detail=name)
@@ -752,7 +792,7 @@ def _gate(name: str, description: str, command: str | None = None) -> str | None
     except Exception:
         decision = Decision(False, "error")
     if decision.approved:
-        return None
+        return None, "approved"
     reason = _CANCEL_REASONS.get(decision.reason, decision.reason).format(t=timeout_s)
     return (f"CANCELLED ({reason}): {description}. "
-            f"Do not retry — acknowledge this to the user.")
+            f"Do not retry — acknowledge this to the user."), decision.reason

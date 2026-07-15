@@ -23,6 +23,16 @@ def no_exec(monkeypatch):
     monkeypatch.setattr(subprocess, "run", boom)
 
 
+@pytest.fixture(autouse=True)
+def _broadcaster_back_to_idle():
+    """Leak guard (slice 18): execute() called outside think() parks the
+    broadcaster at THINKING; running this file before test_chain (custom CLI
+    order) tripped test_chain's IDLE assertion. Same guard as test_audit.py."""
+    yield
+    from jarvis.state import AgentState, broadcaster
+    broadcaster.set(AgentState.IDLE)
+
+
 # Commands that MUST be refused outright (blocked before any modal / exec).
 DENYLISTED = [
     "rm -rf /",

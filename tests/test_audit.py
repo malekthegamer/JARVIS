@@ -21,6 +21,12 @@ from jarvis.core.settings_store import settings as _settings
 SENTINEL = "TOP-SECRET-AUDIT-BODY-93731"
 
 
+def _records():
+    """The per-test isolated singleton the execute()/brain splices write to
+    (swapped to tmp_path by the conftest autouse fixture)."""
+    return audit.audit_log.read()
+
+
 @pytest.fixture()
 def log_path(tmp_path) -> Path:
     return tmp_path / "audit" / "audit.jsonl"
@@ -153,3 +159,183 @@ def test_dpapi_unavailable_envelope_only(log, log_path, monkeypatch):
     assert rec["payload"] is None
     assert "unavailable" in rec["payload_error"]
     assert rec["tool"] == "send_email"    # the timeline survives
+
+
+# ================================================================ Stage 2:
+# the execute()/brain splices — gate outcomes, blocked, unknown tool,
+# write-failure posture, meta-tool mutations. Patterns mirror test_shell.py.
+
+import threading as _threading
+import time as _time
+
+from jarvis import primitives
+from jarvis.core import chain as _chain
+from jarvis.core.confirmations import confirmations as _confirmations
+from jarvis.primitives import files as _files, shell as _shell
+
+
+def _auto_resolve(approved: bool):
+    def responder(event):
+        if event.get("type") == "confirm_request":
+            _threading.Thread(target=lambda: (
+                _time.sleep(0.05),
+                _confirmations.resolve(event["id"], approved))).start()
+    return _confirmations.subscribe(responder)
+
+
+@pytest.fixture(autouse=True)
+def _broadcaster_back_to_idle():
+    """Leak guard: execute() called outside think() deliberately parks the
+    broadcaster at THINKING (think()'s finally normally restores IDLE).
+    Without this reset, these tests leak THINKING into test_chain's autouse
+    IDLE assertion (this file sorts before test_chain; test_shell sorts
+    after, which is why the same direct-execute pattern never tripped it)."""
+    yield
+    from jarvis.state import AgentState, broadcaster
+    broadcaster.set(AgentState.IDLE)
+
+
+@pytest.fixture()
+def no_exec(monkeypatch):
+    """No shell may EVER spawn in these tests — the spy raises if reached."""
+    def boom(*_a, **_k):
+        raise AssertionError("a subprocess was spawned — it must not run")
+    monkeypatch.setattr("subprocess.Popen", boom)
+    monkeypatch.setattr("subprocess.run", boom)
+
+
+@pytest.fixture()
+def tmp_workspace(tmp_path, monkeypatch):
+    ws = tmp_path / "agent_files"
+    ws.mkdir()
+    monkeypatch.setattr(_files, "AGENT_FILES_DIR", ws)
+    return ws
+
+
+# ---------------------------------------------------------------- test 4
+def test_declined_action_logged(monkeypatch):
+    """THE slice requirement: a denial is a first-class audit record."""
+    ran = []
+    monkeypatch.setattr(_shell, "run_shell",
+                        lambda cmd: ran.append(cmd) or {"ok": True, "message": "x",
+                                                        "exit_code": 0, "stdout": "",
+                                                        "stderr": ""})
+    unsub = _auto_resolve(False)
+    try:
+        out = primitives.execute("run_shell", {"command": "echo decline-me"})
+    finally:
+        unsub()
+    assert "CANCELLED" in out and ran == []
+    (rec,) = _records()
+    assert rec["tool"] == "run_shell"
+    assert rec["tier"] == "confirm"
+    assert rec["gate"] == "declined"
+    assert rec["status"] == "cancelled"
+    assert rec["payload"]["args"]["command"] == "echo decline-me"
+
+
+# ---------------------------------------------------------------- test 5
+def test_timeout_logged(monkeypatch):
+    monkeypatch.setattr(_shell, "run_shell", lambda cmd: pytest.fail("must not run"))
+    _settings.set("confirm.timeout_s", 0.3, persist=False)
+    try:
+        out = primitives.execute("run_shell", {"command": "echo too-slow"})
+    finally:
+        _settings.set("confirm.timeout_s", 30, persist=False)
+    assert "CANCELLED" in out
+    (rec,) = _records()
+    assert rec["gate"] == "timeout"
+    assert rec["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------- test 6
+def test_blocked_logged_and_never_ran(no_exec):
+    """THE slice requirement: BLOCKED is recorded; the spy proves nothing ran."""
+    out = primitives.execute("run_shell", {"command": "rmdir /s /q C:\\"})
+    assert out.startswith("BLOCKED")
+    (rec,) = _records()
+    assert rec["tier"] == "blocked"
+    assert rec["gate"] is None
+    assert rec["status"] == "failed"
+    assert rec["payload"]["args"]["command"] == "rmdir /s /q C:\\"
+
+
+# ---------------------------------------------------------------- test 7
+def test_approved_success_logged():
+    unsub = _auto_resolve(True)
+    try:
+        out = primitives.execute("run_shell", {"command": "echo audit-approved"})
+    finally:
+        unsub()
+    assert out.startswith("OK"), out
+    (rec,) = _records()
+    assert rec["gate"] == "approved"
+    assert rec["status"] == "ok"
+    assert "audit-approved" in rec["payload"]["result"]
+
+
+# ---------------------------------------------------------------- test 8
+def test_auto_tier_logged_gate_null(tmp_workspace):
+    (tmp_workspace / "invoice.pdf").write_text("x")
+    out = primitives.execute("search_files", {"query": "invoice"})
+    assert out.startswith("OK"), out
+    (rec,) = _records()
+    assert rec["tier"] == "auto"
+    assert rec["gate"] is None
+    assert rec["status"] == "ok"
+
+
+# ---------------------------------------------------------------- test 9
+def test_unknown_tool_logged():
+    out = primitives.execute("no_such_tool_xyz", {"a": 1})
+    assert "Unknown tool" in out
+    (rec,) = _records()
+    assert rec["tool"] == "no_such_tool_xyz"
+    assert rec["tier"] == "unknown"
+    assert rec["status"] == "failed"
+
+
+# ---------------------------------------------------------------- test 13
+def test_audit_write_failure_does_not_block_action(tmp_workspace, monkeypatch):
+    """Loud-but-alive: the action still runs; the gap is appended (never
+    prepended — the status prefix must survive for status_from_result)."""
+    def boom(**_kw):
+        raise OSError("disk full")
+    monkeypatch.setattr(audit.audit_log, "record", boom)
+    (tmp_workspace / "a.txt").write_text("x")
+    out = primitives.execute("search_files", {"query": "a"})
+    assert out.startswith("OK"), out
+    assert "audit log write failed" in out
+    assert _chain.status_from_result(out) == "ok"
+
+
+# ---------------------------------------------------------------- test 14
+def test_remember_forget_audited(tmp_path):
+    from jarvis.brain import JarvisBrain
+    from jarvis.core.memory import MemoryStore
+    brain = JarvisBrain()
+    brain.memory = MemoryStore(tmp_path / "mem" / "memories.bin")
+    out = brain._memory_tool("remember", {"text": "audit likes tea"})
+    assert out.startswith("OK"), out
+    out2 = brain._memory_tool("recall", {})
+    assert out2.startswith("OK"), out2
+    out3 = brain._memory_tool("forget", {"query": "audit likes tea"})
+    assert out3.startswith("OK"), out3
+    recs = _records()
+    assert [r["tool"] for r in recs] == ["remember", "forget"]  # no recall
+    assert recs[0]["payload"]["args"]["text"] == "audit likes tea"
+    assert all(r["status"] == "ok" for r in recs)
+
+
+# ---------------------------------------------------------------- test 15
+def test_audit_disabled_no_write(tmp_workspace):
+    _settings.set("audit.enabled", False, persist=False)
+    try:
+        (tmp_workspace / "b.txt").write_text("x")
+        out = primitives.execute("search_files", {"query": "b"})
+    finally:
+        _settings.set("audit.enabled", True, persist=False)
+    assert out.startswith("OK"), out
+    assert "audit log write failed" not in out   # off is not a failure
+    assert not audit.audit_log.path.exists()
+    assert _records() == []

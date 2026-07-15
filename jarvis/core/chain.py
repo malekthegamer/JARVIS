@@ -19,6 +19,7 @@ _busy lock + brain RLock): one chain at a time by construction.
 from __future__ import annotations
 
 import json
+import uuid
 
 from jarvis.state import broadcaster
 
@@ -51,6 +52,7 @@ def status_from_result(result: str) -> str:
 
 class ChainTracker:
     def __init__(self) -> None:
+        self.chain_id = uuid.uuid4().hex[:8]  # groups audit records per think()
         self.steps: list[str] = []          # declared plan (descriptive)
         self.revision = 0                   # bumped per plan_steps call
         self.calls: list[dict] = []         # ground truth: executed tool calls

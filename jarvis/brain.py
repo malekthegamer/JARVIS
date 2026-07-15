@@ -260,7 +260,28 @@ class JarvisBrain:
         return primitives.execute(name, args or {})
 
     def _memory_tool(self, name: str, args: dict) -> str:
-        """remember / recall / forget. Never raises; forget never guesses."""
+        """remember / recall / forget. Never raises; forget never guesses.
+        Mutations (remember/forget) bypass primitives.execute(), so they get
+        their own audit splice here (slice 18) — recall is read-only and
+        deliberately unlogged."""
+        result = self._memory_tool_inner(name, args)
+        if name in ("remember", "forget"):
+            from jarvis.core import audit  # module attr — tests swap the log
+            from jarvis import primitives
+            tracker = chain.current()
+            try:
+                ok = audit.audit_log.record(
+                    tool=name, tier="auto", gate=None,
+                    status=chain.status_from_result(result),
+                    chain_id=tracker.chain_id if tracker else None,
+                    args=args, result=result)
+            except Exception:
+                ok = False
+            if not ok:
+                result += primitives.AUDIT_FAIL_NOTE
+        return result
+
+    def _memory_tool_inner(self, name: str, args: dict) -> str:
         try:
             if name == "remember":
                 text = str(args.get("text", "")).strip()
