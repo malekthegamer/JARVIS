@@ -192,7 +192,7 @@ e:\J.A.R.V.I.S\
     static/                 ← the HUD (vanilla JS): index.html, hud.css, hud.js, orb.js, fonts/
                               chain strip, Action Log + telemetry panels, monospace shell-confirm box
 
-  tests/                    ← 547 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                    ← 550 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local

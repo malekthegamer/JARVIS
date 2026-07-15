@@ -48,7 +48,8 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 547 as of slice 19; it only grows.)
+  failure with better manners. (Baseline N = 550 as of the post-slice-19
+  desktop guard; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
   Chrome, drives a headless Playwright Chromium against local fixtures, sends
   live-test email to `TEST_SELF_EMAIL`, briefly toggles real Do Not Disturb
@@ -74,6 +75,11 @@ python -m pytest tests/ -q
   succeeding is a token trickle, NOT headroom — burst-probe (5 rapid calls)
   before believing quota is back. The deterministic core is unaffected and
   can be re-run freely.
+- **Announce full-suite runs and get an idle desktop (~8 min)** — the live-UIA
+  tests steal focus (the user may be gaming; busy desktops also flake those
+  tests). Mechanical backstop: conftest refuses to start a desktop-driving run
+  while a fullscreen app is up (SHQueryUserNotificationState; test-pinned in
+  `tests/test_desktop_guard.py`).
 
 ---
 

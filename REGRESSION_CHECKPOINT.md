@@ -306,7 +306,9 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 547 passed, 0 failed, 0 skipped (~6:20)
+python -m pytest tests/ -q   # expect: 550 passed, 0 failed, 0 skipped (~6:20)
+                             # (547 at the slice-19 capture + 3 desktop-guard
+                             # tests added just after; verified 550/0/0 clean)
                              # do NOT run twice back-to-back — a second full
                              # live run inside ~15 min hits Gemini 429 quota
                              # keep the DESKTOP IDLE (~8 min) — live-UIA input
