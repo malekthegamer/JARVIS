@@ -51,8 +51,9 @@ def status_from_result(result: str) -> str:
 
 
 class ChainTracker:
-    def __init__(self) -> None:
+    def __init__(self, dry_run: bool = False) -> None:
         self.chain_id = uuid.uuid4().hex[:8]  # groups audit records per think()
+        self.dry_run = dry_run              # slice 18: rehearsal — nothing executes
         self.steps: list[str] = []          # declared plan (descriptive)
         self.revision = 0                   # bumped per plan_steps call
         self.calls: list[dict] = []         # ground truth: executed tool calls
@@ -172,9 +173,9 @@ def _args_key(args: dict | None) -> str:
 _current: ChainTracker | None = None
 
 
-def start() -> ChainTracker:
+def start(dry_run: bool = False) -> ChainTracker:
     global _current
-    _current = ChainTracker()
+    _current = ChainTracker(dry_run=dry_run)
     return _current
 
 

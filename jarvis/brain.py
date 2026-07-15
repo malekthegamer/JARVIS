@@ -78,7 +78,22 @@ responses concise and conversational unless the user asks for detail.
 Address the user as 'sir' occasionally, but don't overdo it. You never
 initiate conversation or speech on your own — you only respond. Your
 responses are spoken aloud, so avoid markdown, code fences, and bullet
-lists unless the user is clearly working in text."""
+lists unless the user is clearly working in text. If the user asks for a
+dry run or rehearsal mid-sentence, tell them to start a message with
+"dry run:" — that guarantees mechanically that nothing executes."""
+
+# Appended to the system prompt for a dry-run request ONLY (slice 18). The
+# guarantee itself is mechanical (primitives.execute checks the tracker);
+# this block just keeps the model engaged so it plans instead of refusing.
+DRY_RUN_PROMPT = """
+
+--- DRY-RUN MODE (this request only) ---
+The user asked for a REHEARSAL. Plan exactly as you normally would and call
+the tools you would really use — NOTHING will execute; every tool returns a
+'DRY RUN' narration instead. Treat each as if it succeeded and keep going.
+When the plan is complete, reply with a short step-by-step narration of what
+WOULD have happened, saying which steps would have needed the user's
+confirmation. Never claim anything actually happened."""
 
 # 12, raised from 8 after the slice-6 live acceptance: spec script #1
 # ("open Spotify, play Discover Weekly") measures ~10 rounds when clean
@@ -173,13 +188,16 @@ class JarvisBrain:
             return ""  # a memory failure must never break think()
 
     # ---------- the one call every interface uses ----------
-    def think(self, user_message: str) -> str:
+    def think(self, user_message: str, dry_run: bool = False) -> str:
         with self._lock:
             broadcaster.set(AgentState.THINKING)
-            tracker = chain.start()  # one chain per interaction; ground truth for the HUD
+            # One chain per interaction; ground truth for the HUD. dry_run
+            # rides the tracker (slice 18) — primitives.execute() enforces it
+            # mechanically, and think()'s finally clears it with the chain.
+            tracker = chain.start(dry_run=dry_run)
             status = "error"  # anything that escapes _think_inner ends the chain honestly
             try:
-                reply = self._think_inner(user_message)
+                reply = self._think_inner(user_message, dry_run=dry_run)
                 status = "done"
                 return reply
             except ProviderError as exc:
@@ -191,13 +209,15 @@ class JarvisBrain:
                 chain.clear(tracker.aborted or status)
                 broadcaster.set(AgentState.IDLE)
 
-    def _think_inner(self, user_message: str) -> str:
+    def _think_inner(self, user_message: str, dry_run: bool = False) -> str:
         provider = self.provider()
         self.history.append({"role": "user", "content": user_message})
         self._trim()
 
         # Retrieve relevant long-term memory ONCE per message (not per round).
         prompt = self.system_prompt(self._memory_block(user_message))
+        if dry_run:
+            prompt += DRY_RUN_PROMPT
         tools = (self.tools() or None) if provider.supports_tools else None
         for _round in range(MAX_TOOL_ROUNDS):
             try:
@@ -263,16 +283,24 @@ class JarvisBrain:
         """remember / recall / forget. Never raises; forget never guesses.
         Mutations (remember/forget) bypass primitives.execute(), so they get
         their own audit splice here (slice 18) — recall is read-only and
-        deliberately unlogged."""
-        result = self._memory_tool_inner(name, args)
+        deliberately unlogged. In a dry run the mutations narrate instead of
+        landing (recall still runs — read-only, and it grounds the plan)."""
+        tracker = chain.current()
+        dry = bool(tracker and tracker.dry_run)
+        if dry and name in ("remember", "forget"):
+            verb = ("save the memory" if name == "remember"
+                    else "look for and delete the matching memory")
+            result = (f"DRY RUN (not executed): would {verb} {args}. "
+                      f"Assume it succeeded and continue planning.")
+        else:
+            result = self._memory_tool_inner(name, args)
         if name in ("remember", "forget"):
             from jarvis.core import audit  # module attr — tests swap the log
             from jarvis import primitives
-            tracker = chain.current()
             try:
                 ok = audit.audit_log.record(
                     tool=name, tier="auto", gate=None,
-                    status=chain.status_from_result(result),
+                    status=chain.status_from_result(result), dry_run=dry,
                     chain_id=tracker.chain_id if tracker else None,
                     args=args, result=result)
             except Exception:

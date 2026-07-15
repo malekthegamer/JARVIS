@@ -706,6 +706,11 @@ def _execute_inner(name: str, args: dict, outcome: dict) -> str:
     prim = PRIMITIVES.get(name)
     if prim is None:
         return f"Unknown tool: {name}"
+    tracker = chain.current()
+    if tracker is not None and tracker.dry_run:
+        # Slice 18 dry-run: the mechanical guarantee. Narrate INSTEAD of
+        # running — before the gate, before the fn. Never prompt-trusted.
+        return _dry_run_narration(name, prim, args, outcome)
     gate_info = None
     try:
         tier, description, gate_info = _decide_tier(prim, args)
@@ -731,6 +736,42 @@ def _execute_inner(name: str, args: dict, outcome: dict) -> str:
     finally:
         # Control returns to the model round; think()'s finally still lands IDLE.
         broadcaster.set(AgentState.THINKING)
+
+
+# Dry-run may safely run classification ONLY for argument-complete pure
+# classifiers (string/validation logic, no screen state). The perception-
+# dependent ones (click/type/press/tabs/web) resolve against the LIVE screen —
+# but in a dry run prior steps never executed, so the screen doesn't match the
+# plan and classifying would mislead (and classify_click steals window focus).
+DRY_RUN_CLASSIFY = frozenset({"run_shell", "send_email"})
+
+_DRY_SUFFIX = " Assume it succeeded and continue planning."
+
+
+def _dry_run_narration(name: str, prim: dict, args: dict, outcome: dict) -> str:
+    """What WOULD happen, honestly — without doing any of it. BLOCKED stays
+    BLOCKED even in a rehearsal (the argument-complete classifiers still run,
+    so a denylisted command or invalid email narrates its real refusal)."""
+    outcome["dry_run"] = True
+    if name in DRY_RUN_CLASSIFY:
+        tier, description, _info = _decide_tier(prim, args)
+        outcome["tier"] = tier
+        if tier == "blocked":
+            return description or "BLOCKED: refused."   # a rehearsal can't unblock
+        return (f"DRY RUN (not executed): {name} would first show you a "
+                f"confirmation — {description}" + _DRY_SUFFIX)
+    if "classify" in prim:
+        outcome["tier"] = "confirm"  # fail-closed label (same as classify failure)
+        return (f"DRY RUN (not executed): would attempt {name} with {args}. "
+                f"Its tier is decided at run time from the resolved on-screen "
+                f"control; a committal control would require the user's "
+                f"confirmation." + _DRY_SUFFIX)
+    tier = prim.get("tier", "auto")
+    outcome["tier"] = tier
+    if tier == "confirm":
+        return (f"DRY RUN (not executed): would ask the user's confirmation, "
+                f"then run {name} with {args}." + _DRY_SUFFIX)
+    return f"DRY RUN (not executed): would run {name} with {args}." + _DRY_SUFFIX
 
 
 AUDIT_FAIL_NOTE = ("\n⚠ audit log write failed — this action is not in the "

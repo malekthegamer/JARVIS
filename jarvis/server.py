@@ -15,6 +15,7 @@ Lessons carried from legacy/server.py:
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -171,11 +172,28 @@ async def no_cache(request, call_next):
 
 # ---------- the one interaction pipeline ----------
 
+# Slice 18: the explicit per-request dry-run trigger. Parsed HERE — the one
+# funnel all three inputs (WS chat, push-to-talk, wake word) share — so the
+# flag is set mechanically, never by the model. Matches a leading
+# "dry run:" / "dry-run" / "dryrun," etc.; deliberately NOT mid-sentence
+# (the prompt teaches the model to suggest the prefix instead).
+_DRY_RUN_RE = re.compile(r"^\s*dry[- ]?run\b[:,]?\s*", re.IGNORECASE)
+
+
+def parse_dry_run(text: str) -> tuple[bool, str]:
+    """(dry_run, remaining_text). Pure — unit-testable without a server."""
+    m = _DRY_RUN_RE.match(text or "")
+    if not m:
+        return False, text
+    return True, text[m.end():]
+
+
 def _respond(text: str) -> str:
     """Blocking: user text -> transcript -> brain -> transcript -> speech.
     Runs in the threadpool; states are emitted by brain and voice_manager."""
+    dry_run, text = parse_dry_run(text)
     _enqueue_threadsafe({"type": "transcript", "who": "user", "text": text})
-    reply = jarvis_brain.think(text)
+    reply = jarvis_brain.think(text, dry_run=dry_run)
     _enqueue_threadsafe({"type": "transcript", "who": "jarvis", "text": reply})
     voice_manager.speak(reply)
     return reply
