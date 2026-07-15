@@ -22,6 +22,11 @@ from jarvis.core import dpapi
 
 DEFAULT_PATH = config.DATA_DIR / "memory" / "memories.bin"
 
+# Hybrid guard (slice 19): a record passing the lexical threshold always
+# surfaces even if its cosine is low. Module-level ONLY so the eval harness
+# can measure the pure-semantic diagnostic; the product never flips it.
+LEXICAL_GUARD = True
+
 # Function words only — content tokens are what relevance + forget-matching use.
 _STOPWORDS = frozenset("""
 a an the this that these those it its i me my mine you your yours we our us
@@ -69,12 +74,15 @@ class MemoryStore:
         self.path.write_bytes(blob)
 
     # ---------- writes ----------
-    def add(self, text: str, kind: str = "fact") -> dict:
+    def add(self, text: str, kind: str = "fact", pinned: bool = False) -> dict:
         text = " ".join(str(text or "").split())
         if not text:
             raise ValueError("empty memory")
         rec = {"id": uuid.uuid4().hex[:8], "text": text, "kind": kind,
                "created_at": _now()}
+        if pinned:
+            rec["pinned"] = True
+        self._attach_vec(rec)  # best-effort; a vec-less record is still valid
         with self._lock:
             self._records.append(rec)
             try:
@@ -133,23 +141,95 @@ class MemoryStore:
         relevant (that empty result is the anti-pollution property and the
         structural defense against surfacing sensitive facts unprompted).
 
-        Scored by shared content-token count; ties broken by recency."""
+        Slice 19: semantic (local-embedding cosine) when the model is
+        available, with a hybrid guard — a record passing the slice-10
+        lexical threshold is NEVER dropped, so keyword recall cannot
+        regress. No model / any embedding failure -> the slice-10 lexical
+        path verbatim. Pinned records are excluded here (they are always-on
+        via format_pinned_for_prompt, not competitors for top-k)."""
         from jarvis.core.settings_store import settings
         if k is None:
             k = int(settings.get("memory.retrieve_k", 5))
         if threshold is None:
             threshold = int(settings.get("memory.relevance_threshold", 1))
+        qvec = None
+        try:
+            from jarvis.core import embedder
+            if embedder.available():
+                qvec = embedder.embed([query])[0]
+        except Exception:
+            qvec = None  # degrade, never break think()
+        if qvec is None:
+            return self._retrieve_lexical(query, k, threshold)
+        sem_threshold = float(settings.get("memory.semantic_threshold", 0.30))
+        q = set(_tokens(query))
+        scored = []
+        with self._lock:
+            self._backfill_vecs()
+            for r in self._records:
+                if r.get("pinned"):
+                    continue
+                vec = r.get("vec")
+                cos = (sum(a * b for a, b in zip(qvec, vec))
+                       if vec else -1.0)
+                lex_hit = (LEXICAL_GUARD and q
+                           and len(q & set(_tokens(r["text"]))) >= threshold)
+                if cos >= sem_threshold or lex_hit:
+                    scored.append((cos, r))
+        scored.sort(key=lambda sr: (sr[0], sr[1]["created_at"]), reverse=True)
+        return [dict(r) for _score, r in scored[:max(0, k)]]
+
+    def _retrieve_lexical(self, query: str, k: int, threshold: int) -> list[dict]:
+        """The slice-10 path, verbatim: shared content-token count, ties
+        broken by recency. Also the honest fallback when no embedder exists."""
         q = set(_tokens(query))
         if not q:
             return []
         scored = []
         with self._lock:
             for r in self._records:
+                if r.get("pinned"):
+                    continue
                 score = len(q & set(_tokens(r["text"])))
                 if score >= threshold:
                     scored.append((score, r))
         scored.sort(key=lambda sr: (sr[0], sr[1]["created_at"]), reverse=True)
         return [dict(r) for _score, r in scored[:max(0, k)]]
+
+    # ---------- embeddings (slice 19) ----------
+    @staticmethod
+    def _attach_vec(rec: dict) -> None:
+        """Best-effort embed-on-write. Failure leaves the record vec-less
+        (lazily backfilled later); it must never block a remember."""
+        try:
+            from jarvis.core import embedder
+            if embedder.available():
+                rec["vec"] = [round(x, 5) for x in embedder.embed([rec["text"]])[0]]
+                rec["vec_model"] = embedder.MODEL_TAG
+        except Exception:
+            rec.pop("vec", None)
+            rec.pop("vec_model", None)
+
+    def _backfill_vecs(self) -> None:
+        """Embed records that predate the embedder (or a model change), once,
+        under the caller's lock. Persist is best-effort — an in-memory vec
+        still serves this retrieve even if the disk write fails."""
+        from jarvis.core import embedder
+        stale = [r for r in self._records
+                 if not r.get("vec") or r.get("vec_model") != embedder.MODEL_TAG]
+        if not stale:
+            return
+        try:
+            vecs = embedder.embed([r["text"] for r in stale])
+        except Exception:
+            return  # keep serving; lexical guard still covers these records
+        for r, v in zip(stale, vecs):
+            r["vec"] = [round(x, 5) for x in v]
+            r["vec_model"] = embedder.MODEL_TAG
+        try:
+            self._persist()
+        except Exception:
+            pass  # vec is derivable; never let a persist hiccup break retrieval
 
     def format_for_prompt(self, records: list[dict]) -> str:
         """A system-prompt block — empty when there are no records, so the

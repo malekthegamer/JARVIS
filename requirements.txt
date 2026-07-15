@@ -43,6 +43,12 @@ mss>=9.0                   # fast screenshots
 yfinance>=0.2.40
 feedparser>=6.0
 
+# Memory — semantic retrieval (slice 19; local MiniLM via ONNX, no torch)
+# One-time model download: python -m jarvis.core.embedder --setup
+onnxruntime>=1.24          # was transitive via openwakeword; now a direct dep
+tokenizers>=0.20           # HF tokenizer for the embedding model
+numpy>=2.0                 # pooling math (also used by screen/vision/wake)
+
 # Desktop wrapper (Phase 9)
 pywebview>=5.0
 pystray>=0.19

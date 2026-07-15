@@ -76,9 +76,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "memory": {
         # Long-term cross-session memory (spec §1.5). Explicit-intent writes
         # only; DPAPI-encrypted at rest; relevance-gated retrieval.
+        # Slice 19: semantic retrieval via a LOCAL embedding model
+        # (python -m jarvis.core.embedder --setup); no model -> lexical.
         "enabled": True,
         "retrieve_k": 5,             # max memories injected per message
-        "relevance_threshold": 1,    # min shared content-tokens to surface one
+        "relevance_threshold": 1,    # min shared content-tokens (lexical/guard)
+        "semantic_threshold": 0.35,  # min cosine to surface — tuned on the
+                                     # golden set (0.32-0.35 plateau: recall
+                                     # 0.818, false-surface == lexical baseline)
+        "pinned_max": 10,            # newest pinned prefs always in the prompt
     },
     "wake": {
         # Wake word (slice 13) — an ALTERNATIVE trigger to push-to-talk, via

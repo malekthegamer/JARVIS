@@ -140,3 +140,114 @@ def test_format_carries_no_volunteer_framing(store_path):
     block = s.format_for_prompt([rec])
     assert "peanuts" in block
     assert "volunteer" in block.lower()  # the don't-volunteer instruction is present
+
+
+# ================================================================ Slice 19:
+# semantic retrieval (fake-embedder seam — deterministic, no model needed)
+# and pinned preferences. The REAL model's quality is measured by
+# tests/harness_memory_eval.py, not asserted here.
+
+def _norm(v):
+    n = sum(x * x for x in v) ** 0.5
+    return [x / n for x in v]
+
+
+@pytest.fixture()
+def fake_embedder(monkeypatch):
+    """Deterministic vectors: coffee-ish texts cluster, others are orthogonal.
+    Patches the module-attribute seam memory.py reads at call time."""
+    from jarvis.core import embedder
+
+    VECS = {
+        "I take my coffee black, no sugar":            _norm([1.0, 0.05, 0.0]),
+        "how do I like my hot drinks in the morning?": _norm([0.95, 0.1, 0.0]),
+        "I am allergic to peanuts":                    _norm([0.0, 1.0, 0.0]),
+        "what's the weather in Tokyo today?":          _norm([0.0, 0.0, 1.0]),
+    }
+    calls = []
+
+    def fake_embed(texts):
+        calls.append(list(texts))
+        # unknown text -> a vector far from everything (still normalized)
+        return [VECS.get(t, _norm([0.31, -0.4, 0.86])) for t in texts]
+
+    monkeypatch.setattr(embedder, "available", lambda: True)
+    monkeypatch.setattr(embedder, "embed", fake_embed)
+    monkeypatch.setattr(embedder, "MODEL_TAG", "fake-test-model")
+    fake_embed.calls = calls
+    return fake_embed
+
+
+def test_semantic_retrieve_paraphrase_hits(store_path, fake_embedder):
+    s = MemoryStore(store_path)
+    s.add("I take my coffee black, no sugar")
+    s.add("I am allergic to peanuts")
+    out = s.retrieve("how do I like my hot drinks in the morning?")
+    assert len(out) == 1 and "coffee" in out[0]["text"], out
+
+
+def test_semantic_threshold_gates_low_similarity(store_path, fake_embedder):
+    from jarvis.core.settings_store import settings
+    s = MemoryStore(store_path)
+    s.add("I am allergic to peanuts")     # orthogonal to the coffee query
+    prior = settings.get("memory.semantic_threshold", 0.35)
+    settings.set("memory.semantic_threshold", 0.9, persist=False)
+    try:
+        out = s.retrieve("how do I like my hot drinks in the morning?")
+    finally:
+        settings.set("memory.semantic_threshold", prior, persist=False)
+    assert out == [], out
+
+
+def test_hybrid_keeps_lexical_keyword_hit(store_path, fake_embedder):
+    """A record whose fake cosine is LOW but which shares a real content
+    token must still surface — keyword recall can never regress."""
+    s = MemoryStore(store_path)
+    s.add("I am allergic to peanuts")
+    out = s.retrieve("am I allergic to peanuts?")  # unknown query vec -> low cos
+    assert len(out) == 1 and "peanuts" in out[0]["text"], out
+
+
+def test_semantic_unrelated_query_returns_nothing(store_path, fake_embedder):
+    s = MemoryStore(store_path)
+    s.add("I take my coffee black, no sugar")
+    s.add("I am allergic to peanuts")
+    assert s.retrieve("what's the weather in Tokyo today?") == []
+
+
+def test_fallback_when_embedder_unavailable(store_path, monkeypatch):
+    from jarvis.core import embedder
+    monkeypatch.setattr(embedder, "available", lambda: False)
+    monkeypatch.setattr(embedder, "embed",
+                        lambda texts: pytest.fail("embed must not be called"))
+    s = MemoryStore(store_path)
+    s.add("I am allergic to peanuts")
+    s.add("my sister's birthday is in March")
+    # Exactly slice-10 behavior: keyword hit works, unrelated query is empty.
+    hits = s.retrieve("what am I allergic to?")
+    assert len(hits) == 1 and "peanuts" in hits[0]["text"]
+    assert s.retrieve("what's the weather in Tokyo today?") == []
+
+
+def test_lazy_backfill_embeds_legacy_records_once(store_path, monkeypatch, fake_embedder):
+    from jarvis.core import embedder
+    # Write a record while the embedder is unavailable -> no vec stored.
+    monkeypatch.setattr(embedder, "available", lambda: False)
+    s = MemoryStore(store_path)
+    rec = s.add("I take my coffee black, no sugar")
+    assert "vec" not in s.all()[0]
+    # Embedder comes back (fake_embedder patched available -> re-patch True).
+    monkeypatch.setattr(embedder, "available", lambda: True)
+    fake_embedder.calls.clear()
+    out = s.retrieve("how do I like my hot drinks in the morning?")
+    assert out and out[0]["id"] == rec["id"]
+    embedded_texts = [t for call in fake_embedder.calls for t in call]
+    assert "I take my coffee black, no sugar" in embedded_texts  # backfilled
+    # Second retrieve: only the query is embedded, never the records again.
+    fake_embedder.calls.clear()
+    s.retrieve("how do I like my hot drinks in the morning?")
+    embedded_texts = [t for call in fake_embedder.calls for t in call]
+    assert embedded_texts == ["how do I like my hot drinks in the morning?"]
+    # And the backfilled vec survives a restart (persisted once).
+    fresh = MemoryStore(store_path)
+    assert fresh.all()[0].get("vec"), "backfilled vector must be persisted"
