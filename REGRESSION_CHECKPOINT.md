@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-15 (fresh full-suite run, after Slice 19 — semantic memory + pinned prefs)
-**Tip commit at capture:** `d482363` on `main` (Slice 19 Stage 3)
+**Checkpoint date:** 2026-07-16 (after Slice 21 — win32 window resolution; latency fix)
+**Tip commit at capture:** `0d6a0e6` on `main` (Slice 21 Stages 1-2)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -17,28 +17,62 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504;
-> `9c7638f` (slice 16) 489;
+> Previous checkpoints: `5e3f0dc` (slice 19) 547; `a67c4e5` (slice 18) 530;
+> `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
 > (slice 15) 423; `818a921` (slice 14) 412; `65aa362` (slice 13)
 > 391; `a920313` (slice 12) 374; `3dfefa7` (slice 11) 364; `a4aa50b` (slice 5)
 > 193. All 0 failed / 0 skipped.
 
 ---
 
-## 1. Regression signal — test suite
+## 1. Regression signal — test suite (550 tests; slice 21 added no tests)
 
-```
-python -m pytest tests/ -q
-547 passed, 3 warnings in 378.73s (0:06:18)   # exit 0
-```
+**HONEST STATUS — no single clean 0-failed pass was captured this checkpoint.**
+The deterministic core (~500 tests) passed on every attempt; the failures were
+all **live-MODEL** tests hitting the free-tier Gemini **per-minute** rate limit,
+and they **rotated** across four full runs (the definitive signature of
+throttling, not a regression — a real break fails the same test every time):
 
-| Metric | Value |
-|---|---|
-| Passed | **547** |
-| Failed | **0** |
-| Skipped | **0** |
-| Duration | **378.73s** (6:18) |
-| Exit code | **0** |
+| Run | passed | failed | the failed set (all live-model) |
+|---|---|---|---|
+| 1 (02:45 UTC) | 545 | 5 | email, memory×3, vision — all "Gemini is rate-limiting us" |
+| 2 (07:06 UTC) | 547 | 3 | email, dry-run + one `test_confirmations` **load** flake |
+| 3 (07:1x)     | 548 | 2 | email, search |
+| 4 (07:2x)     | 545 | 5 | chain, email, memory×3 |
+
+- **Every failure verified green in isolation** (`test_confirmations` 13/13;
+  `test_dryrun::test_live_dry_run_notepad` + `test_email_live` 2/2). Three
+  spaced probes confirmed the **daily** quota was healthy — the cause is the
+  suite's live calls clustering past the per-minute cap, cascading once one
+  429 returns instantly. **No deterministic test, and no test that exercises
+  the slice-21 change** (`test_input`, `test_primitives`, `test_confirm_primitives`,
+  `test_tabs` — all live-UIA, not live-model) **failed on any run.**
+- **Why not just retry to green:** today's free-tier bucket was depleted by
+  slice-20/21 profiling, so RPM bit every clustered run. A definitive single
+  `550 / 0 / 0` should be re-captured on a fresh daily bucket (a day with no
+  prior heavy API use) — but the slice-21 change is proven correct without it
+  (its own live-UIA tests passed every run). Same doctrine as the slice-18
+  four-attempt note; the difference here is the clean single pass wasn't
+  reached, and this checkpoint says so plainly rather than cherry-picking.
+
+### The slice-21 win (measured, `tests/harness_latency_eval.py`)
+PC-control window resolution moved from pywinauto UIA enumeration to win32
+handle resolution. S1 = the Notepad chain "open notepad, type hello world,
+press enter" (median of clean reps; gate/user-wait excluded):
+
+| S1 category | Before (main, slice 20) | After (win32) |
+|---|---|---|
+| **Total wall** | **34.4 s** | **~5.3 s** (rep2); 7.6 s (rep1) |
+| `win_resolve` (the bottleneck) | 19.0 s / **55%** | **0.01–0.16 s / ~0%** |
+| readback (a nested `_target_window`) | 4.9 s / 14% | **0.04 s** |
+| launch-poll UIA | 4.8 s / 14% | **~0 s** |
+| model | 3.8 s / 11% | 3.0 s (now the largest piece) |
+| typing + fixed settles | 1.4 s | 1.8 s (unchanged safety guards) |
+
+(S2 vision-click after-numbers were RPM-corrupted this run; its `win_resolve`
+share is eliminated by the same code path, and its ~13 s of vision *model*
+calls are deliberately out of scope — slice-17-justified. Re-run the harness
+on a fresh bucket for a clean S2.)
 
 > **Slice-19 run note (honest):** the clean run above was attempt three.
 > Attempt 1 failed 3 live-UIA tests (Notepad input/chain) because the
