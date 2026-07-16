@@ -122,12 +122,15 @@ def test_close_window_describe_none_when_no_match():
 def test_find_window_title_matches_by_owning_process(monkeypatch):
     """Spotify retitles its window to the playing track, so hint 'spotify'
     stops matching by title mid-chain and every targeted action breaks.
-    A window must also match when its OWNING PROCESS is '<hint>.exe'."""
+    A window must also match when its OWNING PROCESS is '<hint>.exe'.
+
+    Slice 21: _enum_windows now carries the HWND too (title, pid, hwnd) so
+    the resolver can hand a handle to pywinauto instead of re-enumerating."""
     from jarvis.primitives import windows as jwindows
 
     monkeypatch.setattr(jwindows, "_enum_windows",
-                        lambda: [("Kendrick Lamar - Not Like Us", 4242),
-                                 ("Untitled - Notepad", 777)])
+                        lambda: [("Kendrick Lamar - Not Like Us", 4242, 111),
+                                 ("Untitled - Notepad", 777, 222)])
 
     class FakeProc:
         def __init__(self, pid):
@@ -138,10 +141,16 @@ def test_find_window_title_matches_by_owning_process(monkeypatch):
     import psutil
     monkeypatch.setattr(psutil, "Process", FakeProc)
 
+    # find_window_title contract preserved (returns just the title string).
     assert jwindows.find_window_title("spotify") == "Kendrick Lamar - Not Like Us"
-    # title passes still win first, and unknown stays None
     assert jwindows.find_window_title("notepad") == "Untitled - Notepad"
     assert jwindows.find_window_title("xyzzy-nothing") is None
+
+    # find_window returns (hwnd, title) with the SAME 3-pass precedence, so
+    # the input resolver can wrap the handle directly.
+    assert jwindows.find_window("spotify") == (111, "Kendrick Lamar - Not Like Us")
+    assert jwindows.find_window("notepad") == (222, "Untitled - Notepad")
+    assert jwindows.find_window("xyzzy-nothing") == (None, None)
 
 
 # ---------- slice 8 stage 1: search_files (AUTO, caged, read-only) ----------

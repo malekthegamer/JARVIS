@@ -10,75 +10,73 @@ from __future__ import annotations
 
 import time
 
-from jarvis.primitives.ui_tree import _co_init
+from jarvis.primitives.ui_tree import _co_init, _win32_windows
 
 
-def _enum_windows() -> list[tuple[str, int]]:
-    """(title, owning pid) for every titled top-level window. [] on failure."""
-    _co_init()
-    out: list[tuple[str, int]] = []
+def _enum_windows() -> list[tuple[str, int, int]]:
+    """(title, owning pid, hwnd) for every titled top-level window.
+
+    Slice 21: sources from the fast win32 enumeration (was a ~1.7 s pywinauto
+    UIA walk). The hwnd lets the resolver hand pywinauto a handle instead of
+    re-enumerating to match a title string (which could mismatch across the
+    win32/UIA name APIs). [] on failure."""
+    return _win32_windows()
+
+
+def find_window(title_substring: str) -> tuple[int | None, str | None]:
+    """(hwnd, title) of the best-matching open window, or (None, None).
+    Passes in order: exact title, substring title, then OWNING PROCESS name —
+    apps like Spotify retitle their window to the playing track (slice-6
+    acceptance finding), so '<hint>.exe' as the window's process must still
+    match or every targeted action breaks mid-task."""
+    needle = str(title_substring or "").strip().casefold()
+    if not needle:
+        return None, None
+    windows = _enum_windows()
+    for title, _pid, hwnd in windows:
+        if title.casefold() == needle:
+            return hwnd, title
+    for title, _pid, hwnd in windows:
+        if needle in title.casefold():
+            return hwnd, title
+    want = needle if needle.endswith(".exe") else needle + ".exe"
     try:
-        from pywinauto import Desktop  # lazy
-        for w in Desktop(backend="uia").windows():
+        import psutil
+        for title, pid, hwnd in windows:
             try:
-                title = w.window_text()
-                if title.strip():
-                    out.append((title, w.element_info.process_id or 0))
+                if pid and psutil.Process(pid).name().casefold() == want:
+                    return hwnd, title
             except Exception:
                 continue
     except Exception:
         pass
-    return out
+    return None, None
 
 
 def find_window_title(title_substring: str) -> str | None:
     """The actual title of the best-matching open window, or None.
-    Passes: exact title, substring title, then OWNING PROCESS name —
-    apps like Spotify retitle their window to the playing track (slice-6
-    acceptance finding), so '<hint>.exe' as the window's process must
-    still match or every targeted action breaks mid-task."""
-    needle = str(title_substring or "").strip().casefold()
-    if not needle:
-        return None
-    windows = _enum_windows()
-    for title, _pid in windows:
-        if title.casefold() == needle:
-            return title
-    for title, _pid in windows:
-        if needle in title.casefold():
-            return title
-    want = needle if needle.endswith(".exe") else needle + ".exe"
-    try:
-        import psutil
-        for title, pid in windows:
-            try:
-                if pid and psutil.Process(pid).name().casefold() == want:
-                    return title
-            except Exception:
-                continue
-    except Exception:
-        pass
-    return None
+    Thin wrapper over find_window (contract preserved for existing callers)."""
+    return find_window(title_substring)[1]
 
 
 def close_window(title_substring: str) -> dict:
-    """CONFIRM tier. Returns {"ok", "message"} — never raises."""
+    """CONFIRM tier. Returns {"ok", "message"} — never raises.
+
+    Slice 21: resolve the hwnd and wrap THAT handle (no title re-enumeration —
+    which both cost ~1.7 s and risked a win32-vs-UIA name mismatch)."""
     needle = str(title_substring or "").strip()
     try:
-        _co_init()
-        from pywinauto import Desktop  # lazy
-        matched = find_window_title(needle)
-        if matched is None:
+        hwnd, matched = find_window(needle)
+        if hwnd is None:
             return {"ok": False,
                     "message": f"No open window matching '{needle}'."}
-        for w in Desktop(backend="uia").windows():
-            if w.window_text() == matched:
-                w.close()
-                break
-        # verify it actually went away
+        _co_init()
+        from pywinauto import Desktop  # lazy
+        Desktop(backend="uia").window(handle=hwnd).wrapper_object().close()
+        # verify it actually went away (by handle — unambiguous)
         deadline = time.time() + 3
         while time.time() < deadline:
-            if find_window_title(matched) is None:
+            if find_window(matched)[0] is None:
                 return {"ok": True, "message": f"Closed window '{matched}'."}
             time.sleep(0.3)
         return {"ok": False,

@@ -19,15 +19,40 @@ def _co_init() -> None:
         pass  # already initialized on this thread, or pythoncom unavailable
 
 
-def list_windows() -> list[str]:
-    """Titles of visible top-level windows. Never raises — [] on failure."""
-    _co_init()
+def _win32_windows() -> list[tuple[str, int, int]]:
+    """(title, owning_pid, hwnd) for every visible, titled top-level window.
+
+    Slice 21: pywinauto's UIA enumeration reads window_text() over the whole
+    desktop tree and measured ~1.7 s per call (55% of a Notepad chain). This
+    is the same set via win32gui.EnumWindows — measured ~0.3 ms (~6000x), no
+    COM/UIA needed. Win11's modern Notepad IS visible here (Stage-0 probe).
+    Never raises — [] on failure."""
+    out: list[tuple[str, int, int]] = []
     try:
-        from pywinauto import Desktop  # lazy
-        return [w.window_text() for w in Desktop(backend="uia").windows()
-                if w.window_text().strip()]
+        import win32gui
+        import win32process
+
+        def _cb(hwnd, acc):
+            if not win32gui.IsWindowVisible(hwnd):
+                return
+            title = win32gui.GetWindowText(hwnd)
+            if not title.strip():
+                return
+            try:
+                _tid, pid = win32process.GetWindowThreadProcessId(hwnd)
+            except Exception:
+                pid = 0
+            acc.append((title, pid or 0, hwnd))
+
+        win32gui.EnumWindows(_cb, out)
     except Exception:
         return []
+    return out
+
+
+def list_windows() -> list[str]:
+    """Titles of visible top-level windows. Never raises — [] on failure."""
+    return [title for title, _pid, _hwnd in _win32_windows()]
 
 
 def window_present(title_substring: str) -> bool:
@@ -41,14 +66,11 @@ def window_present_for_process(exe_name: str) -> bool:
     Needed because some apps retitle their window away from their own name
     (Spotify shows the playing track — slice-6 acceptance finding), which
     false-negatives the title check. Never raises — False on failure."""
-    _co_init()
     want = exe_name.lower()
     try:
         import psutil
-        from pywinauto import Desktop  # lazy
-        for w in Desktop(backend="uia").windows():
+        for _title, pid, _hwnd in _win32_windows():
             try:
-                pid = w.element_info.process_id
                 if pid and psutil.Process(pid).name().lower() == want:
                     return True
             except Exception:

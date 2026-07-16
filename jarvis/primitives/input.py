@@ -120,18 +120,20 @@ def _foreground_window():
 def _target_window(window_hint: str | None):
     if window_hint:
         from jarvis.primitives import windows as jwindows
-        title = jwindows.find_window_title(window_hint)
-        if title is None:
+        # Slice 21: resolve the HWND fast (win32) and wrap that handle — the
+        # same hybrid _foreground_window uses. Replaces a ~10 s double UIA
+        # enumeration (find title + re-enumerate to match it) that also risked
+        # a win32-vs-UIA title mismatch. The handle is an unambiguous token.
+        hwnd, title = jwindows.find_window(window_hint)
+        if hwnd is None:
             return None, None
         try:
             _co_init()
             from pywinauto import Desktop
-            for w in Desktop(backend="uia").windows():
-                if w.window_text() == title:
-                    return w, title
+            win = Desktop(backend="uia").window(handle=hwnd).wrapper_object()
+            return win, title
         except Exception:
             return None, None
-        return None, None
     w = _foreground_window()
     return (w, w.window_text()) if w else (None, None)
 
