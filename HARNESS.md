@@ -180,6 +180,14 @@ vision check (if visual) → **then** commit. Message body = *why* + any deviati
   running against real apps + the real model (a library's actual API shape, a
   "set" call that silently no-ops, an app that retitles its own window). When a
   live run reveals a bug, fix it **test-first**.
+- **API-first, checked explicitly, not assumed**: the fastest, most reliable way
+  to make JARVIS act on a *specific external service* is almost never GUI
+  automation of that service's app — it's a direct API call, when one exists.
+  Probe for it like any other load-bearing assumption before planning (slice 11:
+  Gmail API over Outlook UI). When no API exists, GUI automation via the existing
+  primitives (`input.py`, `vision.py`) is the correct and *only* path — not a
+  compromise, just what the task requires — built to the same safety standard as
+  everything else (tiering, CONFIRM, verify-before-claiming-success).
 
 ## Operational gotchas
 - Long suites / servers: run in the **background**, get notified, don't poll.

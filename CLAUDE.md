@@ -27,6 +27,26 @@ code.** A plan is approvable only if it contains ALL of:
 No implementation begins until the user approves the plan. Approval conditions
 the user adds are binding — record them in the plan.
 
+### API-first for external services
+
+Before scoping GUI automation (clicking, typing, screen-reading) against a
+**specific named external service or app** — a platform, an app with a company
+behind it — **probe for an official, documented API first.** An API call is
+faster, more reliable, and lower-risk than driving a UI whenever one exists
+(precedent: slice 11 chose the Gmail API over Outlook UI automation for exactly
+this reason). This is a **standing check, not a one-time decision**:
+
+- **State the finding in the plan even when the answer is "no API — GUI
+  automation is the only path."** Don't skip the check silently.
+- **GUI automation (`input.py`/`vision.py`) is the permanent, correct path for
+  anything without an API** — most desktop apps, games, anything with no company
+  building integrations. That's the majority of real-world software, not a
+  failure case; the tiering + CONFIRM architecture is what makes it safe there.
+- **If an API exists but has real limits, say so honestly** — restricted access
+  tiers, app-review requirements, personal-vs-business account gates (e.g.
+  Instagram's Graph API needing a business/creator account) — rather than
+  assuming "API-first" always resolves cleanly.
+
 ---
 
 ## 2. Build
