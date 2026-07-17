@@ -59,11 +59,21 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;               /* keep conn + gear grouped at the right */
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.14em;
   color: var(--text-dim);
 }
+.settings-gear {
+  margin-left: 16px;
+  font-size: 16px;
+  line-height: 1;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color 0.15s, transform 0.2s;
+}
+.settings-gear:hover { color: var(--cyan); transform: rotate(45deg); }
 .conn-dot {
   width: 7px; height: 7px;
   border-radius: 50%;
