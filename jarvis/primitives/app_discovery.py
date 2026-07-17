@@ -146,7 +146,11 @@ def desktop_shortcuts() -> list[dict]:
                                     "launch": m.group(1).strip()})
                 elif ext == ".lnk":
                     target = apps._lnk_target(full)
-                    if target and os.path.isfile(target):
+                    # Files AND folders: real desktops shortcut both (the
+                    # A3 acceptance found ArtTuneDB.lnk -> a config FOLDER);
+                    # os.startfile opens a folder in Explorer.
+                    if target and (os.path.isfile(target)
+                                   or os.path.isdir(target)):
                         out.append({"name": stem, "source": "desktop",
                                     "launch": target})
         except Exception:

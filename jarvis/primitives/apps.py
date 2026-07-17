@@ -151,6 +151,12 @@ def launch_app(name: str) -> dict:
             os.startfile(target)
             return {"ok": True, "pid": None, "resolved": target,
                     "matched": matched, "message": f"Opened {target}."}
+        if os.path.isdir(target):
+            # A folder shortcut: open in Explorer (no pid of our own to claim).
+            os.startfile(target)
+            return {"ok": True, "pid": None, "resolved": target,
+                    "matched": matched,
+                    "message": f"Opened folder {os.path.basename(target)} in Explorer."}
         proc = subprocess.Popen([target])
         return {"ok": True, "pid": proc.pid, "resolved": target,
                 "matched": matched,

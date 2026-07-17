@@ -244,3 +244,34 @@ def test_plain_uri_launch_keeps_old_behavior(monkeypatch):
     out = primitives.execute("launch_app", {"name": "settings"})
     assert called["n"] == 0, "non-game URIs must not gain a window poll"
     assert out.startswith("Opened ms-settings:")
+
+
+# ------------------------------------------- folder shortcuts (A3 finding)
+
+def test_desktop_lnk_to_folder_kept(tmp_path, monkeypatch):
+    """The REAL desktop had ArtTuneDB.lnk -> a FOLDER; 'open X' on a folder
+    shortcut must open it in Explorer, not vanish from discovery."""
+    d = tmp_path / "desk3"
+    d.mkdir()
+    (d / "MyDocs.lnk").write_bytes(b"fake")
+    target_dir = tmp_path / "real_folder"
+    target_dir.mkdir()
+    monkeypatch.setattr(disco, "DESKTOP_DIRS", [str(d)])
+    monkeypatch.setattr(disco, "_steam_root", lambda: None)
+    monkeypatch.setattr(disco, "EPIC_MANIFEST_DIR", "missing")
+    monkeypatch.setattr(apps, "_lnk_target", lambda p: str(target_dir))
+    hit = disco.find("mydocs")
+    assert hit and hit["launch"] == str(target_dir), hit
+
+
+def test_launch_app_opens_folder_via_startfile(tmp_path, monkeypatch):
+    folder = tmp_path / "somefolder"
+    folder.mkdir()
+    monkeypatch.setattr(apps, "resolve_app",
+                        lambda name: (str(folder), "somefolder"))
+    opened = []
+    monkeypatch.setattr(apps.os, "startfile", lambda t: opened.append(t),
+                        raising=False)
+    r = apps.launch_app("somefolder")
+    assert r["ok"] and opened == [str(folder)], r
+    assert r["pid"] is None           # Explorer owns it; no pid to claim
