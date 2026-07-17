@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-16 (after Slice 21 — win32 window resolution; latency fix)
-**Tip commit at capture:** `0d6a0e6` on `main` (Slice 21 Stages 1-2)
+**Checkpoint date:** 2026-07-17 (after Slice 22 — app discovery + smooth cursor)
+**Tip commit at capture:** `c8d44e0` on `main` (Slice 22 Stage B)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -25,7 +25,7 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (550 tests; slice 21 added no tests)
+## 1. Regression signal — test suite (570 tests: 550 + 17 app-discovery + 3 cursor)
 
 **HONEST STATUS — no single clean 0-failed pass was captured this checkpoint.**
 The deterministic core (~500 tests) passed on every attempt; the failures were
@@ -54,6 +54,37 @@ throttling, not a regression — a real break fails the same test every time):
   (its own live-UIA tests passed every run). Same doctrine as the slice-18
   four-attempt note; the difference here is the clean single pass wasn't
   reached, and this checkpoint says so plainly rather than cherry-picking.
+
+**Slice-22 update (2026-07-17): same pattern, two more runs, one REAL fix.**
+Run 1: 567/3 — the `test_confirmations` single-flight race (its SECOND gate
+flake) + dry-run/email RPM. The race was a genuine test bug — it polled for
+the pending request but not for the subscriber event before dereferencing
+`events[0]` — **fixed mechanically** (wait for both), so that one is gone,
+not dismissed. Run 2: 566/4 — email + memory×3, all "Gemini is
+rate-limiting us", all isolation-green (5/5). The standing conclusion holds:
+free-tier RPM cannot reliably carry ~570 tests' clustered live calls in one
+pass; the deterministic core has never failed once across all slice-21/22
+gate runs. **The definitive clean pass wants a fresh daily bucket or a paid
+key** — the recurring recommendation stands.
+
+### Slice 22 — app discovery + smooth cursor (features, live-verified)
+- **`launch_app` now finds what actually exists on the machine**: desktop
+  `.lnk`/`.url` shortcuts (files AND folders — a real desktop shortcut
+  targeted a config folder), Steam libraries (registry root →
+  libraryfolders.vdf → appmanifests, deduped), Epic manifests. Launches use
+  the launchers' documented URI protocols (API-first): `steam://rungameid/`,
+  `com.epicgames.launcher://apps/`. Ambiguity across genuinely different
+  apps returns candidates and launches NOTHING; the same app on several
+  sources resolves by priority. Game URIs get a 20 s window poll +
+  honest-dispatch message (never a false OK).
+- **Live acceptance (real brain, mechanical verification):** "open rocket
+  league" → Epic `Sugar` URI → RocketLeague.exe up **13 s** after the
+  request; "open ArtTuneDB" (desktop-only folder .lnk; old resolver: None)
+  → real `ArtTuneDB - File Explorer` window.
+- **Smooth cursor:** eased glide before clicks, 152.5 ms measured on a
+  632 px real-screen move (cap 200 ms), landing pixel byte-identical,
+  `input.smooth_cursor=false` restores teleport; zero targeting/tier/gate
+  changes (pinned by the pre-existing point-click test, unmodified).
 
 ### The slice-21 win (measured, `tests/harness_latency_eval.py`)
 PC-control window resolution moved from pywinauto UIA enumeration to win32

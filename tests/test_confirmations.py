@@ -118,9 +118,12 @@ def test_single_flight_second_request_superseded(manager, events):
 
     t = threading.Thread(target=first)
     t.start()
-    # wait until the first is actually pending
+    # Wait until the first is actually pending AND its subscriber event has
+    # landed — pending-only raced events[0] under full-suite load (IndexError
+    # flaked two gate runs, slices 21-22; isolation-green both times).
     deadline = time.time() + 1
-    while time.time() < deadline and manager.pending_event() is None:
+    while time.time() < deadline and (manager.pending_event() is None
+                                      or not events):
         time.sleep(0.01)
 
     t0 = time.time()
