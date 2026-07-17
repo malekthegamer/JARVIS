@@ -535,7 +535,7 @@ PRIMITIVES: dict[str, dict] = {
     },
     "browse_fill": {
         "fn": _run_browse_fill,
-        "tier": "auto",
+        "classify": web.classify_web_fill,
         "schema": {"name": "browse_fill",
                    "description": ("Type text into a form field on the current web "
                                    "page, identified by its label or placeholder. "
@@ -700,6 +700,11 @@ def tools_schema() -> list[dict]:
     if not settings.get("web.enabled", True):
         withheld.update({"browse_navigate", "read_page", "browse_click",
                          "browse_fill", "close_browser"})
+    elif settings.get("web.profile_mode", "isolated") == "real":
+        # Real-browser mode (slice 24) is NAVIGATE + READ only — committal
+        # actions on the user's logged-in session are withheld entirely
+        # (a direct call also refuses via classify).
+        withheld.update({"browse_click", "browse_fill"})
     if not settings.get("search.enabled", True):
         withheld.add("web_search")
     return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]

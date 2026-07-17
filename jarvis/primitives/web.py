@@ -389,10 +389,24 @@ def _match_clickable(page, target: str):
     return None, "", ""
 
 
+_REAL_MODE_READONLY = ("Real-browser mode is navigate + read only — I won't "
+                       "click or type on your logged-in session.")
+
+
+def classify_web_fill(args: dict) -> dict:
+    """AUTO in isolated mode; BLOCKED in real mode (navigate+read only)."""
+    if _real_mode_setting():
+        return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
+    return {"tier": "auto",
+            "description": f"Fill '{str(args.get('field',''))}'"}
+
+
 def classify_web_click(args: dict) -> dict:
     """Reuse input._click_tier on the element's accessible name; FAIL CLOSED to
     CONFIRM for an actionable element with no name (the JS-button blind spot).
-    Never raises."""
+    In real-browser mode, committal actions are refused outright. Never raises."""
+    if _real_mode_setting():
+        return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
     target = str(args.get("target", "") or "").strip()
     try:
         m = session.find_clickable(target)

@@ -313,3 +313,45 @@ def test_teardown_kills_only_our_pid(monkeypatch):
     assert proc.terminated or proc.killed
     assert called["taskkill"] is False, "must never taskkill the user's Chrome"
     web.session._proc = None
+
+
+# ------------------------------------------- S2: real-mode withholding
+
+def test_real_mode_withholds_click_and_fill_from_schema(monkeypatch):
+    from jarvis.brain import JarvisBrain
+    settings.set("web.profile_mode", "real", persist=False)
+    try:
+        names = [t["name"] for t in JarvisBrain().tools()]
+    finally:
+        settings.set("web.profile_mode", "isolated", persist=False)
+    # navigate + read + close stay; committal actions are gone
+    assert "browse_navigate" in names and "read_page" in names
+    assert "close_browser" in names
+    assert "browse_click" not in names, "real mode must withhold browse_click"
+    assert "browse_fill" not in names, "real mode must withhold browse_fill"
+    # isolated mode still offers them
+    assert "browse_click" in [t["name"] for t in JarvisBrain().tools()]
+
+
+def test_real_mode_direct_click_is_blocked():
+    """Belt-and-braces: even a direct call refuses in real mode."""
+    settings.set("web.profile_mode", "real", persist=False)
+    try:
+        assert web.classify_web_click({"target": "Buy"})["tier"] == "blocked"
+        assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "blocked"
+    finally:
+        settings.set("web.profile_mode", "isolated", persist=False)
+    # isolated mode: fill is auto again
+    assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "auto"
+
+
+def test_real_mode_navigate_still_cross_origin_gated(monkeypatch):
+    """Navigation keeps its cross-origin CONFIRM in real mode (unchanged guard)."""
+    settings.set("web.profile_mode", "real", persist=False)
+    try:
+        web.session.current_url = "https://youtube.com/feed"
+        info = web.classify_navigate({"url": "https://example.com/x"})
+        assert info["tier"] == "confirm"   # different host -> still gated
+    finally:
+        settings.set("web.profile_mode", "isolated", persist=False)
+        web.session.current_url = None
