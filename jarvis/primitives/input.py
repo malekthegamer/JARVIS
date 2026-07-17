@@ -439,10 +439,44 @@ def _element_present_at(point) -> bool:
         return False
 
 
+def _move_cursor(x: int, y: int) -> None:
+    """Slice 22: eased glide to (x, y) — PURELY cosmetic. The landing pixel
+    is byte-identical to the old instant jump (the final exact moveTo always
+    runs), total added time is capped by input.cursor_move_max_ms (200), and
+    any failure inside the glide falls through to the plain jump — motion
+    must never break a click. input.smooth_cursor=false restores teleport."""
+    import pydirectinput
+    x, y = int(x), int(y)
+    try:
+        from jarvis.core.settings_store import settings
+        if settings.get("input.smooth_cursor", True):
+            import pyautogui
+            pos = pyautogui.position()
+            dist = ((x - pos.x) ** 2 + (y - pos.y) ** 2) ** 0.5
+            if dist > 4:
+                steps = max(8, min(25, int(dist / 40)))
+                total_s = min(float(settings.get("input.cursor_move_max_ms", 200)),
+                              60 + dist * 0.15) / 1000.0
+                pause = total_s / steps
+                for i in range(1, steps):
+                    t = i / steps
+                    e = 1 - (1 - t) ** 2          # ease-out: fast start, soft landing
+                    pydirectinput.moveTo(int(pos.x + (x - pos.x) * e),
+                                         int(pos.y + (y - pos.y) * e),
+                                         _pause=False)
+                    time.sleep(pause)
+    except Exception:
+        pass  # cosmetic layer only — fall through to the exact jump
+    try:
+        pydirectinput.moveTo(x, y, _pause=False)
+    except TypeError:
+        pydirectinput.moveTo(x, y)  # a moveTo without _pause (incl. test fakes)
+
+
 def _click_xy(x: int, y: int, label: str) -> dict:
     try:
         import pydirectinput
-        pydirectinput.moveTo(x, y)
+        _move_cursor(x, y)
         pydirectinput.click(x, y)
         return {"ok": True, "message": f"Clicked {label}."}
     except Exception:
@@ -516,7 +550,7 @@ def click(description: str, window_hint: str | None = None,
     x, y = r["mid_point"]
     try:
         import pydirectinput
-        pydirectinput.moveTo(x, y)
+        _move_cursor(x, y)
         pydirectinput.click(x, y)
         return {"ok": True, "message": f"Clicked '{r['element_name']}'.",
                 "element_name": r["element_name"]}

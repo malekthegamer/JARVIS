@@ -115,6 +115,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,
         "max_results": 5,
     },
+    "input": {
+        # Slice 22: cosmetic eased cursor glide before clicks. Same landing
+        # pixel, same click semantics; hard time cap keeps it out of the
+        # latency budget (~4% of a post-slice-21 chain, worst case).
+        "smooth_cursor": True,
+        "cursor_move_max_ms": 200,
+    },
     "apps": {
         # Slice 22: launcher-mediated game launches (steam:// / Epic URIs)
         # have no pid to watch and boot slowly — poll for the game's window

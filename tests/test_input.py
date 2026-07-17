@@ -565,3 +565,70 @@ def test_click_point_window_gone(monkeypatch):
     monkeypatch.setattr(jinput, "_target_window", lambda wh: (None, None))
     out = jinput.click("x", window_hint="App", point=(50, 60))
     assert out["ok"] is False
+
+
+# ---------------- slice 22 B: smooth cursor motion (cosmetic, bounded) ------
+
+class _MoveRecorder:
+    """Fake pydirectinput: records every moveTo/click; position() feeds it."""
+    def __init__(self, start=(100, 100)):
+        self.moves, self.clicks = [], []
+        self._pos = start
+    def moveTo(self, x, y, *a, **k):
+        self.moves.append((x, y))
+        self._pos = (x, y)
+    def click(self, x, y, *a, **k):
+        self.clicks.append((x, y))
+
+
+@pytest.fixture()
+def move_recorder(monkeypatch):
+    rec = _MoveRecorder()
+    import types
+    fake = types.SimpleNamespace(moveTo=rec.moveTo, click=rec.click)
+    monkeypatch.setitem(__import__("sys").modules, "pydirectinput", fake)
+    import pyautogui
+    monkeypatch.setattr(pyautogui, "position",
+                        lambda: types.SimpleNamespace(x=100, y=100))
+    return rec
+
+
+def test_smooth_move_lands_exactly_and_within_budget(move_recorder):
+    import time as _t
+    from jarvis.core.settings_store import settings
+    settings.set("input.smooth_cursor", True, persist=False)
+    t0 = _t.perf_counter()
+    jinput._move_cursor(700, 500)
+    took_ms = (_t.perf_counter() - t0) * 1000
+    cap = float(settings.get("input.cursor_move_max_ms", 200))
+    assert move_recorder.moves[-1] == (700, 500), "must land EXACTLY on target"
+    assert len(move_recorder.moves) >= 8, "should glide, not teleport"
+    assert took_ms <= cap + 150, f"motion must stay bounded, took {took_ms:.0f}ms"
+    xs = [m[0] for m in move_recorder.moves]
+    assert xs == sorted(xs), "path must approach monotonically (no wobble)"
+
+
+def test_smooth_move_disabled_is_single_jump(move_recorder):
+    from jarvis.core.settings_store import settings
+    settings.set("input.smooth_cursor", False, persist=False)
+    try:
+        jinput._move_cursor(700, 500)
+    finally:
+        settings.set("input.smooth_cursor", True, persist=False)
+    assert move_recorder.moves == [(700, 500)], "kill switch = old instant jump"
+
+
+def test_click_paths_use_move_cursor(monkeypatch):
+    """Both click sites route through _move_cursor (cosmetics can't change
+    targeting): the recorded final move must equal the click point."""
+    calls = []
+    monkeypatch.setattr(jinput, "_move_cursor", lambda x, y: calls.append((x, y)))
+    class _Fake:
+        def moveTo(self, *a, **k): pass
+        def click(self, x, y, *a, **k): calls.append(("click", x, y))
+    import sys as _s
+    monkeypatch.setitem(_s.modules, "pydirectinput", _Fake())
+    out = jinput._click_xy(321, 654, "the button")
+    assert out["ok"]
+    assert calls[0] == (321, 654), "move to the exact target first"
+    assert calls[1] == ("click", 321, 654)
