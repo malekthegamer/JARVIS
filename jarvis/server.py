@@ -265,6 +265,102 @@ def get_state() -> JSONResponse:
     return JSONResponse({"state": broadcaster.current.value})
 
 
+# ---------- settings API (slice 23; surface salvaged from legacy) ----------
+
+_KEYED = ("gemini", "openai", "claude", "openrouter", "elevenlabs")
+
+
+@app.get("/api/settings")
+def get_settings() -> JSONResponse:
+    from jarvis import config
+    from jarvis.providers import registry
+    masked = {name: config.mask_key(config.get_api_key(name)) for name in _KEYED}
+    availability = {fam: registry.available(fam) for fam in ("brain", "tts", "stt")}
+    return JSONResponse({
+        "settings": settings.all(),
+        "keys": masked,                                    # secrets NEVER raw here
+        "availability": availability,
+        "provider_names": {f: registry.names(f) for f in ("brain", "tts", "stt")},
+    })
+
+
+@app.post("/api/settings")
+async def post_settings(payload: dict) -> JSONResponse:
+    from jarvis import config
+    from jarvis.core import audit
+    keys = payload.get("keys") or {}
+    for provider, value in keys.items():
+        if value and "•" not in value:  # ignore masked placeholders echoed back
+            config.set_api_key(provider, value)
+    new_settings = payload.get("settings") or {}
+    wake_before = settings.get("wake.enabled", False)
+    if new_settings:
+        settings.save(new_settings)      # deep-merge, persist, hot-reload providers
+        try:
+            audit.audit_log.record(tool="settings", tier="auto", status="ok",
+                                   args={"sections": list(new_settings.keys())},
+                                   result="settings saved")  # names only, never values
+        except Exception:
+            pass
+    else:
+        settings.reload()
+    # a wake toggle must actually start/stop the always-on listener
+    if settings.get("wake.enabled", False) != wake_before:
+        (start_wake if settings.get("wake.enabled", False) else stop_wake)()
+    try:
+        from jarvis.core import autostart
+        autostart.sync_from_settings()
+    except Exception:
+        pass
+    return get_settings()
+
+
+@app.get("/api/voices")
+def get_voices(provider: str = "edge_tts") -> JSONResponse:
+    from jarvis.providers import registry
+    voices: list[dict] = []
+    try:
+        if provider == "edge_tts":
+            from jarvis.providers.tts.edge_tts_provider import EdgeTTSProvider
+            voices = EdgeTTSProvider.list_voices()
+        elif provider == "elevenlabs":
+            p = registry.get("tts", "elevenlabs")
+            if p and p.is_configured():
+                voices = p.list_voices()
+    except Exception:
+        pass
+    return JSONResponse({"voices": voices})
+
+
+@app.get("/api/mics")
+def get_mics() -> JSONResponse:
+    try:
+        from jarvis.voice.capture import (find_real_mic, is_probably_real_mic,
+                                          list_input_devices)
+        devices = [{"index": i, "name": n, "real": is_probably_real_mic(n)}
+                   for i, n in list_input_devices()]
+        idx, name = find_real_mic()
+        return JSONResponse({"devices": devices, "auto": {"index": idx, "name": name}})
+    except Exception as exc:
+        return JSONResponse({"devices": [], "auto": None, "error": str(exc)})
+
+
+@app.post("/api/tts_test")
+async def tts_test(payload: dict | None = None) -> JSONResponse:
+    text = str((payload or {}).get("text")
+               or "Good evening, sir. All systems operational.")
+    asyncio.get_running_loop().run_in_executor(
+        None, lambda: _safe_speak(text))
+    return JSONResponse({"ok": True})
+
+
+def _safe_speak(text: str) -> None:
+    try:
+        voice_manager.speak(text)
+    except Exception:
+        pass
+
+
 @app.post("/api/listen")
 async def api_listen() -> JSONResponse:
     """Push-to-talk: capture one utterance, then run the pipeline on it."""
@@ -338,6 +434,14 @@ def index():
     if page.exists():
         return FileResponse(page)
     return JSONResponse({"status": "HUD not built yet — stage 5"})
+
+
+@app.get("/settings")
+def settings_page():
+    page = STATIC_DIR / "settings.html"
+    if page.exists():
+        return FileResponse(page)
+    return JSONResponse({"status": "settings page not built"}, status_code=404)
 
 
 if STATIC_DIR.exists():
