@@ -115,6 +115,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "enabled": True,
         "max_results": 5,
     },
+    "apps": {
+        # Slice 22: launcher-mediated game launches (steam:// / Epic URIs)
+        # have no pid to watch and boot slowly — poll for the game's window
+        # by name up to this long, then report the dispatch honestly.
+        "game_window_wait_s": 20,
+    },
     "audit": {
         # Persistent audit log (slice 18) — every execute() call + memory
         # mutation, durable JSONL at data/audit/ (plaintext envelope +

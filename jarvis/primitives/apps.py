@@ -143,17 +143,18 @@ def launch_app(name: str) -> dict:
         return {"ok": False, "message": "No application name given.",
                 "pid": None, "resolved": None}
     try:
-        target, _matched = resolve_app(name)
+        target, matched = resolve_app(name)
         if target is None:
-            return {"ok": False, "pid": None, "resolved": None,
+            return {"ok": False, "pid": None, "resolved": None, "matched": None,
                     "message": f"No application named '{name}' found on this system."}
         if _is_uri(target):
             os.startfile(target)
             return {"ok": True, "pid": None, "resolved": target,
-                    "message": f"Opened {target}."}
+                    "matched": matched, "message": f"Opened {target}."}
         proc = subprocess.Popen([target])
         return {"ok": True, "pid": proc.pid, "resolved": target,
+                "matched": matched,
                 "message": f"Launched {os.path.basename(target)} (pid {proc.pid})."}
     except Exception as exc:
-        return {"ok": False, "pid": None, "resolved": None,
+        return {"ok": False, "pid": None, "resolved": None, "matched": None,
                 "message": f"Couldn't launch '{name}': {exc}"}

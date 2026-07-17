@@ -25,6 +25,13 @@ WINDOW_WAIT_S = 5.0
 DIFF_MEANINGFUL = 0.01
 
 
+# Launcher-mediated game URIs (slice 22): the launch is DISPATCHED to
+# Steam/Epic, so no pid exists and the game window can take much longer than
+# a normal app to appear — poll by the matched game NAME, longer, and report
+# honestly either way.
+_GAME_URI_PREFIXES = ("steam://", "com.epicgames.launcher://")
+
+
 def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
     """Act (launch) + observe (ui tree, screenshots) + verify (both signals),
     reported separately so the model — and the user — see the evidence."""
@@ -34,21 +41,31 @@ def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
     if not result["ok"]:
         return f"FAILED: {result['message']}"
 
-    if result["resolved"] and not result["pid"]:  # URI launch (ms-settings:)
+    game = bool(result["resolved"]
+                and result["resolved"].startswith(_GAME_URI_PREFIXES))
+    exe = ""
+    wait_s = WINDOW_WAIT_S
+    if game:
+        # Poll for the game's own window by its (normalized) display name —
+        # there's no pid to watch, the launcher owns the process tree.
+        from jarvis.primitives.app_discovery import _norm as _disco_norm
+        needle = _disco_norm(result.get("matched") or name) or None
+        wait_s = float(settings.get("apps.game_window_wait_s", 20))
+    elif result["resolved"] and not result["pid"]:  # plain URI (ms-settings:)
         needle = None
     else:
         needle = os.path.splitext(os.path.basename(result["resolved"]))[0]
+        exe = os.path.basename(result["resolved"]) if result["resolved"] else ""
 
     window_ok = False
-    exe = os.path.basename(result["resolved"]) if result["resolved"] else ""
     if needle:
-        deadline = time.time() + WINDOW_WAIT_S
+        deadline = time.time() + wait_s
         while time.time() < deadline:
             # Title needle OR owning process: apps like Spotify retitle their
             # window to the playing track, so the title check alone
             # false-negatives (slice-6 acceptance finding).
             if ui_tree.window_present(needle) \
-                    or ui_tree.window_present_for_process(exe):
+                    or (exe and ui_tree.window_present_for_process(exe)):
                 window_ok = True
                 break
             time.sleep(0.4)
@@ -57,10 +74,16 @@ def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
 
     verify = []
     if needle:
-        verify.append(f"window titled '{needle}' or owned by {exe} "
-                      f"present={window_ok}")
+        verify.append(f"window titled '{needle}'"
+                      + (f" or owned by {exe}" if exe else "")
+                      + f" present={window_ok}")
     verify.append(f"screen changed {frac:.1%}"
                   + ("" if frac >= DIFF_MEANINGFUL else " (below meaningful threshold)"))
+    if game and not window_ok:
+        # Never a false OK: the dispatch is real, the window is not (yet).
+        verify.append("dispatched to the game launcher; the game window "
+                      "hasn't appeared yet (games can take longer to boot) — "
+                      "check again shortly")
     verdict = "VERIFIED" if (window_ok or (needle is None and frac >= DIFF_MEANINGFUL)) \
         else "NOT CONFIRMED — tell the user honestly"
     return f"{result['message']} VERIFY [{verdict}]: {'; '.join(verify)}."

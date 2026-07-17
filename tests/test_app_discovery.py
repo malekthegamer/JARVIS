@@ -183,3 +183,64 @@ def test_resolve_app_unknown_still_fails_closed(monkeypatch, nothing):
     monkeypatch.setattr(disco, "find", lambda name: None)
     target, _ = apps.resolve_app("xyzzy-no-such-app")
     assert target is None
+
+
+# ------------------------------------------------- A2: executor wire-in
+
+from jarvis import primitives
+from jarvis.core.settings_store import settings as _settings
+
+
+@pytest.fixture(autouse=True)
+def _broadcaster_back_to_idle():
+    """Leak guard (test_audit/test_shell pattern): execute() outside think()
+    parks the broadcaster at THINKING; reset so file order never matters."""
+    yield
+    from jarvis.state import AgentState, broadcaster
+    broadcaster.set(AgentState.IDLE)
+
+
+def _fake_launch(monkeypatch, resolved, matched):
+    monkeypatch.setattr(apps, "launch_app", lambda name: {
+        "ok": True, "pid": None, "resolved": resolved, "matched": matched,
+        "message": f"Opened {resolved}."})
+    import numpy as np
+    frame = np.zeros((4, 4, 3), dtype="uint8")
+    monkeypatch.setattr(primitives.screen, "capture_screen", lambda *a, **k: frame)
+    monkeypatch.setattr(primitives.screen, "screenshot_diff", lambda a, b: 0.0)
+
+
+def test_game_uri_launch_verified_by_window(monkeypatch):
+    _fake_launch(monkeypatch, "steam://rungameid/999", "Rocket League®")
+    seen = {}
+    monkeypatch.setattr(primitives.ui_tree, "window_present",
+                        lambda needle: seen.setdefault("needle", needle) or True)
+    out = primitives.execute("launch_app", {"name": "rocket league"})
+    assert "VERIFIED" in out, out
+    assert seen["needle"] == "rocket league"   # normalized name, ® stripped
+
+
+def test_game_uri_launch_honest_when_window_never_appears(monkeypatch):
+    _fake_launch(monkeypatch, "com.epicgames.launcher://apps/Sugar?action=launch",
+                 "Rocket League®")
+    monkeypatch.setattr(primitives.ui_tree, "window_present", lambda n: False)
+    monkeypatch.setattr(primitives.ui_tree, "window_present_for_process",
+                        lambda e: False)
+    _settings.set("apps.game_window_wait_s", 0.5, persist=False)
+    try:
+        out = primitives.execute("launch_app", {"name": "rocket league"})
+    finally:
+        _settings.set("apps.game_window_wait_s", 20, persist=False)
+    assert "hasn't appeared yet" in out, out          # honest dispatch, not silence
+    assert "VERIFIED" not in out.split("VERIFY")[0]   # never a false OK
+    assert "NOT CONFIRMED" in out or "DISPATCHED" in out
+
+
+def test_plain_uri_launch_keeps_old_behavior(monkeypatch):
+    _fake_launch(monkeypatch, "ms-settings:", "settings")
+    called = {"n": 0}
+    monkeypatch.setattr(primitives.ui_tree, "window_present",
+                        lambda n: called.__setitem__("n", called["n"] + 1) or False)
+    out = primitives.execute("launch_app", {"name": "settings"})
+    assert called["n"] == 0, "non-game URIs must not gain a window poll"
+    assert out.startswith("Opened ms-settings:")
