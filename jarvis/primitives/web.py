@@ -20,10 +20,17 @@ cross-origin classify). click/fill land in stage 2.
 """
 from __future__ import annotations
 
+import json
+import os
 import queue
+import subprocess
 import threading
+import time
+import urllib.request
+from pathlib import Path
 from urllib.parse import urlparse
 
+from jarvis import config
 from jarvis.core.settings_store import settings
 from jarvis.primitives.input import _click_tier  # reuse the committal classifier
 
@@ -34,6 +41,56 @@ class BrowserUnavailable(RuntimeError):
 
 _SETUP_HINT = ("Browser automation is unavailable — Playwright's browser isn't "
                "installed. Run:  python -m playwright install chromium")
+
+# ---- real-browser mode (slice 24): a DEDICATED real Chrome, driven via CDP ----
+# Chrome 136+ refuses --remote-debugging-port on the DEFAULT profile dir (an
+# anti-malware measure), and app-bound cookie encryption resists copying the
+# Default logins. The one path modern Chrome allows: launch the real Chrome on a
+# SEPARATE user-data-dir with the debug port, then connect_over_cdp. The user
+# signs into each site once; JARVIS's Chrome coexists with their everyday Chrome.
+
+
+def _real_mode_setting() -> bool:
+    return settings.get("web.profile_mode", "isolated") == "real"
+
+
+def _dedicated_dir() -> Path:
+    return config.DATA_DIR / "browser_profile"
+
+
+def _chrome_binary() -> str | None:
+    """The installed Chrome exe: App Paths registry first, then known paths."""
+    try:
+        import winreg
+        for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+            try:
+                with winreg.OpenKey(
+                    root, r"SOFTWARE\Microsoft\Windows\CurrentVersion"
+                          r"\App Paths\chrome.exe") as k:
+                    path = winreg.QueryValueEx(k, None)[0]
+                    if path and os.path.isfile(path):
+                        return path
+            except OSError:
+                continue
+    except Exception:
+        pass
+    for p in (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+              r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _debug_port_ready(port: int, deadline: float) -> bool:
+    """Poll the CDP endpoint until it answers or the deadline passes."""
+    while time.time() < deadline:
+        try:
+            urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/json/version", timeout=1).read()
+            return True
+        except Exception:
+            time.sleep(0.3)
+    return False
 
 
 def _timeout_ms() -> int:
@@ -50,17 +107,72 @@ class BrowserSession:
         self._ready = threading.Event()
         self._start_error: Exception | None = None
         self._page = None
+        self._proc = None          # the dedicated Chrome we launched (real mode)
+        self._mode = "isolated"    # captured at launch
         self.current_url: str | None = None  # read cross-thread for classify
+
+    @property
+    def real_mode(self) -> bool:
+        return _real_mode_setting()
+
+    # ---- launch strategies (unit-testable; no owner thread needed) ----
+    def _launch_isolated(self, pw):
+        headless = bool(settings.get("web.headless", False))
+        self._browser = pw.chromium.launch(headless=headless)
+        context = self._browser.new_context()  # fresh profile, no logins
+        return context, context.new_page()
+
+    def _launch_real(self, pw):
+        """Launch the user's real Chrome on a DEDICATED user-data-dir with the
+        debug port, then attach via CDP. Their everyday Chrome is untouched."""
+        exe = _chrome_binary()
+        if not exe:
+            raise BrowserUnavailable(
+                "Real-browser mode needs Google Chrome installed — I couldn't "
+                "find chrome.exe.")
+        port = int(settings.get("web.cdp_port", 9222))
+        dd = _dedicated_dir()
+        dd.mkdir(parents=True, exist_ok=True)
+        self._proc = subprocess.Popen([
+            exe, f"--remote-debugging-port={port}", f"--user-data-dir={dd}",
+            "--no-first-run", "--no-default-browser-check",
+            "--restore-last-session=false"])
+        if not _debug_port_ready(port, time.time() + 20):
+            self._teardown_real()
+            raise BrowserUnavailable(
+                "Couldn't open the real-browser debug connection — Chrome may "
+                "have failed to start. Try again.")
+        browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        context = browser.contexts[0] if browser.contexts else browser.new_context()
+        page = context.pages[0] if context.pages else context.new_page()
+        return context, page
+
+    def _teardown_real(self) -> None:
+        """Terminate ONLY the Chrome we launched (its pid) — never a broad
+        taskkill, so the user's everyday Chrome is never touched."""
+        proc = self._proc
+        self._proc = None
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
 
     # ---- owner thread ----
     def _run(self) -> None:
         try:
             from playwright.sync_api import sync_playwright
             self._pw = sync_playwright().start()
-            headless = bool(settings.get("web.headless", False))
-            self._browser = self._pw.chromium.launch(headless=headless)
-            self._context = self._browser.new_context()  # fresh profile, no logins
-            self._page = self._context.new_page()
+            self._mode = "real" if _real_mode_setting() else "isolated"
+            if self._mode == "real":
+                self._context, self._page = self._launch_real(self._pw)
+            else:
+                self._context, self._page = self._launch_isolated(self._pw)
         except Exception as exc:
             self._start_error = exc
             self._ready.set()
@@ -77,11 +189,24 @@ class BrowserSession:
                 box["error"] = exc
             finally:
                 box["done"].set()
-        for closer in (getattr(self, "_context", None), getattr(self, "_browser", None)):
-            try:
-                closer and closer.close()
-            except Exception:
-                pass
+        # Real mode: close the CDP connection but DON'T .close() the context
+        # (that's the user's live Chrome via CDP); terminate our own launched
+        # Chrome pid instead. Isolated mode: close the context + browser we own.
+        if self._mode == "real":
+            for closer in (getattr(self, "_context", None),):
+                try:
+                    b = getattr(closer, "browser", None)
+                    b and b.close()  # closes the CDP connection, not the browser
+                except Exception:
+                    pass
+            self._teardown_real()
+        else:
+            for closer in (getattr(self, "_context", None),
+                           getattr(self, "_browser", None)):
+                try:
+                    closer and closer.close()
+                except Exception:
+                    pass
         try:
             self._pw.stop()
         except Exception:

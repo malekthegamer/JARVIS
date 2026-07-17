@@ -211,3 +211,105 @@ def test_close_browser_idempotent_never_raises():
     web.session.close()
     web.session.close()  # second close must be a clean no-op
     assert web.session.current_url is None
+
+
+# ================================================================ Slice 24:
+# real-browser mode — a DEDICATED real Chrome driven via CDP (navigate+read,
+# any site). Fake seams so no real Chrome ever launches in the suite.
+
+import subprocess as _subprocess
+
+
+class _FakePage:
+    def __init__(self): self.url = "about:blank"
+
+
+class _FakeContext:
+    def __init__(self, pages): self.pages = pages
+    def new_page(self): p = _FakePage(); self.pages.append(p); return p
+
+
+class _FakeCDPBrowser:
+    def __init__(self, ctx): self.contexts = [ctx]
+
+
+class _FakeProc:
+    def __init__(self): self.pid = 4242; self.terminated = False; self.killed = False
+    def terminate(self): self.terminated = True
+    def kill(self): self.killed = True
+    def poll(self): return None
+    def wait(self, timeout=None): return 0
+
+
+def _real_seams(monkeypatch, *, port_ready=True, chrome=True):
+    """Wire fake chrome-launch + CDP so _launch_real runs without a browser."""
+    rec = {"popen_args": None, "cdp_url": None, "proc": _FakeProc()}
+    monkeypatch.setattr(web, "_chrome_binary",
+                        lambda: r"C:\fake\chrome.exe" if chrome else None)
+    def fake_popen(args, *a, **k):
+        rec["popen_args"] = args
+        return rec["proc"]
+    monkeypatch.setattr(web.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(web, "_debug_port_ready",
+                        lambda port, deadline: port_ready)
+    ctx = _FakeContext([_FakePage()])
+    class _PW:
+        class chromium:
+            @staticmethod
+            def connect_over_cdp(url, **k):
+                rec["cdp_url"] = url
+                return _FakeCDPBrowser(ctx)
+    monkeypatch.setattr(web, "_real_mode_setting", lambda: True)
+    return rec, _PW
+
+
+def test_dedicated_dir_lives_under_data():
+    from jarvis import config
+    assert web._dedicated_dir() == config.DATA_DIR / "browser_profile"
+
+
+def test_real_launch_uses_remote_debug_on_dedicated_dir(monkeypatch):
+    rec, PW = _real_seams(monkeypatch)
+    settings.set("web.cdp_port", 9222, persist=False)
+    ctx, page = web.session._launch_real(PW)
+    args = rec["popen_args"]
+    assert r"C:\fake\chrome.exe" == args[0]
+    assert any("--remote-debugging-port=9222" == a for a in args), args
+    dd = str(web._dedicated_dir())
+    assert any(a == f"--user-data-dir={dd}" for a in args), args
+    assert rec["cdp_url"] == "http://127.0.0.1:9222"
+    assert page is ctx.pages[0]
+    assert web.session._proc is rec["proc"]
+
+
+def test_real_launch_chrome_missing_is_honest(monkeypatch):
+    rec, PW = _real_seams(monkeypatch, chrome=False)
+    with pytest.raises(web.BrowserUnavailable):
+        web.session._launch_real(PW)
+
+
+def test_real_launch_port_never_up_terminates_and_fails(monkeypatch):
+    rec, PW = _real_seams(monkeypatch, port_ready=False)
+    with pytest.raises(web.BrowserUnavailable):
+        web.session._launch_real(PW)
+    assert rec["proc"].terminated or rec["proc"].killed, \
+        "a Chrome we launched that never opened its port must be terminated"
+
+
+def test_teardown_kills_only_our_pid(monkeypatch):
+    """close() on a real-mode session terminates the launched subprocess and
+    NEVER a broad taskkill of the user's Chrome."""
+    rec, PW = _real_seams(monkeypatch)
+    web.session._launch_real(PW)
+    proc = web.session._proc
+    called = {"taskkill": False}
+    real_run = web.subprocess.run
+    def guard_run(args, *a, **k):
+        if args and "taskkill" in " ".join(map(str, args)).lower():
+            called["taskkill"] = True
+        return real_run(args, *a, **k) if False else None
+    monkeypatch.setattr(web.subprocess, "run", guard_run)
+    web.session._teardown_real()
+    assert proc.terminated or proc.killed
+    assert called["taskkill"] is False, "must never taskkill the user's Chrome"
+    web.session._proc = None

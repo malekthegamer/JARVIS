@@ -110,6 +110,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "headless": False,      # visible by default so the user watches; tests force True
         "timeout_s": 15,        # per-action wall-clock before an honest failure
         "max_read_chars": 5000, # cap on returned page text
+        # Slice 24 — real-browser mode. "isolated" (default): fresh Chromium, no
+        # logins (the safe sandbox). "real": a DEDICATED real Chrome (its own
+        # profile dir) driven via CDP, logged into the user's accounts after a
+        # one-time sign-in per site; NAVIGATE + READ only — committal actions
+        # (click/fill) are withheld in this mode. Coexists with the user's
+        # everyday Chrome (never closes it).
+        "profile_mode": "isolated",
+        "cdp_port": 9222,
     },
     "search": {
         # Web search (slice 15) — keyless DuckDuckGo (ddgs). A pure read (AUTO);
