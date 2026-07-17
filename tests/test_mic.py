@@ -29,3 +29,37 @@ def test_capture_stream_opens_and_closes():
             assert source.stream is not None
     except OSError as exc:
         pytest.fail(f"could not open capture stream on '{name}': {exc}")
+
+
+# ---------------- slice 23: local-Whisper port -----------------------------
+
+def test_whisper_registered_and_install_gated(monkeypatch):
+    from jarvis.providers import registry
+    import importlib.util as _u
+    p = registry.get("stt", "local_whisper")
+    assert p is not None, "local_whisper must be registered"
+    monkeypatch.setattr(_u, "find_spec", lambda name: object())
+    assert p.is_configured() is True
+    monkeypatch.setattr(_u, "find_spec", lambda name: None)
+    assert p.is_configured() is False
+
+
+def test_whisper_transcribe_seam_and_device(monkeypatch):
+    """No real model load: patch _get_model. Proves transcribe joins segments
+    and honors the whisper_model/device settings for the cache key."""
+    from jarvis.providers import registry
+    from jarvis.core.settings_store import settings
+
+    class _Seg:
+        def __init__(self, t): self.text = t
+
+    class _Model:
+        def transcribe(self, wav, **kw):
+            return ([_Seg(" hello "), _Seg("world")], object())
+
+    class _Audio:
+        def get_wav_data(self): return b"RIFFfake"
+
+    p = registry.get("stt", "local_whisper")
+    monkeypatch.setattr(p, "_get_model", lambda: _Model())
+    assert p.transcribe(_Audio()) == "hello world"

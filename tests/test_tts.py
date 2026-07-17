@@ -99,3 +99,72 @@ def test_pyttsx3_synthesizes_offline():
     py = registry.get("tts", "pyttsx3")
     data = py.synthesize("Offline voice check.")
     assert data and len(data) > 1000
+
+
+# ---------------- slice 23: ElevenLabs port + auto = ElevenLabs-first --------
+
+def test_elevenlabs_registered_and_key_gated(monkeypatch):
+    from jarvis.providers import registry
+    from jarvis import config
+    p = registry.get("tts", "elevenlabs")
+    assert p is not None, "ElevenLabs must be registered"
+    monkeypatch.setattr(config, "get_api_key",
+                        lambda name: "sk-fake" if name == "elevenlabs" else None)
+    assert p.is_configured() is True
+    monkeypatch.setattr(config, "get_api_key", lambda name: None)
+    assert p.is_configured() is False
+
+
+def test_elevenlabs_synthesize_uses_client_seam(monkeypatch):
+    from jarvis.providers import registry
+    from jarvis import config
+    from jarvis.core.settings_store import settings
+    p = registry.get("tts", "elevenlabs")
+    monkeypatch.setattr(config, "get_api_key", lambda name: "sk-fake")
+    settings.set("tts.elevenlabs_voice_id", "VOICE-XYZ", persist=False)
+    seen = {}
+
+    class _Conv:
+        def convert(self, **kw):
+            seen.update(kw)
+            return [b"AB", b"CD"]
+
+    class _FakeClient:
+        text_to_speech = _Conv()
+
+    monkeypatch.setattr(p, "_client", lambda: _FakeClient())
+    try:
+        data = p.synthesize("hello sir")
+    finally:
+        settings.set("tts.elevenlabs_voice_id", "", persist=False)
+    assert data == b"ABCD"
+    assert seen["voice_id"] == "VOICE-XYZ" and seen["text"] == "hello sir"
+
+
+def test_resolve_auto_prefers_elevenlabs_when_configured(monkeypatch):
+    from jarvis.voice.voice_manager import VoiceManager
+    from jarvis.core.settings_store import settings
+
+    class _P:
+        def __init__(self, ok): self._ok = ok
+        def is_configured(self): return self._ok
+
+    providers = {"elevenlabs": _P(True), "edge_tts": _P(True)}
+    _patch_registry(monkeypatch, providers)
+    settings.set("tts.active", "auto", persist=False)
+    try:
+        assert VoiceManager().resolve_tts_name() == "elevenlabs"
+        providers["elevenlabs"] = _P(False)   # no key -> falls through to edge
+        assert VoiceManager().resolve_tts_name() == "edge_tts"
+    finally:
+        settings.set("tts.active", "auto", persist=False)
+
+
+def test_resolve_explicit_provider_overrides_auto(monkeypatch):
+    from jarvis.voice.voice_manager import VoiceManager
+    from jarvis.core.settings_store import settings
+    settings.set("tts.active", "pyttsx3", persist=False)
+    try:
+        assert VoiceManager().resolve_tts_name() == "pyttsx3"
+    finally:
+        settings.set("tts.active", "auto", persist=False)

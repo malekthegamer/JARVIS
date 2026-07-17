@@ -21,7 +21,9 @@ _PROVIDER_MODULES = [
     "jarvis.providers.brain.gemini_provider",
     "jarvis.providers.tts.edge_tts_provider",
     "jarvis.providers.tts.pyttsx3_provider",
+    "jarvis.providers.tts.elevenlabs_provider",   # slice 23 (key-gated)
     "jarvis.providers.stt.google_stt_provider",
+    "jarvis.providers.stt.local_whisper_provider",  # slice 23 (faster-whisper)
 ]
 
 _loaded = False

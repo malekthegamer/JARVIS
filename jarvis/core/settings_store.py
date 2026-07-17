@@ -22,16 +22,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         },
     },
     "tts": {
-        # "auto" = use `preferred` if configured, else edge_tts, else pyttsx3.
+        # "auto" = ElevenLabs if configured, else `preferred`, else edge, else pyttsx3.
         "active": "auto",
         "preferred": "edge_tts",
         "edge_voice": "en-GB-RyanNeural",
+        "elevenlabs_voice_id": "",    # slice 23: ElevenLabs picker ("" = Rachel default)
         "pyttsx3_rate": 180,
     },
     "stt": {
         "active": "google",           # free, keyless, proven default
         "mic_device_index": None,     # None = auto-detect real mic (see jarvis.voice.capture)
         "mic_device_name": "",        # pinned by NAME too — survives index shifts
+        "whisper_model": "medium",    # slice 23: local-Whisper size (first use downloads it)
+        "whisper_device": "cuda",     # cuda (float16 on Blackwell) -> auto CPU int8 fallback
     },
     "confirm": {
         "timeout_s": 30,  # no answer within this window -> action cancelled
@@ -136,6 +139,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "max_file_mb": 5,           # rotate audit.jsonl aside at this size
         "result_max_chars": 2000,   # payload result cap (args never truncated)
     },
+    "autostart": False,             # slice 23: HKCU Run key -> tray at login
     "history_max_messages": 40,
 }
 

@@ -25,6 +25,11 @@ class VoiceManager:
         active = settings.get("tts.active", "auto")
         if active != "auto":
             return active
+        # auto: best available — ElevenLabs (premium) if a key is set, else the
+        # preferred provider, else edge-tts, else the always-on offline pyttsx3.
+        eleven = registry.get("tts", "elevenlabs")
+        if eleven and eleven.is_configured():
+            return "elevenlabs"
         preferred = settings.get("tts.preferred", "edge_tts")
         provider = registry.get("tts", preferred)
         if provider and provider.is_configured():
