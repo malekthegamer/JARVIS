@@ -25,7 +25,7 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (570 tests: 550 + 17 app-discovery + 3 cursor)
+## 1. Regression signal — test suite (588 tests: 570 + 15 provider/settings + misc)
 
 **HONEST STATUS — no single clean 0-failed pass was captured this checkpoint.**
 The deterministic core (~500 tests) passed on every attempt; the failures were
@@ -66,6 +66,33 @@ free-tier RPM cannot reliably carry ~570 tests' clustered live calls in one
 pass; the deterministic core has never failed once across all slice-21/22
 gate runs. **The definitive clean pass wants a fresh daily bucket or a paid
 key** — the recurring recommendation stands.
+
+**Slice-23 update (2026-07-17): settings page salvaged; same RPM pattern.**
+Two runs: run 1 585/3 (a `test_close_window_closes_notepad` failure + email/
+search RPM); run 2 586/2 (dry-run + email RPM). The close_window failure was
+**diagnosed and cleared, not dismissed**: a cross-session Win11-Notepad
+session-restore orphan (`*ACHAIN PROOF … - Notepad`, unsaved) survived the
+fixture's `taskkill /F` because modern Notepad resurrects unsaved tabs on
+relaunch; `close_window` correctly refused to force it past its save dialog.
+Cleared → it passed run 2. All remaining failures are the standing live-model
+per-minute rate-limit rotation (email/search/dry-run, isolation-green every
+time). The deterministic core — including ALL new slice-23 settings/provider
+tests — passed both runs. A definitive clean 0-failed pass still wants a
+fresh daily bucket or a paid key (unchanged recommendation).
+
+### Slice 23 — settings page salvaged from legacy (+ ElevenLabs/Whisper ports)
+- `/settings` served by the rebuilt app: **every legacy feature restored** —
+  brain provider/model/masked-key, TTS (auto/ElevenLabs/edge/pyttsx3) + voice
+  pickers + Speak-a-test-line, STT (google/local-Whisper + model/GPU) + mic
+  picker, wake toggle+sensitivity, Windows autostart — **plus** a new
+  "Capabilities & safety" module (shell/email/web/search/memory/audit/vision
+  kill switches, confirm timeout, smooth cursor). Hot-applied; keys land in
+  `.env` masked in every response (pinned test); saves audited (section names
+  only). ElevenLabs + local-Whisper providers ported from legacy and
+  re-registered (unit-seam tested; no key here so no live synth).
+- **Vision check passed** (`harness_settings_visual.py` + screenshot Read):
+  all 5 modules, gemini configured ✓, unported brains disabled, key masked,
+  voices/mics populated — image inspected claim-by-claim AND DOM-asserted.
 
 ### Slice 22 — app discovery + smooth cursor (features, live-verified)
 - **`launch_app` now finds what actually exists on the machine**: desktop

@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-17, after **Slice 22 (app discovery: desktop/Steam/Epic + smooth cursor motion)**. See `git log --oneline` for the tip.
+> Last updated: 2026-07-17, after **Slice 23 (settings page salvaged from legacy + ElevenLabs/Whisper ports)**. See `git log --oneline` for the tip.
 
 ---
 
@@ -138,6 +138,13 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 ### Slice 20 — PC-control latency PROFILE (measurement only)
 - The user reported PC control felt slow. Profiled before touching anything (slice-16/19 "metric before mechanism"): `tests/harness_latency_eval.py` monkeypatch-wraps timing around existing seams (all restored; no product change), drives real chains, attributes >99% of wall-clock. **Finding: the bottleneck is UIA window enumeration, NOT the model/audit/orchestration.** Notepad chain 34.4 s median: `win_resolve` 55%, launch-poll 14%, readback 14%, model only 11%. Committed harness = a re-runnable baseline. Fix deferred to slice 21 (measure first, then propose).
 
+### Slice 23 — Settings page salvaged from legacy (+ ElevenLabs TTS, local-Whisper STT)
+- The rebuilt app had **no settings surface**; the legacy app's full hot-applying page was salvaged and modernized. `/settings` (gear link in the HUD header) exposes every legacy feature working against a real backend, plus a new **"Capabilities & safety"** module the legacy app never had.
+- **Providers ported** (`jarvis/providers/tts/elevenlabs_provider.py`, `stt/local_whisper_provider.py`, re-registered): ElevenLabs (key-gated, voice picker + quota, degrades to edge on quota-out); local-Whisper (the hard-won Blackwell/sm_120 float16 note preserved; `find_spec` install check). `resolve_tts_name` auto now prefers ElevenLabs-when-keyed. New settings keys: `tts.elevenlabs_voice_id`, `stt.whisper_model/device`, top-level `autostart`.
+- **Server API** (net-new on `jarvis/server.py`, shapes salvaged): `GET/POST /api/settings`, `/api/voices`, `/api/mics`, `/api/tts_test`, `/settings`. GET **masks every key** (test-pinned: no raw secret in any payload); POST writes keys to `.env` (skips masked "•" echoes), deep-merge-saves + hot-reloads providers, **actually starts/stops the wake listener on a `wake.enabled` change**, syncs autostart, and audits the save (section names only). `jarvis/core/autostart.py` (HKCU Run key → `tray_start.pyw` root launcher, since a Run-key command has no package path).
+- **The page** (`jarvis/static/settings.{html,css,js}`): retuned to the current HUD tokens (#3BE8FF); Brain is Gemini-only with openai/claude/ollama shown as **disabled "not ported yet"** (honest — multi-brain is a future slice); wake is an enabled toggle + sensitivity slider (fixed "hey jarvis" phrase); Capabilities module toggles the kill switches with honest hints. **Vision check passed** (`tests/harness_settings_visual.py` + screenshot Read + DOM asserts).
+- **Gate:** deterministic core + all slice-23 tests green across two runs; remaining failures the standing live-model RPM rotation + one diagnosed-and-cleared cross-session Notepad orphan (checkpoint §1). **Multi-brain (OpenAI/Claude/Ollama) remains the honest next slice** — each needs a tool-calling adapter for the 26-primitive schema + per-brain safety re-verification.
+
 ### Slice 22 — App discovery (desktop/Steam/Epic) + smooth cursor
 - **The bug:** `launch_app` couldn't find Rocket League or desktop-shortcut apps (no App Paths/PATH/Start-Menu trace — probe-confirmed, and the probe corrected the premise: this machine's RL is the **Epic** version, manifest AppName `"Sugar"`; Steam's real root is `e:/steam` via registry, not the default path).
 - **`jarvis/primitives/app_discovery.py`:** desktop `.lnk` (resolved via `apps._lnk_target`; file AND folder targets — the live acceptance found a real folder shortcut) + `.url` (parsed `URL=` line — Steam's own shortcuts carry `steam://` URIs); Steam registry root → `libraryfolders.vdf` → `appmanifest_*.acf` (normcase-deduped libraries); Epic ProgramData `*.item` manifests. **API-first:** launch specs are the launchers' documented URI protocols, not raw exes (Epic DRM fails without the launcher). `find()`: normalization strips ®/™; exact > prefix > substring; same normalized name across sources = same app (source-priority resolve), genuinely different names = candidates + **no launch** (never guess-launch). Runs only AFTER the fast ladder misses (~270 ms, only on the previously-failing path).
@@ -206,15 +213,19 @@ e:\J.A.R.V.I.S\
       web.py                ← browser automation (slice 14): BrowserSession (own thread) +
                               navigate/read/click/fill/close; reuses input._click_tier; data boundary
                               + web_search (slice 15): keyless ddgs; reuses _wrap_untrusted boundary
-    providers/              ← self-registering: brain/gemini, stt/google, tts/edge_tts+pyttsx3
+    providers/              ← self-registering: brain/gemini, stt/google+local_whisper,
+                              tts/edge_tts+pyttsx3+elevenlabs (whisper+elevenlabs ported slice 23)
+    core/autostart.py       ← slice 23: HKCU Run key -> tray_start.pyw (Windows startup toggle)
     voice/                  ← capture.py (HARD-WON, DO NOT rewrite), playback.py, voice_manager.py
                               wake.py ← WakeListener "hey jarvis" (openWakeWord) + handle_wake (slice 13)
     tray.py                 ← system-tray app (pystray): Open HUD / toggle wake / Quit (slice 13)
                               launch: python -m jarvis.tray  (runs server + tray; run.py unchanged)
     static/                 ← the HUD (vanilla JS): index.html, hud.css, hud.js, orb.js, fonts/
                               chain strip, Action Log + telemetry panels, monospace shell-confirm box
+                              settings.{html,css,js} ← the /settings page (slice 23, gear in HUD header)
+  tray_start.pyw            ← slice 23: 4-line root launcher the autostart Run key points at
 
-  tests/                    ← 570 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                    ← 588 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -333,6 +344,7 @@ All four spec §1.6 scripts now pass. Pick one and plan it. In rough priority:
 5. **Web/search widenings** — a persistent-login browser mode (reuse the user's real session, a much bigger risk surface — its own deliberate slice); the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling proves annoying (a keyed API, guarded like slice 11's OAuth).
 6. **Wake-word refinements** — a HUD wake toggle; custom "hey jarvis" sensitivity; self-trigger suppression during TTS beyond the `_busy` drop.
 7. **DND without the Settings pop** — revisit the CloudStore serialized blob for a silent path (slice 12 shipped the honest visible surface over the fragile silent one).
+8. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these as visibly-disabled "not ported yet". Each needs a tool-calling adapter mapping the 26-primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
 
 Also deferred: ElevenLabs/Claude/OpenAI/Ollama/Whisper providers (they sit in `legacy/` until their slice).
 
