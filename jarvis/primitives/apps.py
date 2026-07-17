@@ -110,7 +110,13 @@ def _candidates(name: str) -> list[str]:
 
 def resolve_app(name: str) -> tuple[str | None, str]:
     """Return (launchable target, candidate that matched). The target is an
-    executable path or a URI like 'ms-settings:'; None if nothing matched."""
+    executable path or a URI like 'ms-settings:'; None if nothing matched.
+
+    Slice 22: after the fast ladder misses, fall back to real discovery —
+    desktop shortcuts, Steam libraries, Epic manifests (app_discovery.find).
+    The discovery scan only runs where today we'd return "not found", so its
+    cost lands exclusively on the previously-failing path. An ambiguous
+    discovery match launches nothing (candidates surface via launch_app)."""
     for candidate in _candidates(name):
         target = APP_ALIASES.get(candidate, candidate)
         if _is_uri(target):
@@ -118,6 +124,10 @@ def resolve_app(name: str) -> tuple[str | None, str]:
         path = _resolve_executable(target)
         if path:
             return path, candidate
+    from jarvis.primitives import app_discovery  # late: cheap import, clear seam
+    hit = app_discovery.find(name)
+    if hit and hit.get("launch"):
+        return hit["launch"], hit["name"]
     return None, name
 
 
