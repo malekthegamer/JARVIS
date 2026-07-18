@@ -81,6 +81,30 @@ def _chrome_binary() -> str | None:
     return None
 
 
+def _reap_stale_profile_chrome() -> None:
+    """Terminate any lingering Chrome that holds JARVIS's DEDICATED profile dir
+    (matched strictly by `--user-data-dir=<dedicated>` in its cmdline) before a
+    fresh real-mode launch — a stale one holds the profile/debug port and makes
+    the launch fail (seen live). NEVER touches the user's everyday Chrome. Best
+    effort; never raises."""
+    try:
+        import psutil
+        dd = str(_dedicated_dir())
+        needle = f"--user-data-dir={dd}".lower()
+        for p in psutil.process_iter(attrs=["name", "cmdline"]):
+            try:
+                info = getattr(p, "info", {}) or {}
+                if (info.get("name") or "").lower() != "chrome.exe":
+                    continue
+                cmd = " ".join(info.get("cmdline") or []).lower()
+                if needle in cmd:
+                    p.kill()
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 def _debug_port_ready(port: int, deadline: float) -> bool:
     """Poll the CDP endpoint until it answers or the deadline passes."""
     while time.time() < deadline:
@@ -133,6 +157,7 @@ class BrowserSession:
         port = int(settings.get("web.cdp_port", 9222))
         dd = _dedicated_dir()
         dd.mkdir(parents=True, exist_ok=True)
+        _reap_stale_profile_chrome()  # a lingering JARVIS Chrome holds the profile/port
         self._proc = subprocess.Popen([
             exe, f"--remote-debugging-port={port}", f"--user-data-dir={dd}",
             "--no-first-run", "--no-default-browser-check",

@@ -495,3 +495,27 @@ def test_click_awaits_navigation_reports_real_url(servers):
     r = web.click_element("go slow")
     assert r["ok"], r
     assert "/other" in (web.session.current_url or ""), web.session.current_url
+
+
+# ------------------------------------------- S3: stale-Chrome reaper
+
+def test_reaper_kills_only_dedicated_profile_chrome(monkeypatch):
+    """Before launching real-mode Chrome, a lingering JARVIS-profile Chrome
+    (its --user-data-dir points at data/browser_profile) is terminated — but
+    the user's everyday Chrome is NEVER touched."""
+    dd = str(web._dedicated_dir())
+    killed = []
+
+    class _P:
+        def __init__(self, pid, cmdline):
+            self.pid = pid; self._cmd = cmdline; self.info = {"name": "chrome.exe", "cmdline": cmdline}
+        def kill(self): killed.append(self.pid)
+
+    jarvis_proc = _P(111, ["chrome.exe", f"--user-data-dir={dd}", "--remote-debugging-port=9222"])
+    user_proc = _P(222, ["chrome.exe", r"--user-data-dir=C:\Users\me\AppData\Local\Google\Chrome\User Data"])
+    other = _P(333, ["notepad.exe"])
+    import psutil
+    monkeypatch.setattr(psutil, "process_iter",
+                        lambda attrs=None: [jarvis_proc, user_proc, other])
+    web._reap_stale_profile_chrome()
+    assert killed == [111], f"must kill ONLY the dedicated-profile Chrome, killed={killed}"
