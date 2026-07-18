@@ -34,6 +34,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     b"<input id='q' name='q' placeholder='search products'>"
                     b"<button type='submit'>Delete account</button></form>"
                     b"<a href='/other'>Read more</a>")
+        elif self.path.startswith("/redirect"):
+            # client-side redirect right after load — destroys the JS execution
+            # context, the exact reddit-style race that broke a naive title().
+            body = (b"<title>Redirector</title>"
+                    b"<script>location.replace('/other')</script>")
         elif self.path.startswith("/bare"):
             # an actionable button with NO accessible name (the JS-button blind spot)
             body = b"<title>Bare</title><form><button type='submit' id='b'></button></form>"
@@ -80,6 +85,16 @@ def test_navigate_loads_and_reports_title(servers):
     assert r["ok"], r
     assert "Fixture Home" in r["title"]
     assert f"127.0.0.1:{pa}" in r["url"]
+
+
+def test_navigate_survives_client_side_redirect(servers):
+    """A page that redirects on load destroys the JS context; navigate must
+    still report success (the reddit-style race found in the slice-24 live
+    acceptance), not raise 'Execution context was destroyed'."""
+    pa, _pb = servers
+    r = web.navigate(f"http://127.0.0.1:{pa}/redirect")
+    assert r["ok"], r
+    assert r.get("url"), r
 
 
 @pytest.mark.parametrize("url", [

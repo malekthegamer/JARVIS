@@ -44,6 +44,7 @@
     }
     $("confirmTimeout").value = s.confirm.timeout_s;
     $("smoothCursor").checked = !!s.input.smooth_cursor;
+    $("realBrowser").checked = (s.web && s.web.profile_mode === "real");
   }
 
   const getPath = (obj, path) => path.split(".").reduce((o, k) => (o || {})[k], obj);
@@ -110,6 +111,10 @@
       const [sec, key] = el.dataset.path.split(".");
       (caps[sec] = caps[sec] || {})[key] = el.checked;
     }
+    // real-browser mode lives in the same `web` section as web.enabled — set it
+    // here so the `...caps` spread doesn't clobber it.
+    (caps.web = caps.web || {}).profile_mode =
+      $("realBrowser").checked ? "real" : "isolated";
 
     const settings = {
       brain: { active: "gemini",

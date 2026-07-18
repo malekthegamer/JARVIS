@@ -245,7 +245,19 @@ class BrowserSession:
     def navigate(self, url: str) -> dict:
         def _nav(page):
             page.goto(url, timeout=_timeout_ms(), wait_until="domcontentloaded")
-            return {"url": page.url, "title": page.title() or ""}
+            # Sites that client-side redirect right after load (reddit, many
+            # logged-in landing pages) destroy the execution context, so a
+            # naive page.title() raises. Settle, then read title defensively —
+            # a redirected page is still a SUCCESSFUL navigation.
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            try:
+                title = page.title() or ""
+            except Exception:
+                title = ""
+            return {"url": page.url, "title": title}
         out = self._do(_nav)
         self.current_url = out["url"]
         return out
