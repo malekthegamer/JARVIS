@@ -19,6 +19,8 @@ live = pytest.mark.skipif(not config.get_api_key("gemini"),
 @pytest.fixture(autouse=True, scope="module")
 def _web_settings():
     settings.set("web.headless", True, persist=False)
+    settings.set("web.profile_mode", "isolated", persist=False)  # pin (machine may have real on)
+    settings.set("web.allow_actions", False, persist=False)
     yield
     from jarvis.primitives import web
     web.session.close()

@@ -262,6 +262,36 @@ class BrowserSession:
         self.current_url = out["url"]
         return out
 
+    # raw (lowercased) -> the Playwright key name.
+    _KEYMAP = {"enter": "Enter", "tab": "Tab", "escape": "Escape", "esc": "Escape",
+               "arrowdown": "ArrowDown", "arrowup": "ArrowUp",
+               "arrowleft": "ArrowLeft", "arrowright": "ArrowRight",
+               "pagedown": "PageDown", "pageup": "PageUp", "home": "Home",
+               "end": "End", "backspace": "Backspace", "space": " "}
+
+    def press_key(self, key: str) -> dict:
+        """Press a navigation/interaction key in the page (slice 25) — Enter to
+        submit a search, Tab/arrows/Escape to move around. Not for committal
+        submits (use a gated click). Unknown keys are refused."""
+        raw = str(key or "").strip().lower()
+        pw_key = self._KEYMAP.get(raw)
+        if pw_key is None:
+            return {"ok": False,
+                    "message": f"'{key}' isn't an allowed browser key "
+                               f"(enter/tab/escape/arrows/pageup-down/home/end)."}
+
+        def _press(page):
+            before = page.url
+            page.keyboard.press(pw_key)
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
+            self.current_url = page.url
+            moved = f" Page went to {page.url}." if page.url != before else ""
+            return {"ok": True, "message": f"Pressed {pw_key}.{moved}"}
+        return self._do(_press)
+
     def read(self) -> dict:
         def _read(page):
             text = page.evaluate(
@@ -401,24 +431,50 @@ def _match_clickable(page, target: str):
     return None, "", ""
 
 
-_REAL_MODE_READONLY = ("Real-browser mode is navigate + read only — I won't "
-                       "click or type on your logged-in session.")
+_REAL_MODE_READONLY = ("Real-browser mode is navigate + read only — turn on "
+                       "\"let JARVIS click & type\" in settings to allow acting.")
+
+
+def _actions_blocked() -> bool:
+    """Real mode + acting NOT allowed = committal browser verbs refuse."""
+    return _real_mode_setting() and not settings.get("web.allow_actions", False)
+
+
+def _site_host() -> str:
+    """The current page's host, for informed-consent CONFIRM text (real mode)."""
+    try:
+        h = urlparse(session.current_url or "").hostname or ""
+        return f" on {h}" if h else ""
+    except Exception:
+        return ""
 
 
 def classify_web_fill(args: dict) -> dict:
-    """AUTO in isolated mode; BLOCKED in real mode (navigate+read only)."""
-    if _real_mode_setting():
+    """AUTO (data entry isn't committal). BLOCKED in real mode until acting is
+    allowed (slice 25)."""
+    if _actions_blocked():
         return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
     return {"tier": "auto",
             "description": f"Fill '{str(args.get('field',''))}'"}
 
 
+def classify_web_key(args: dict) -> dict:
+    """Navigation/interaction keys (Enter/Tab/Escape/arrows) — AUTO. BLOCKED in
+    real mode until acting is allowed."""
+    if _actions_blocked():
+        return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
+    return {"tier": "auto", "description": f"Press {str(args.get('key',''))}"}
+
+
 def classify_web_click(args: dict) -> dict:
     """Reuse input._click_tier on the element's accessible name; FAIL CLOSED to
     CONFIRM for an actionable element with no name (the JS-button blind spot).
-    In real-browser mode, committal actions are refused outright. Never raises."""
-    if _real_mode_setting():
+    In real mode, committal actions still CONFIRM (naming the site); the whole
+    verb is BLOCKED until acting is allowed (slice 25). Never raises."""
+    if _actions_blocked():
         return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
+    real = _real_mode_setting()
+    where = _site_host() if real else " on the page"
     target = str(args.get("target", "") or "").strip()
     try:
         m = session.find_clickable(target)
@@ -433,11 +489,11 @@ def classify_web_click(args: dict) -> dict:
     name = (m["name"] or "").strip()
     if not name:
         return {"tier": "confirm",
-                "description": f"Click an unlabeled {m['kind'] or 'button'} on the "
-                               f"page (no visible name — review before clicking)."}
+                "description": f"Click an unlabeled {m['kind'] or 'button'}{where} "
+                               f"(no visible name — review before clicking)."}
     tier = _click_tier(name, False)
     return {"tier": tier, "expect_name": name,
-            "description": f"Click '{name}' on the page"}
+            "description": f"Click '{name}'{where}"}
 
 
 def click_element(target: str) -> dict:
@@ -447,6 +503,15 @@ def click_element(target: str) -> dict:
         return {"ok": False, "message": str(exc)}
     except Exception as exc:
         return {"ok": False, "message": f"Couldn't click '{target}': {_short(exc)}"}
+
+
+def press_browser_key(key: str) -> dict:
+    try:
+        return session.press_key(str(key or "").strip())
+    except BrowserUnavailable as exc:
+        return {"ok": False, "message": str(exc)}
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't press '{key}': {_short(exc)}"}
 
 
 def fill_field(field: str, text: str) -> dict:

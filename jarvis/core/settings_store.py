@@ -118,6 +118,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # everyday Chrome (never closes it).
         "profile_mode": "isolated",
         "cdp_port": 9222,
+        # Slice 25 — let JARVIS ACT (click/type/submit) in real mode. Default
+        # OFF: real mode stays navigate+read until this is explicitly enabled.
+        # When on, committal actions (post/buy/send/delete/submit) still CONFIRM;
+        # benign clicks/typing run freely.
+        "allow_actions": False,
     },
     "search": {
         # Web search (slice 15) — keyless DuckDuckGo (ddgs). A pure read (AUTO);

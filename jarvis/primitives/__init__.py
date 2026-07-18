@@ -198,6 +198,11 @@ def _run_browse_fill(args: dict, gate_info: dict | None = None) -> str:
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
+def _run_browse_key(args: dict, gate_info: dict | None = None) -> str:
+    r = web.press_browser_key(str(args.get("key", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_close_browser(args: dict, gate_info: dict | None = None) -> str:
     r = web.close_browser()
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
@@ -549,6 +554,21 @@ PRIMITIVES: dict[str, dict] = {
                                                "description": "The text to type in"}},
                                   "required": ["field", "text"]}},
     },
+    "browse_key": {
+        "fn": _run_browse_key,
+        "classify": web.classify_web_key,
+        "schema": {"name": "browse_key",
+                   "description": ("Press a navigation key in the web page: "
+                                   "enter (e.g. to run a search after filling the "
+                                   "search box), tab, escape, arrowdown/up, "
+                                   "pagedown/up, home, end. For a committal submit "
+                                   "(post/buy/send), click the button instead so it "
+                                   "can be confirmed."),
+                   "parameters": {"type": "object",
+                                  "properties": {"key": {"type": "string",
+                                                         "description": "enter | tab | escape | arrowdown | pagedown | …"}},
+                                  "required": ["key"]}},
+    },
     "close_browser": {
         "fn": _run_close_browser,
         "tier": "auto",
@@ -699,12 +719,13 @@ def tools_schema() -> list[dict]:
         withheld.add("send_email")
     if not settings.get("web.enabled", True):
         withheld.update({"browse_navigate", "read_page", "browse_click",
-                         "browse_fill", "close_browser"})
-    elif settings.get("web.profile_mode", "isolated") == "real":
-        # Real-browser mode (slice 24) is NAVIGATE + READ only — committal
-        # actions on the user's logged-in session are withheld entirely
-        # (a direct call also refuses via classify).
-        withheld.update({"browse_click", "browse_fill"})
+                         "browse_fill", "browse_key", "close_browser"})
+    elif (settings.get("web.profile_mode", "isolated") == "real"
+          and not settings.get("web.allow_actions", False)):
+        # Real-browser mode (slice 24) defaults to NAVIGATE + READ only —
+        # committal actions are withheld until web.allow_actions is turned on
+        # (slice 25). A direct call also refuses via classify.
+        withheld.update({"browse_click", "browse_fill", "browse_key"})
     if not settings.get("search.enabled", True):
         withheld.add("web_search")
     return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]

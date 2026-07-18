@@ -71,6 +71,10 @@ def servers():
 def _web_settings():
     settings.set("web.headless", True, persist=False)
     settings.set("web.timeout_s", 3, persist=False)
+    # Pin the browser MODE so tests are deterministic regardless of the
+    # machine's persisted data/settings.json (which may have real mode on).
+    settings.set("web.profile_mode", "isolated", persist=False)
+    settings.set("web.allow_actions", False, persist=False)
     yield
     web.session.close()
     settings.set("web.headless", False, persist=False)
@@ -370,3 +374,73 @@ def test_real_mode_navigate_still_cross_origin_gated(monkeypatch):
     finally:
         settings.set("web.profile_mode", "isolated", persist=False)
         web.session.current_url = None
+
+
+# ================================================================ Slice 25:
+# act in real mode, gated on web.allow_actions (default off).
+
+def _real_actions(on: bool):
+    settings.set("web.profile_mode", "real", persist=False)
+    settings.set("web.allow_actions", on, persist=False)
+
+
+def _reset_mode():
+    # restore the module default (isolated) that _web_settings pins
+    settings.set("web.profile_mode", "isolated", persist=False)
+    settings.set("web.allow_actions", False, persist=False)
+    web.session.close()  # drop any real-mode session so it doesn't leak
+
+
+def test_real_actions_off_blocks_and_withholds():
+    from jarvis.brain import JarvisBrain
+    _real_actions(False)
+    try:
+        names = [t["name"] for t in JarvisBrain().tools()]
+        assert "browse_click" not in names and "browse_fill" not in names
+        assert "browse_key" not in names
+        assert "browse_navigate" in names and "read_page" in names
+        assert web.classify_web_click({"target": "Buy"})["tier"] == "blocked"
+        assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "blocked"
+    finally:
+        _reset_mode()
+
+
+def test_real_actions_on_advertises_and_tiers(monkeypatch):
+    from jarvis.brain import JarvisBrain
+    _real_actions(True)
+    try:
+        names = [t["name"] for t in JarvisBrain().tools()]
+        assert "browse_click" in names and "browse_fill" in names and "browse_key" in names
+        # benign element -> AUTO; committal -> CONFIRM (reuse _click_tier)
+        monkeypatch.setattr(web.session, "find_clickable",
+                            lambda t: {"found": True, "name": "Read more", "kind": "link"})
+        assert web.classify_web_click({"target": "Read more"})["tier"] == "auto"
+        monkeypatch.setattr(web.session, "find_clickable",
+                            lambda t: {"found": True, "name": "Post comment", "kind": "button"})
+        cinfo = web.classify_web_click({"target": "Post comment"})
+        assert cinfo["tier"] == "confirm"
+        # fill stays AUTO when acting is allowed
+        assert web.classify_web_fill({"field": "search", "text": "x"})["tier"] == "auto"
+    finally:
+        _reset_mode()
+
+
+def test_real_committal_confirm_names_the_site(monkeypatch):
+    _real_actions(True)
+    try:
+        web.session.current_url = "https://www.youtube.com/results?q=x"
+        monkeypatch.setattr(web.session, "find_clickable",
+                            lambda t: {"found": True, "name": "Delete", "kind": "button"})
+        d = web.classify_web_click({"target": "Delete"})["description"]
+        assert "youtube.com" in d, d   # informed consent shows the real site
+    finally:
+        web.session.current_url = None
+        _reset_mode()
+
+
+def test_isolated_mode_actions_unchanged(monkeypatch):
+    # default (isolated) — click/fill available and tiered as before
+    from jarvis.brain import JarvisBrain
+    names = [t["name"] for t in JarvisBrain().tools()]
+    assert "browse_click" in names and "browse_fill" in names
+    assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "auto"

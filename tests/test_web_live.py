@@ -50,6 +50,10 @@ def server():
 @pytest.fixture(autouse=True, scope="module")
 def _web_settings():
     settings.set("web.headless", True, persist=False)
+    # Pin ISOLATED mode — the machine's persisted settings may have real mode
+    # on (slice 24/25); these live tests drive the isolated browser.
+    settings.set("web.profile_mode", "isolated", persist=False)
+    settings.set("web.allow_actions", False, persist=False)
     yield
     from jarvis.primitives import web
     web.session.close()
