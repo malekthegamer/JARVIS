@@ -34,6 +34,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     b"<input id='q' name='q' placeholder='search products'>"
                     b"<button type='submit'>Delete account</button></form>"
                     b"<a href='/other'>Read more</a>")
+        elif self.path.startswith("/search"):
+            # a search box that navigates on Enter via a JS keydown handler —
+            # how real search boxes (YouTube/Google) work; proves browse_key
+            # delivers Enter to the focused input.
+            body = (b"<title>Search</title>"
+                    b"<input name='q' placeholder='Search' "
+                    b"onkeydown=\"if(event.key==='Enter')location.href='/other'\">")
+        elif self.path.startswith("/editable"):
+            # a contenteditable rich input (Claude/ChatGPT-style), NOT a textarea
+            body = (b"<title>Editable</title>"
+                    b"<div role='textbox' contenteditable='true' "
+                    b"aria-label='Message'></div>")
+        elif self.path.startswith("/slowlink"):
+            # a link to a page that takes a beat — click must await navigation
+            body = b"<title>Slow</title><a href='/other'>go slow</a>"
         elif self.path.startswith("/redirect"):
             # client-side redirect right after load — destroys the JS execution
             # context, the exact reddit-style race that broke a naive title().
@@ -444,3 +459,39 @@ def test_isolated_mode_actions_unchanged(monkeypatch):
     names = [t["name"] for t in JarvisBrain().tools()]
     assert "browse_click" in names and "browse_fill" in names
     assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "auto"
+
+
+# ------------------------------------------- S2: primitive hardening
+
+def test_browse_key_enter_submits_search(servers):
+    pa, _pb = servers
+    assert web.navigate(f"http://127.0.0.1:{pa}/search")["ok"]
+    assert web.fill_field("Search", "hello")["ok"]
+    r = web.press_browser_key("enter")
+    assert r["ok"], r
+    # Enter submitted the form -> navigated to /other
+    assert "/other" in (web.session.current_url or ""), web.session.current_url
+
+
+def test_browse_key_rejects_unknown_key(servers):
+    pa, _pb = servers
+    assert web.navigate(f"http://127.0.0.1:{pa}/")["ok"]
+    r = web.press_browser_key("ctrl+alt+del")
+    assert r["ok"] is False and "allowed" in r["message"]
+
+
+def test_fill_contenteditable_rich_input(servers):
+    """Claude/ChatGPT use a contenteditable div, not a textarea; fill must work
+    and verify via textContent (input_value() throws on contenteditable)."""
+    pa, _pb = servers
+    assert web.navigate(f"http://127.0.0.1:{pa}/editable")["ok"]
+    r = web.fill_field("Message", "write me a haiku")
+    assert r["ok"], r
+
+
+def test_click_awaits_navigation_reports_real_url(servers):
+    pa, _pb = servers
+    assert web.navigate(f"http://127.0.0.1:{pa}/slowlink")["ok"]
+    r = web.click_element("go slow")
+    assert r["ok"], r
+    assert "/other" in (web.session.current_url or ""), web.session.current_url

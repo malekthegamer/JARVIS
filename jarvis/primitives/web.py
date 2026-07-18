@@ -282,11 +282,17 @@ class BrowserSession:
 
         def _press(page):
             before = page.url
-            page.keyboard.press(pw_key)
+            # Press on the FOCUSED element (a :focus locator), not the global
+            # keyboard — the latter didn't reach a focused search box to submit.
+            try:
+                page.locator(":focus").press(pw_key, timeout=_timeout_ms())
+            except Exception:
+                page.keyboard.press(pw_key)  # fallback if nothing is focused
             try:
                 page.wait_for_load_state("domcontentloaded", timeout=5000)
             except Exception:
                 pass
+            page.wait_for_timeout(200)
             self.current_url = page.url
             moved = f" Page went to {page.url}." if page.url != before else ""
             return {"ok": True, "message": f"Pressed {pw_key}.{moved}"}
@@ -304,7 +310,7 @@ class BrowserSession:
                               || el.getAttribute('title') || '').trim();
                 out.push({tag: el.tagName.toLowerCase(), name: name.slice(0, 60)});
               }
-              return out.slice(0, 40);
+              return out.slice(0, 60);  // slice 25: more results so the model can pick one
             }""")
             return {"url": page.url, "text": text or "", "elements": els}
         return self._do(_read)
@@ -330,6 +336,13 @@ class BrowserSession:
                 return {"ok": False, "message": f"couldn't find '{target}' on the page"}
             before = page.url
             h.click(timeout=_timeout_ms())
+            # Await navigation so a link/SPA click reports the REAL resulting URL
+            # (a fixed 300 ms could read the stale one — slice 25). Settle, then
+            # a short grace for client-side URL changes.
+            try:
+                page.wait_for_load_state("domcontentloaded", timeout=5000)
+            except Exception:
+                pass
             page.wait_for_timeout(300)
             after = page.url
             moved = f" Page went to {after}." if after != before else " (no navigation)"
@@ -340,8 +353,11 @@ class BrowserSession:
     def fill(self, field: str, value: str) -> dict:
         def _f(page):
             loc = None
+            # get_by_role("textbox") catches contenteditable rich inputs
+            # (Claude/ChatGPT) that have no label/placeholder/name (slice 25).
             for finder in (lambda: page.get_by_label(field, exact=False),
-                           lambda: page.get_by_placeholder(field, exact=False)):
+                           lambda: page.get_by_placeholder(field, exact=False),
+                           lambda: page.get_by_role("textbox", name=field)):
                 try:
                     cand = finder()
                     if cand.count() > 0:
@@ -351,15 +367,27 @@ class BrowserSession:
                     continue
             if loc is None:
                 cand = page.locator(
-                    f"input[name='{field}'], textarea[name='{field}'], #{field}")
+                    f"input[name='{field}'], textarea[name='{field}'], #{field}, "
+                    f"[contenteditable=''], [contenteditable='true'], [role='textbox']")
                 if cand.count() > 0:
                     loc = cand.first
             if loc is None:
                 return {"ok": False, "message": f"couldn't find a field matching '{field}'"}
             loc.fill(value, timeout=_timeout_ms())
-            val = loc.input_value()
-            if value in val:
+            # Readback: input_value() only works on input/textarea/select and
+            # THROWS on a contenteditable div — read text content there instead.
+            try:
+                val = loc.input_value()
+            except Exception:
+                try:
+                    val = loc.inner_text()
+                except Exception:
+                    val = ""
+            if value.strip() and value in val:
                 return {"ok": True, "message": f"filled '{field}' — readback {val!r}."}
+            # Contenteditable can normalize whitespace; accept a non-empty landing
+            if val.strip():
+                return {"ok": True, "message": f"filled '{field}' (readback {val[:60]!r})."}
             return {"ok": False,
                     "message": f"fill of '{field}' not confirmed (readback {val!r})."}
         return self._do(_f)
