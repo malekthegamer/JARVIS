@@ -6,7 +6,7 @@
 > have landed and it can be promoted to a real acceptance test.
 
 **Checkpoint date:** 2026-07-18 (after Slice 25 — act in the real browser)
-**Tip commit at capture:** slice-25 tip on `main`
+**Tip commit at capture:** `6ec7dc7` on `main` (Slice 25 S4c)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -17,8 +17,10 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: `5e3f0dc` (slice 19) 547; `a67c4e5` (slice 18) 530;
-> `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
+> Previous checkpoints: `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
+> `867986f` (slice 23) 588; `90db8d4` (slice 22) 570; (slice 21, no new tests)
+> 550; (slice 20, harness only, not collected) 550; `5e3f0dc` (slice 19) 547;
+> `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
 > (slice 15) 423; `818a921` (slice 14) 412; `65aa362` (slice 13)
 > 391; `a920313` (slice 12) 374; `3dfefa7` (slice 11) 364; `a4aa50b` (slice 5)
 > 193. All 0 failed / 0 skipped.
