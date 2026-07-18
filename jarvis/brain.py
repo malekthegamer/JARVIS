@@ -13,6 +13,7 @@ import threading
 from jarvis.core import chain
 from jarvis.core.errors import ProviderError
 from jarvis.core.memory import memory_store
+from jarvis.core.undo import UndoEntry, undo_stack
 from jarvis.core.settings_store import settings
 from jarvis.providers import registry
 from jarvis.providers.brain.base import BrainResponse
@@ -86,7 +87,12 @@ initiate conversation or speech on your own — you only respond. Your
 responses are spoken aloud, so avoid markdown, code fences, and bullet
 lists unless the user is clearly working in text. If the user asks for a
 dry run or rehearsal mid-sentence, tell them to start a message with
-"dry run:" — that guarantees mechanically that nothing executes."""
+"dry run:" — that guarantees mechanically that nothing executes.
+If the user asks you to undo, revert, or put back your LAST action, call
+undo_last_action. Only some actions are reversible (volume/mute/brightness/
+Do Not Disturb changes, a memory you just stored, a workspace file you just
+deleted); a sent email, a shell command, closed tabs or media keys cannot be
+undone — say so honestly instead of pretending."""
 
 # Appended to the system prompt for a dry-run request ONLY (slice 18). The
 # guarantee itself is mechanical (primitives.execute checks the tracker);
@@ -163,6 +169,22 @@ MEMORY_SCHEMAS = [
                     "required": ["query"]}},
 ]
 
+# Brain-level undo meta-tool (slice 26). Like the memory tools it touches no
+# NEW OS surface — its undo_fns call the same mechanism-level functions the
+# original actions used, and undoing an already-approved action needs no new
+# CONFIRM gate.
+UNDO_SCHEMA = {
+    "name": "undo_last_action",
+    "description": ("Undo the most recent REVERSIBLE action: a volume/mute/"
+                    "brightness/Do-Not-Disturb change, a memory just stored "
+                    "with remember, or a workspace file just deleted. Call "
+                    "ONLY when the user explicitly asks to undo/revert/put it "
+                    "back. Irreversible actions (sent email, shell commands, "
+                    "closed tabs, media keys) never appear here — tell the "
+                    "user honestly that those can't be undone."),
+    "parameters": {"type": "object", "properties": {}},
+}
+
 
 class JarvisBrain:
     def __init__(self) -> None:
@@ -186,7 +208,7 @@ class JarvisBrain:
 
     def tools(self) -> list[dict]:
         from jarvis import primitives  # lazy — text-only paths skip the import
-        extra = [PLAN_STEPS_SCHEMA]
+        extra = [PLAN_STEPS_SCHEMA, UNDO_SCHEMA]
         if settings.get("memory.enabled", True):
             extra += MEMORY_SCHEMAS
         return primitives.tools_schema() + extra
@@ -296,6 +318,8 @@ class JarvisBrain:
             return self._plan_steps(args or {})
         if name in ("remember", "recall", "forget"):
             return self._memory_tool(name, args or {})
+        if name == "undo_last_action":
+            return self._undo_tool(args or {})
         from jarvis import primitives  # lazy
         return primitives.execute(name, args or {})
 
@@ -337,6 +361,23 @@ class JarvisBrain:
                     return "FAILED: nothing to remember was given."
                 pinned = bool(args.get("pinned"))
                 rec = self.memory.add(text, pinned=pinned)
+                # Slice 26: undo deletes THIS record by id — no query
+                # matching, so no ambiguity (unlike forget, which never
+                # guesses precisely because queries can).
+                store = self.memory
+
+                def _undo_remember(s=store, rid=rec["id"]) -> dict:
+                    removed = s.delete_by_id(rid)
+                    if removed is None:
+                        return {"ok": False,
+                                "message": "that memory is no longer stored."}
+                    return {"ok": True,
+                            "message": f"forgot \"{removed['text']}\"."}
+
+                undo_stack.push(UndoEntry(
+                    tool="remember",
+                    description=f"remembering \"{rec['text'][:60]}\"",
+                    undo_fn=_undo_remember))
                 label = "Remembered (pinned — always applies)" if pinned \
                     else "Remembered"
                 return f"OK: {label} — \"{rec['text']}\"."
@@ -361,6 +402,49 @@ class JarvisBrain:
                     f"{cands}. Ask the user which one to forget; nothing removed.")
         except Exception as exc:
             return f"FAILED: memory operation couldn't complete ({exc})."
+
+    def _undo_tool(self, args: dict) -> str:
+        """undo_last_action (slice 26). Pops the newest reversible action and
+        runs its undo_fn. Pop-on-attempt: a failed undo is reported honestly
+        but NOT retried or kept (a permanently-failing entry would jam every
+        older one beneath it). Empty stack -> honest no-op. Audited like the
+        memory mutations; in a dry run it narrates without popping."""
+        tracker = chain.current()
+        dry = bool(tracker and tracker.dry_run)
+        if dry:
+            entry = undo_stack.peek()
+            if entry is None:
+                return ("DRY RUN: nothing to undo — no recent reversible "
+                        "action is on record.")
+            return (f"DRY RUN (not executed): would undo {entry.description}. "
+                    "Assume it succeeded and continue planning.")
+        entry = undo_stack.pop()
+        if entry is None:
+            result = ("OK: Nothing to undo — no recent reversible action is "
+                      "on record. (Only volume/mute/brightness/DND changes, "
+                      "stored memories and workspace deletions are "
+                      "reversible, and only from this session.)")
+        else:
+            try:
+                r = entry.undo_fn()
+                ok, msg = bool(r.get("ok")), str(r.get("message", ""))
+            except Exception as exc:
+                ok, msg = False, f"{exc}"
+            result = (f"OK: Undid {entry.description} — {msg}" if ok else
+                      f"FAILED: couldn't undo {entry.description} — {msg}")
+        from jarvis.core import audit  # module attr — tests swap the log
+        from jarvis import primitives
+        try:
+            logged = audit.audit_log.record(
+                tool="undo_last_action", tier="auto", gate=None,
+                status=chain.status_from_result(result), dry_run=dry,
+                chain_id=tracker.chain_id if tracker else None,
+                args=args, result=result)
+        except Exception:
+            logged = False
+        if not logged:
+            result += primitives.AUDIT_FAIL_NOTE
+        return result
 
     def _plan_steps(self, args: dict) -> str:
         """Meta-tool: record + broadcast the declared plan. Never raises."""

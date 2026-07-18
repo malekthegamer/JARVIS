@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-18, after **Slice 25 (act in the real browser — click/type on logged-in sites, committal-gated)**. Tip commit `6ec7dc7`. See `git log --oneline` for the full slice history.
+> Last updated: 2026-07-18, after **Slice 26 (undo — spec §1.4's last unbuilt clause)**. See `git log --oneline` for the full slice history.
 
 ---
 
@@ -9,21 +9,21 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–25), grouped by area:**
+**Capability set, built slice by slice (1–26), grouped by area:**
 - **Core loop & HUD:** voice loop (push-to-talk + wake word), a reactive HUD (orb states, transcript, Action Log, telemetry, chain plan strip), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, real **multi-step agentic chains** (visible plan, replan, retry guards).
 - **PC control:** launch/close/read-screen/click/type/press primitives, a **vision fallback** for icon-only controls (measured accuracy + pre-click point verification so the control you approve is the control that gets clicked), **app discovery** (desktop shortcuts + Steam + Epic library URIs — not just registry App Paths), **smooth cursor motion**, and a **win32 latency fix** that cut a typical multi-step chain from 34.4 s to ~5.3 s.
 - **Wider verbs:** browser tab list/close, caged file search, volume/media/brightness, **`run_shell`** (denylist + verbatim-confirm + tree-kill), **`send_email`** (Gmail API, verbatim-confirm, caged attachments), **`set_dnd`/`get_dnd`** (real Settings toggle + readback).
 - **Memory:** DPAPI-encrypted long-term memory with **semantic (local embedding) retrieval + pinned always-on preferences**, explicit-intent writes only, forget-never-guesses.
 - **Web:** an **isolated** sandbox browser (navigate/read/fill/click, untrusted-content boundary, cross-origin + committal-click gating) plus keyless **`web_search`** — AND, as of slices 24–25, an opt-in **real-browser mode**: JARVIS can drive a dedicated real Chrome logged into the user's own accounts, first navigate+read only, now (behind a second opt-in) able to **click/type/submit** on the user's real sites with committal actions CONFIRM-gated.
-- **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) + a mechanical **dry-run mode**; a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
+- **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 606 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 619 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
 - **All 4 spec acceptance scripts (§1.6) pass:** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email Sam ✅, #4 brightness+DND ✅ (brightness honestly unsupported on this monitor — hardware, not code). Status tracked in `REGRESSION_CHECKPOINT.md`.
-- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), inbox reading/triage, undo (spec §1.4's last clause), a HUD audit-log viewer, committal desktop-native automation hardening beyond what `input.py` already does. See §7.
+- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), inbox reading/triage, a HUD audit-log viewer, committal desktop-native automation hardening beyond what `input.py` already does. **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
 
 ---
 
@@ -161,6 +161,14 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Settings sub-toggle "Let JARVIS click & type on my sites" (bound to `allow_actions`, honest warning, vision-checked). Isolated + slice-24 navigate/read byte-identical.
 - **Residuals (honest):** benign clicks/typing un-gated on the real account (the user's chosen trade); a click that itself triggers cross-host navigation isn't re-gated; rich editors vary by site (contenteditable is best-effort); `browse_key Enter` is AUTO (a committal submit should be a gated button click). Committal automation is the whole point of the CONFIRM line here.
 
+### Slice 26 — Undo (spec §1.4's last unbuilt clause)
+- **Stage-0 pivot (the Spotify finding):** this slice was planned after the user's requested Spotify Web API integration died at probe: **Feb 2026 Spotify policy requires the app owner to hold Premium for ALL Development-Mode endpoints** (not just playback — search and own-playlist reads too), and the account is free; Extended Quota Mode needs a registered business + 250k MAU. Same doctrine as slice 12's WNF no-op: the probe killed the plan before any code. Script #1 stays on its proven GUI path; revisit only if Premium is ever added.
+- **Mechanism:** `jarvis/core/undo.py` — a bounded (5), process-scoped, in-memory LIFO (`UndoStack` singleton, like `memory_store`). Capture sites push an `UndoEntry` AFTER their action succeeds; `undo_fn`s call **mechanism-level** functions (`system.set_volume`, `files.restore_file`, `MemoryStore.delete_by_id`) — never the registry wrappers, so an undo can never recursively push undo entries. Pop-on-attempt: a failed undo reports honestly and is NOT kept (a permanently-failing entry would jam everything beneath it).
+- **Undoable:** volume/mute/brightness (paired `get_*` pre-read in the `_run_set_*` wrappers; no pre-read → no entry), DND (`set_dnd` surfaces the pre-toggle state it already read — no second Settings open; no entry on the already-in-state no-op), `remember` (delete-by-id of the exact record just created — sidesteps `forget`'s ambiguity path entirely), `delete_file` (**quarantines** to `data/agent_trash/<time_ns-token>/<rel path>` instead of unlinking; trash lives OUTSIDE the cage so search/delete can't see it — a named plan amendment; restore refuses to overwrite a newer occupant; retention 20, oldest purged).
+- **Deliberately NOT undoable (test-pinned):** media keys (edge-triggered, no state), close_tabs (titles only, no URLs — a reopen would be a guess), send_email/run_shell (categorically irreversible). The negative test is the boundary's pin.
+- **`undo_last_action`** is a brain-level meta-tool (the remember/forget precedent): own schema, `_execute_tool` dispatch, own audit splice, dry-run narrates via peek without popping. Empty stack → honest "nothing to undo".
+- **Live-proven (mechanical):** real brain set volume→25 then "undo that" → pycaw readback restored the exact pre-level (`test_undo_live.py`, in-suite); real brain deleted a workspace file (CONFIRM approved) then "undo that — bring the file back" → restored byte-identical.
+
 ---
 
 ## 3. Architecture & repo map
@@ -177,6 +185,8 @@ e:\J.A.R.V.I.S\
   data/settings.json        ← live settings (git-ignored): brain/tts/stt/confirm/vision/telemetry/
                               shell/memory/web/apps/input/audit/autostart — see settings_store.py
   data/agent_files/         ← the ONLY file sandbox (delete_file, search_files)
+  data/agent_trash/         ← slice 26: quarantined deletions (outside the cage on
+                              purpose — search/delete can't see it; newest 20 kept)
   data/memory/memories.bin  ← DPAPI-encrypted long-term memory (git-ignored)
   data/audit/audit.jsonl    ← slice 18: persistent audit log (git-ignored)
   data/models/minilm/       ← slice 19: local embedding model (git-ignored; --setup to fetch)
@@ -204,7 +214,11 @@ e:\J.A.R.V.I.S\
                               no torch, no network, no key) + one-time setup CLI
                               (python -m jarvis.core.embedder --setup → data/models/minilm/)
       memory.py              ← MemoryStore (DPAPI-encrypted), semantic + relevance-gated retrieve,
-                              pinned preferences (slice 19), forget-never-guesses
+                              pinned preferences (slice 19), forget-never-guesses,
+                              delete_by_id (slice 26 — the undo path, no ambiguity)
+      undo.py                 ← slice 26: bounded in-memory LIFO undo stack (UndoEntry +
+                              UndoStack singleton); pushed by the set_* wrappers,
+                              delete_file and remember; popped by undo_last_action
       dpapi.py                ← win32crypt protect/unprotect + available()
       autostart.py            ← slice 23: HKCU Run key -> tray_start.pyw (Windows startup toggle)
       settings_store.py       ← DEFAULT_SETTINGS + hot-reload
@@ -279,6 +293,11 @@ e:\J.A.R.V.I.S\
                               ← ALL pin web.profile_mode=isolated + allow_actions=False in an
                               autouse fixture — data/settings.json may have real mode persisted
                               from live testing, so this pin is REQUIRED for determinism
+    test_undo.py                ← slice 26: stack semantics, every capture point, the
+                              quarantine/restore honesty contract, and the
+                              never-undoable negative (scope boundary pinned)
+    test_undo_live.py           ← slice 26: gated live "set volume then undo" chain,
+                              restore verified by pycaw readback
     test_wake.py test_tray.py
     test_email.py test_email_live.py
     test_memory.py test_memory_live.py test_shell.py test_tabs.py test_system.py test_chain.py
@@ -315,7 +334,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 606 passed, 0 failed, 0 skipped (~6-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 619 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -347,6 +366,13 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
 - **Settings page (slice 23)**: multi-brain (OpenAI/Claude/Ollama) is visibly present but disabled — "not ported yet" is honest UI, not a bug. Autostart targets `tray_start.pyw`; if the repo is moved, re-toggle autostart to refresh the Run-key path.
 - **Real-browser mode (slices 24-25)**: cannot use the user's literal Default Chrome profile — Chrome 136+ blocks remote-debugging on it and app-bound cookie encryption resists copying its logins (this is Google's deliberate hardening, not a JARVIS limitation). JARVIS instead drives a **dedicated** Chrome profile (`data/browser_profile/`) that the user signs into once per site. Committal actions (click/type/submit) are OFF by default and, even when enabled, only committal ones (post/buy/send/delete/submit) CONFIRM — benign clicks/typing are un-gated on the real account (the user's chosen trade for smoothness). A click that itself triggers cross-host navigation is not re-gated. Rich text editors (contenteditable) work best-effort, verified on Claude's ProseMirror box but not exhaustively tested across every site. `browse_key` presses only a fixed allow-list of navigation keys (Enter/Tab/Escape/arrows/etc.) — never arbitrary key combos.
 - **Flaky test note**: (1) live-UIA/input tests (`test_input`, `test_tabs`) intermittently fail under load in a full run on real mouse/UIA/browser timing; (2) live-model tests accept any bounded/terminal chain state to absorb transient provider errors; (3) a recurring cross-session Win11-Notepad session-restore orphan can make `test_close_window_closes_notepad` fail (a genuinely unsaved leftover Notepad from a prior session — not a code bug, `close_window` correctly refuses to force it past its save dialog); (4) **never run two full live suites back-to-back** — free-tier Gemini quota exhausts and live tests fail in clusters (rotating failures across runs = the signature of throttling, not a regression). Always re-run the named test in isolation before calling anything a regression.
+- **Undo (slice 26):** the stack is in-memory and process-scoped — a restart
+  forgets what was undoable (same posture as the chain tracker, documented not
+  hidden); depth 5, deletion-quarantine retention 20 (bounded windows,
+  disclosed); pop-on-attempt (a failed undo is reported, not retried); undoing
+  a DND change re-opens Settings briefly (the original action's same cost);
+  tabs/media-keys/email/shell are categorically irreversible and test-pinned
+  as never-undoable. Redo does not exist (undoing an undo is out of scope).
 - **Recurring test-isolation lesson (slices 24-25):** `data/settings.json` can have `web.profile_mode="real"` persisted from live testing/actual use. Any test that classifies web clicks or drives the browser MUST pin `web.profile_mode="isolated"` + `web.allow_actions=False` in an autouse fixture, or it will see BLOCKED instead of the tier it expects. `test_web.py`, `test_web_live.py`, `test_search.py`, `test_search_live.py` all do this — follow the same pattern for any new web-adjacent test file.
 
 ---
@@ -378,8 +404,8 @@ All four spec §1.6 scripts pass; real-browser navigate+read AND committal actio
 3. **Real-browser mode, round 2** — the committal-action residuals from slice 25: re-gating a click that triggers cross-host navigation; broader rich-editor coverage beyond Claude's ProseMirror box; a HUD indicator for when real-browser mode / allow_actions is live (so the user always knows JARVIS is acting on their real accounts).
 4. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags, driving the residual ~18% paraphrase misses down (re-run `harness_memory_eval.py` first).
 5. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
-6. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only); **undo** (the last unbuilt clause of spec §1.4 — audit log + dry-run shipped in slice 18); an audit-log **viewer** (HUD panel) — the durable record exists, deliberately without a UI.
-7. **Spotify via Web API** (from the slice-22 API-first audit) — the one place we GUI-automate a service that has a real API covering the exact use case. Requires Premium + an OAuth app; treat auth as its own deliberate decision (the slice-11 `gmail.send` doctrine).
+6. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only); an audit-log **viewer** (HUD panel) — the durable record exists, deliberately without a UI. (Undo shipped in slice 26.)
+7. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
 8. **Email widenings** (each a deliberate slice): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface).
 9. **Web/search widenings** — the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.
 10. **Wake-word refinements** — a HUD wake toggle; custom "hey jarvis" sensitivity; self-trigger suppression during TTS beyond the `_busy` drop.

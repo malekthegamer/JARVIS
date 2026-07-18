@@ -14,6 +14,7 @@ import time
 from jarvis.core import audit, chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
+from jarvis.core.undo import UndoEntry, undo_stack
 from jarvis.primitives import (apps, email as jemail, files, input as jinput,
                                screen, shell, system, tabs, ui_tree, web,
                                windows)
@@ -94,7 +95,15 @@ def _run_read_ui_tree(args: dict, gate_info: dict | None = None) -> str:
 
 
 def _run_delete_file(args: dict, gate_info: dict | None = None) -> str:
-    r = files.delete_file(str(args.get("name", "")))
+    """Slice 26: a successful delete quarantines the file and leaves an undo
+    entry (bounded retention — see files._purge_old_trash)."""
+    name = str(args.get("name", ""))
+    r = files.delete_file(name)
+    if r["ok"] and r.get("undo_token"):
+        undo_stack.push(UndoEntry(
+            tool="delete_file",
+            description=f"the deletion of '{name}'",
+            undo_fn=lambda t=r["undo_token"]: files.restore_file(t)))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
@@ -136,23 +145,39 @@ def _run_get_volume(args: dict, gate_info: dict | None = None) -> str:
 
 
 def _run_set_volume(args: dict, gate_info: dict | None = None) -> str:
-    """Set + verify by reading the level back (act -> verify doctrine)."""
+    """Set + verify by reading the level back (act -> verify doctrine).
+    Slice 26: the pre-change level (read before acting) becomes an undo
+    entry — only on success, and only when the pre-read itself succeeded
+    (no pre-state = nothing truthful to restore to = no entry)."""
+    pre = system.get_volume()
     r = system.set_volume(args.get("level"))
     if not r["ok"]:
         return "FAILED: " + r["message"]
     back = system.get_volume()
     verify = (f"VERIFY: readback {back['level']}%."
               if back["ok"] else "VERIFY: could not read back.")
+    if pre["ok"] and pre["level"] is not None:
+        undo_stack.push(UndoEntry(
+            tool="set_volume",
+            description=f"the volume change (was {pre['level']}%)",
+            undo_fn=lambda lvl=pre["level"]: system.set_volume(lvl)))
     return f"OK: {r['message']} {verify}"
 
 
 def _run_set_mute(args: dict, gate_info: dict | None = None) -> str:
+    pre = system.get_volume()
     r = system.set_mute(bool(args.get("muted", True)))
     if not r["ok"]:
         return "FAILED: " + r["message"]
     back = system.get_volume()
     verify = (f"VERIFY: muted={back['muted']}."
               if back["ok"] else "VERIFY: could not read back.")
+    if pre["ok"] and pre["muted"] is not None:
+        undo_stack.push(UndoEntry(
+            tool="set_mute",
+            description=("the mute change (was "
+                         + ("muted" if pre["muted"] else "unmuted") + ")"),
+            undo_fn=lambda m=pre["muted"]: system.set_mute(m)))
     return f"OK: {r['message']} {verify}"
 
 
@@ -168,12 +193,18 @@ def _run_get_brightness(args: dict, gate_info: dict | None = None) -> str:
 
 
 def _run_set_brightness(args: dict, gate_info: dict | None = None) -> str:
+    pre = system.get_brightness()
     r = system.set_brightness(args.get("level"))
     if not r["ok"]:
         return "FAILED: " + r["message"]
     back = system.get_brightness()
     verify = (f"VERIFY: readback {back['level']}%."
               if back["ok"] else "VERIFY: could not read back.")
+    if pre["ok"] and pre["level"] is not None:
+        undo_stack.push(UndoEntry(
+            tool="set_brightness",
+            description=f"the brightness change (was {pre['level']}%)",
+            undo_fn=lambda lvl=pre["level"]: system.set_brightness(lvl)))
     return f"OK: {r['message']} {verify}"
 
 
@@ -221,8 +252,18 @@ def _run_get_dnd(args: dict, gate_info: dict | None = None) -> str:
 
 def _run_set_dnd(args: dict, gate_info: dict | None = None) -> str:
     """Drive the real DND toggle; system.set_dnd already confirms by readback
-    (act -> verify doctrine, like set_volume)."""
+    (act -> verify doctrine, like set_volume). Slice 26: set_dnd surfaces the
+    pre-toggle state it read anyway ("previous") — an undo entry is pushed
+    only when the state actually changed (undoing re-opens Settings briefly,
+    the same visible cost the original action has)."""
     r = system.set_dnd(bool(args.get("enabled", True)))
+    if r["ok"] and r.get("previous") is not None \
+            and r["previous"] != r["enabled"]:
+        undo_stack.push(UndoEntry(
+            tool="set_dnd",
+            description=("the Do Not Disturb change (was "
+                         + ("on" if r["previous"] else "off") + ")"),
+            undo_fn=lambda prev=r["previous"]: system.set_dnd(prev)))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 

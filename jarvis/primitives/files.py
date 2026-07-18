@@ -4,15 +4,47 @@ The workspace is data/agent_files/ and NOTHING outside it is reachable:
 absolute paths are rejected outright, and the resolved target (symlinks
 followed) must still live under the resolved workspace before any
 filesystem call happens. Arbitrary-path file ops are a later slice.
+
+Slice 26: deletion QUARANTINES instead of unlinking — the file moves to
+data/agent_trash/<token>/<original relative path>, so "undo" is a plain
+move back. The trash root lives OUTSIDE the workspace deliberately: the
+cage invariant ("everything under agent_files is reachable by the file
+tools") stays clean — search_files can't list quarantined files and
+delete_file can't target them. Retention is capped (newest 20); past the
+cap the oldest quarantine is purged permanently, so the undo window for
+deletions is bounded, not infinite — a documented trade-off, not a bug.
 """
 from __future__ import annotations
 
+import shutil
+import time
+import uuid
 from pathlib import Path
 
 from jarvis import config
 
 AGENT_FILES_DIR = config.DATA_DIR / "agent_files"
 AGENT_FILES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Quarantined deletions kept before the oldest is purged for real.
+TRASH_MAX_ENTRIES = 20
+
+
+def _trash_root() -> Path:
+    """Sibling of the workspace, DERIVED from it — tests that re-point
+    AGENT_FILES_DIR at tmp_path automatically isolate the trash too."""
+    return AGENT_FILES_DIR.parent / "agent_trash"
+
+
+def _purge_old_trash() -> None:
+    """Keep the newest TRASH_MAX_ENTRIES quarantine dirs. Tokens are
+    time_ns-prefixed, so lexicographic order IS age order. Never raises."""
+    try:
+        dirs = sorted(p for p in _trash_root().iterdir() if p.is_dir())
+        for stale in dirs[:-TRASH_MAX_ENTRIES] if len(dirs) > TRASH_MAX_ENTRIES else []:
+            shutil.rmtree(stale, ignore_errors=True)
+    except Exception:
+        pass
 
 _README = AGENT_FILES_DIR / "README.md"
 if not _README.exists():
@@ -49,7 +81,11 @@ def _contained(name: str) -> Path | None:
 
 
 def delete_file(name: str) -> dict:
-    """CONFIRM tier. Returns {"ok", "message"} — never raises."""
+    """CONFIRM tier. Returns {"ok", "message"[, "undo_token"]} — never raises.
+
+    Slice 26: the file is MOVED to quarantine, not unlinked; "undo_token"
+    names its quarantine dir so restore_file() can bring it back. From the
+    user's point of view the file is gone from the workspace either way."""
     name = str(name or "").strip()
     try:
         target = _contained(name)
@@ -63,10 +99,47 @@ def delete_file(name: str) -> dict:
         if target.is_dir():
             return {"ok": False,
                     "message": f"'{name}' is a folder — I only delete files."}
-        target.unlink()
-        return {"ok": True, "message": f"Deleted '{name}' from my workspace."}
+        rel = target.relative_to(AGENT_FILES_DIR.resolve())
+        token = f"{time.time_ns():019d}-{uuid.uuid4().hex[:8]}"
+        dest = _trash_root() / token / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(target), str(dest))
+        _purge_old_trash()
+        return {"ok": True, "undo_token": token,
+                "message": f"Deleted '{name}' from my workspace."}
     except Exception as exc:
         return {"ok": False, "message": f"Couldn't delete '{name}': {exc}"}
+
+
+def restore_file(token: str) -> dict:
+    """Undo a quarantined deletion: move the file back to its original
+    workspace path. Fails closed — never overwrites a newer occupant, and
+    reports honestly when the quarantine entry was already purged (the
+    bounded-retention trade-off). Never raises."""
+    try:
+        qdir = _trash_root() / str(token or "")
+        if not qdir.is_dir():
+            return {"ok": False,
+                    "message": "that deleted file is no longer in quarantine "
+                               "(older deletions are purged) — I can't restore it."}
+        srcs = [p for p in qdir.rglob("*") if p.is_file()]
+        if not srcs:
+            return {"ok": False,
+                    "message": "the quarantine entry is empty — nothing to restore."}
+        src = srcs[0]
+        rel = src.relative_to(qdir)
+        dest = AGENT_FILES_DIR / rel
+        if dest.exists():
+            return {"ok": False,
+                    "message": f"a file already exists at '{rel.as_posix()}' — "
+                               f"I won't overwrite it to restore the old one."}
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest))
+        shutil.rmtree(qdir, ignore_errors=True)
+        return {"ok": True,
+                "message": f"restored '{rel.as_posix()}' to my workspace."}
+    except Exception as exc:
+        return {"ok": False, "message": f"couldn't restore that file: {exc}"}
 
 
 def search_files(query: str = "", ext: str = "", within_days: float = 0) -> dict:

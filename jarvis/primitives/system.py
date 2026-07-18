@@ -274,7 +274,9 @@ def set_dnd(enabled) -> dict:
             except Exception:
                 return {"ok": False, "enabled": None, "message": _DND_UNAVAILABLE}
             if current == want:
-                return {"ok": True, "enabled": bool(want),
+                # previous == enabled here — the caller can see nothing
+                # actually changed (slice 26: no undo entry for a no-op).
+                return {"ok": True, "enabled": bool(want), "previous": bool(want),
                         "message": f"Do Not Disturb is already {_dnd_word(want)}."}
             toggle.toggle()
             time.sleep(0.5)               # let the switch settle before readback
@@ -284,7 +286,10 @@ def set_dnd(enabled) -> dict:
                 return {"ok": False, "enabled": None, "message": _DND_NO_RESPONSE}
             if back != want:
                 return {"ok": False, "enabled": bool(back), "message": _DND_NO_RESPONSE}
-            return {"ok": True, "enabled": bool(want),
+            # "previous" (slice 26) = the state read before toggling — the
+            # undo capture point, surfaced from the read this function
+            # already does (a separate get_dnd would open Settings twice).
+            return {"ok": True, "enabled": bool(want), "previous": bool(current),
                     "message": f"Do Not Disturb turned {_dnd_word(want)} "
                                f"(readback confirmed)."}
     except Exception:

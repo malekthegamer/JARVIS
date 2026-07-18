@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-18 (after Slice 25 — act in the real browser)
-**Tip commit at capture:** `6ec7dc7` on `main` (Slice 25 S4c)
+**Checkpoint date:** 2026-07-18 (after Slice 26 — undo)
+**Tip commit at capture:** see `git log -1` (Slice 26)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -17,7 +17,7 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
+> Previous checkpoints: (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
 > `867986f` (slice 23) 588; `90db8d4` (slice 22) 570; (slice 21, no new tests)
 > 550; (slice 20, harness only, not collected) 550; `5e3f0dc` (slice 19) 547;
 > `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
@@ -27,7 +27,43 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (606 tests: 597 + 9 real-browser actions)
+## 1. Regression signal — test suite (619 tests: 606 + 13 undo)
+
+**Slice-26 run (2026-07-18):** 616 passed / 3 failed / 0 skipped (239s).
+All three failures are live-MODEL tests (`test_dryrun::test_live_dry_run_notepad`,
+`test_email_live::test_live_script3_invoice_chain`,
+`test_search_live::test_live_search_then_read_chain`) — a DIFFERENT set than
+the same morning's orientation run (email + memory×3): the documented RPM
+rotation signature. Each was re-run in isolation: email + search passed
+immediately; dry-run failed once more *inside the throttle window* (2.6s,
+assertion "the model called no tools at all" — the instant-429 profile,
+model errors before any tool call) then passed twice cleanly. **All 13 new
+undo tests passed in the full run, including the live volume-undo chain.**
+Deterministic core 100% green. Definitive clean 0-failed pass still wants a
+fresh daily bucket + idle desktop (standing recommendation, unchanged).
+
+### Slice 26 — undo (spec §1.4's last unbuilt clause)
+- A bounded (5), process-scoped, in-memory LIFO undo stack
+  (`jarvis/core/undo.py`); `undo_last_action` is a brain-level meta-tool
+  (like remember/forget — no new OS surface, own audit splice, dry-run
+  narrates via peek without popping).
+- **Undoable (capture points):** volume / mute / brightness (pre-state read
+  via the paired `get_*` before acting), DND (`set_dnd` now surfaces the
+  pre-toggle state it already read — no second Settings open), `remember`
+  (delete-by-id of the exact record just created — no query ambiguity), and
+  `delete_file` (now QUARANTINES to `data/agent_trash/<token>/` instead of
+  unlinking; restore refuses to overwrite a newer occupant; retention capped
+  at 20, oldest purged — a bounded undo window, disclosed).
+- **Deliberately NOT undoable (test-pinned negative):** media keys (edge-
+  triggered, no state), close_tabs (titles only, no URLs — reopening would
+  be a guess), send_email / run_shell (categorically irreversible). A fake
+  undo is worse than none.
+- Pop-on-attempt semantics: a failed undo is reported honestly and NOT kept
+  (a permanently-failing entry would jam everything beneath it).
+- **Live proof (mechanical):** (1) `test_undo_live.py` — real brain set
+  volume 25% then "undo that" → pycaw readback restored the exact pre-level;
+  (2) manual chain — real brain deleted a workspace file (CONFIRM approved),
+  "undo that — bring the file back" → file restored byte-identical.
 
 **Slice-25 run (2026-07-18):** 602 passed / 4 failed. Three environmental
 (isolation-green): live-model RPM (email + search_live) + the recurring
@@ -456,6 +492,15 @@ turn the suite red; re-drive them live when their primitives change.
   verbs (click/type/press/tabs/web) narrate a conditional tier rather than
   the real one, because prior dry steps never ran so the live screen can't
   match the plan.
+- **Undo (slice 26) residuals:** the stack is in-memory and process-scoped —
+  restart forgets what was undoable (same posture as the chain tracker);
+  depth is 5, file-deletion retention is 20 (bounded windows, disclosed);
+  a failed undo is popped, not retried; undoing DND re-opens the Settings
+  window briefly (the original action's same visible cost); tabs, media
+  keys, email and shell remain categorically irreversible — the negative
+  test pins that boundary. Spotify Web API (the slice originally requested)
+  was probed and is a policy dead-end without Premium (Feb 2026 dev-mode
+  rules) — script #1 stays on its proven GUI path.
 
 ---
 
@@ -463,9 +508,10 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 550 passed, 0 failed, 0 skipped (~6:20)
-                             # (547 at the slice-19 capture + 3 desktop-guard
-                             # tests added just after; verified 550/0/0 clean)
+python -m pytest tests/ -q   # expect: 619 passed, 0 failed, 0 skipped (~4-8 min)
+                             # (on a throttled day the live-MODEL tests rotate
+                             # failures — re-run each alone before suspecting
+                             # a regression; deterministic core must be green)
                              # do NOT run twice back-to-back — a second full
                              # live run inside ~15 min hits Gemini 429 quota
                              # keep the DESKTOP IDLE (~8 min) — live-UIA input

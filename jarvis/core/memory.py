@@ -111,6 +111,24 @@ class MemoryStore:
                 raise
             return {"status": "deleted", "removed": dict(rec)}
 
+    def delete_by_id(self, rec_id: str) -> dict | None:
+        """Remove ONE record by its exact id — the undo path (slice 26).
+        Unlike delete(), there is no query matching and so no ambiguity:
+        the caller names the very record it just created. Returns the
+        removed record, or None if that id is no longer stored."""
+        with self._lock:
+            rec = next((r for r in self._records if r["id"] == rec_id), None)
+            if rec is None:
+                return None
+            snapshot = list(self._records)
+            self._records = [r for r in self._records if r["id"] != rec_id]
+            try:
+                self._persist()
+            except Exception:
+                self._records = snapshot
+                raise
+            return dict(rec)
+
     def clear(self) -> int:
         with self._lock:
             n = len(self._records)
