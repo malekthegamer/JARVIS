@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-17 (after Slice 22 — app discovery + smooth cursor)
-**Tip commit at capture:** `c8d44e0` on `main` (Slice 22 Stage B)
+**Checkpoint date:** 2026-07-18 (after Slice 24 — real-browser mode)
+**Tip commit at capture:** `12ef0b9` on `main` (Slice 24 S3)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -25,7 +25,16 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (588 tests: 570 + 15 provider/settings + misc)
+## 1. Regression signal — test suite (597 tests: 588 + 9 real-browser mode)
+
+**Slice-24 run (2026-07-18):** 592 passed / 5 failed, all environmental,
+isolation-green: 4 live-model RPM rotation (dry-run/email/memory/search) + the
+recurring cross-session Win11-Notepad session-restore orphan
+(`test_close_window_closes_notepad` — see the slice-23 note; passed alone).
+**Zero web/slice-24 failures** — the real-browser code is clean; deterministic
+core + all 28 web tests green. Definitive clean pass still wants a fresh daily
+bucket (unchanged recommendation).
+
 
 **HONEST STATUS — no single clean 0-failed pass was captured this checkpoint.**
 The deterministic core (~500 tests) passed on every attempt; the failures were
@@ -79,6 +88,30 @@ per-minute rate-limit rotation (email/search/dry-run, isolation-green every
 time). The deterministic core — including ALL new slice-23 settings/provider
 tests — passed both runs. A definitive clean 0-failed pass still wants a
 fresh daily bucket or a paid key (unchanged recommendation).
+
+### Slice 24 — real-browser mode: JARVIS drives a real logged-in Chrome (navigate + read)
+- Slice 14's isolation pillar is now **optional**: `web.profile_mode="real"`
+  makes JARVIS drive a **dedicated real Chrome** (its own profile dir, via CDP)
+  logged into the user's accounts after a one-time sign-in per site. "go to
+  <any site>" opens it in that logged-in Chrome. Isolated mode stays the
+  **default**.
+- **S0 pivot gate (probed, not assumed):** driving the literal Default profile
+  is impossible on modern Chrome — persistent-context hangs (self-relaunch),
+  and `--remote-debugging-port` is blocked on the default dir by Chrome 136+
+  (this machine: 150). VERIFIED working path: launch Chrome with the debug port
+  on a **separate `--user-data-dir`**, then `connect_over_cdp`.
+- **Safety:** real mode is **navigate + read only** — `browse_click`/`browse_fill`
+  are withheld from the schema AND refuse via classify (BLOCKED); cross-origin
+  CONFIRM + the untrusted-content boundary still apply; teardown kills only
+  JARVIS's own Chrome pid (never the user's). Settings-page toggle with an
+  honest warning; **vision check passed**.
+- **Live acceptance (real primitives):** JARVIS's dedicated Chrome launched,
+  navigated youtube/example/wikipedia, `read_page` returned content,
+  `close_browser` terminated only our pid. Found + fixed a redirect race
+  (reddit-style client-side redirect destroyed the JS context → naive
+  `page.title()` raised; navigate now settles + reads title defensively —
+  helps isolated mode too; deterministic `/redirect` test added). Logged-in
+  experience needs a one-time manual Google sign-in (harness `--wait`).
 
 ### Slice 23 — settings page salvaged from legacy (+ ElevenLabs/Whisper ports)
 - `/settings` served by the rebuilt app: **every legacy feature restored** —

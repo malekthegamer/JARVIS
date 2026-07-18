@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-17, after **Slice 23 (settings page salvaged from legacy + ElevenLabs/Whisper ports)**. See `git log --oneline` for the tip.
+> Last updated: 2026-07-18, after **Slice 24 (real-browser mode — drive a real logged-in Chrome)**. See `git log --oneline` for the tip.
 
 ---
 
@@ -138,6 +138,15 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 ### Slice 20 — PC-control latency PROFILE (measurement only)
 - The user reported PC control felt slow. Profiled before touching anything (slice-16/19 "metric before mechanism"): `tests/harness_latency_eval.py` monkeypatch-wraps timing around existing seams (all restored; no product change), drives real chains, attributes >99% of wall-clock. **Finding: the bottleneck is UIA window enumeration, NOT the model/audit/orchestration.** Notepad chain 34.4 s median: `win_resolve` 55%, launch-poll 14%, readback 14%, model only 11%. Committed harness = a re-runnable baseline. Fix deferred to slice 21 (measure first, then propose).
 
+### Slice 24 — Real-browser mode (drive a real logged-in Chrome; navigate + read)
+- Slice 14 deferred "driving the user's authenticated session" as its own slice — this is it. `web.profile_mode="real"` (default `"isolated"`) makes JARVIS operate a **dedicated real Chrome** logged into the user's accounts; "go to <any site>" opens it there. General navigation, not YouTube-specific.
+- **S0 pivot gate earned its keep** (slice-12/13 doctrine — two mechanisms probed DEAD before any build): (1) `launch_persistent_context` on the real **Default** profile HANGS (Chrome self-relaunch breaks Playwright's pipe, 180s timeout, reproduced twice); (2) `--remote-debugging-port` on the **default dir** is BLOCKED by **Chrome 136+** (this machine runs 150) + app-bound cookie encryption resists copying Default's logins — Google deliberately prevents automating the literal Default profile. **VERIFIED working:** launch the real Chrome on a **separate `--user-data-dir`** (`data/browser_profile/`) with `--remote-debugging-port`, then `connect_over_cdp`. The user signs into each site **once**; it persists. JARVIS's Chrome **coexists** with the user's everyday Chrome (separate dir) — no closing their browser.
+- **`jarvis/primitives/web.py`:** `BrowserSession` gains a mode captured at launch. Real branch = `_launch_real` (find chrome via App Paths → launch with debug port on the dedicated dir → bounded `/json/version` poll → `connect_over_cdp` → `browser.contexts[0]`). Teardown `_teardown_real` terminates **only our launched pid** (never a broad taskkill — the user's Chrome is sacrosanct). Honest failures (chrome-missing, port-never-up) → `BrowserUnavailable`, never a hang. `_chrome_binary`/`_dedicated_dir`/`_debug_port_ready` helpers.
+- **Safety (biggest risk expansion in the project, bounded 4 ways):** real mode is **navigate + read ONLY** — `browse_click`/`browse_fill` are withheld from `tools_schema` AND refuse via classify (BLOCKED) so no committal action is offerable; slice-14 **cross-origin CONFIRM** still gates host jumps; **untrusted-content boundary** still wraps reads; it's a **separate profile** so only sites the user signed into JARVIS's Chrome are reachable. Committal automation on the real session is the deliberate NEXT slice.
+- **Settings-page toggle** ("Use my real logged-in Chrome", bound to `web.profile_mode`, honest warning) — vision-checked (screenshot Read + DOM). Folded into the caps-built `web` object so the `...caps` spread can't clobber it.
+- **Live acceptance (real primitives, not the raw probe):** launched JARVIS's dedicated Chrome, navigated youtube/example/wikipedia, read content, `close_browser` killed only our pid. Found+fixed a **client-side-redirect race** (reddit destroyed the JS context → naive `page.title()` raised; navigate now settles + reads title defensively — also fixes isolated mode; deterministic `/redirect` fixture + test). Logged-in proof needs a one-time manual Google sign-in (`harness_realbrowser_accept.py --wait`).
+- **Isolated mode (default) byte-identical** — all slice-14/15 tests green.
+
 ### Slice 23 — Settings page salvaged from legacy (+ ElevenLabs TTS, local-Whisper STT)
 - The rebuilt app had **no settings surface**; the legacy app's full hot-applying page was salvaged and modernized. `/settings` (gear link in the HUD header) exposes every legacy feature working against a real backend, plus a new **"Capabilities & safety"** module the legacy app never had.
 - **Providers ported** (`jarvis/providers/tts/elevenlabs_provider.py`, `stt/local_whisper_provider.py`, re-registered): ElevenLabs (key-gated, voice picker + quota, degrades to edge on quota-out); local-Whisper (the hard-won Blackwell/sm_120 float16 note preserved; `find_spec` install check). `resolve_tts_name` auto now prefers ElevenLabs-when-keyed. New settings keys: `tts.elevenlabs_voice_id`, `stt.whisper_model/device`, top-level `autostart`.
@@ -225,7 +234,7 @@ e:\J.A.R.V.I.S\
                               settings.{html,css,js} ← the /settings page (slice 23, gear in HUD header)
   tray_start.pyw            ← slice 23: 4-line root launcher the autostart Run key points at
 
-  tests/                    ← 588 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                    ← 597 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -341,7 +350,7 @@ All four spec §1.6 scripts now pass. Pick one and plan it. In rough priority:
 5. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is now the single biggest drag on the test gate (four rate-limited runs at the slice-21 checkpoint, two more at slice 22). Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent — a real slice if wanted.
 6. **Spotify via Web API** (from the slice-22 API-first audit) — the one place we GUI-automate a service that has a real API covering the exact use case (playback/playlists). Requires Premium + an OAuth app; treat auth as its own deliberate decision (the slice-11 `gmail.send` doctrine). GUI path keeps working meanwhile.
 4. **Email widenings** (each a deliberate slice, not a default): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface — treat like a new risk category again).
-5. **Web/search widenings** — a persistent-login browser mode (reuse the user's real session, a much bigger risk surface — its own deliberate slice); the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling proves annoying (a keyed API, guarded like slice 11's OAuth).
+5. **Web/search widenings** — real-browser mode shipped navigate+read (slice 24); the natural next increment is **committal actions on the logged-in session** (click/type/play as the user — the withheld tier, each committal step CONFIRM-gated on the real accounts — a deliberate risk step). Also: the vision fallback in-page for canvas/JS UIs; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.
 6. **Wake-word refinements** — a HUD wake toggle; custom "hey jarvis" sensitivity; self-trigger suppression during TTS beyond the `_busy` drop.
 7. **DND without the Settings pop** — revisit the CloudStore serialized blob for a silent path (slice 12 shipped the honest visible surface over the fragile silent one).
 8. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these as visibly-disabled "not ported yet". Each needs a tool-calling adapter mapping the 26-primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
