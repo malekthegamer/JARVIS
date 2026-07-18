@@ -45,6 +45,7 @@
     $("confirmTimeout").value = s.confirm.timeout_s;
     $("smoothCursor").checked = !!s.input.smooth_cursor;
     $("realBrowser").checked = (s.web && s.web.profile_mode === "real");
+    $("allowActions").checked = !!(s.web && s.web.allow_actions);
   }
 
   const getPath = (obj, path) => path.split(".").reduce((o, k) => (o || {})[k], obj);
@@ -115,6 +116,7 @@
     // here so the `...caps` spread doesn't clobber it.
     (caps.web = caps.web || {}).profile_mode =
       $("realBrowser").checked ? "real" : "isolated";
+    caps.web.allow_actions = $("allowActions").checked;
 
     const settings = {
       brain: { active: "gemini",

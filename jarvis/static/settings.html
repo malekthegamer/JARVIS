@@ -145,8 +145,15 @@
         <input type="checkbox" class="toggle" id="realBrowser">
         <span class="hint">On = JARVIS opens its OWN Chrome window (separate from your
           everyday Chrome), logged into your accounts after you sign in once per site.
-          <b>Navigate &amp; read only</b> — it can open sites and read them, but not
-          click or type on your accounts. Off = the isolated, logged-out sandbox.</span>
+          Off = the isolated, logged-out sandbox.</span>
+      </div>
+      <div class="row">
+        <label for="allowActions">↳ Let JARVIS click &amp; type on my sites</label>
+        <input type="checkbox" class="toggle" id="allowActions">
+        <span class="hint"><b>Only applies in real-Chrome mode.</b> On = JARVIS can act
+          on your logged-in accounts (search, open videos, type prompts). Risky actions
+          — post, buy, send, delete, submit — <b>always ask you first</b>; harmless steps
+          just happen. Off = navigate &amp; read only (it opens and reads, never acts).</span>
       </div>
       <div class="row">
         <label for="capSearch">Web search</label>
