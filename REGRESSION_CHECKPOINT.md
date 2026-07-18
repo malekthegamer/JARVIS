@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-18 (after Slice 24 — real-browser mode)
-**Tip commit at capture:** `12ef0b9` on `main` (Slice 24 S3)
+**Checkpoint date:** 2026-07-18 (after Slice 25 — act in the real browser)
+**Tip commit at capture:** slice-25 tip on `main`
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -25,7 +25,17 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (597 tests: 588 + 9 real-browser mode)
+## 1. Regression signal — test suite (606 tests: 597 + 9 real-browser actions)
+
+**Slice-25 run (2026-07-18):** 602 passed / 4 failed. Three environmental
+(isolation-green): live-model RPM (email + search_live) + the recurring
+Notepad session-restore orphan. One REAL find, fixed: `test_search.py`'s
+downstream-click-gate test asserted CONFIRM but the machine's persisted
+`profile_mode=real` (from the live sign-in) made web-click classify BLOCKED —
+so test_search now pins isolated mode (like test_web/web_live/search_live did
+in slice 25 S1). Deterministic core + all web tests green. A definitive clean
+0-failed pass still wants a fresh daily bucket + idle desktop (unchanged).
+
 
 **Slice-24 run (2026-07-18):** 592 passed / 5 failed, all environmental,
 isolation-green: 4 live-model RPM rotation (dry-run/email/memory/search) + the
@@ -88,6 +98,26 @@ per-minute rate-limit rotation (email/search/dry-run, isolation-green every
 time). The deterministic core — including ALL new slice-23 settings/provider
 tests — passed both runs. A definitive clean 0-failed pass still wants a
 fresh daily bucket or a paid key (unchanged recommendation).
+
+### Slice 25 — act in the real browser: JARVIS clicks/types on logged-in sites (committal-gated)
+- Unlocks the committal browser actions slice 24 withheld — behind a SECOND
+  default-off opt-in `web.allow_actions`. Real mode stays navigate+read until
+  it's on; then `browse_click`/`browse_fill`/`browse_key` are advertised and
+  tiered: **committal actions (post/buy/send/delete/submit) CONFIRM** (reused
+  `input._click_tier`, and the confirm names the SITE), benign clicks & typing
+  AUTO. Off → all three withheld from the schema AND refused via classify.
+- **New `browse_key`** (Enter/Tab/Escape/arrows — presses the FOCUSED element)
+  so a search submits; **contenteditable fill** (Claude/ProseMirror boxes,
+  readback via inner_text); **click awaits navigation**; **editability-aware
+  fill** (skips look-alike buttons — YouTube's search *button* shares the
+  input's "Search" label); **stale-Chrome reaper** before real launch (only
+  the dedicated-profile pid, never the user's Chrome — test-pinned).
+- **Live acceptance (real brain + real signed-in Chrome):** "go to YouTube,
+  search MrBeast, open a video" → an actual `/watch` page opened end-to-end;
+  Claude's ProseMirror box proven fillable directly. Committal actions ask
+  first; the cross-origin nav confirm fired (auto-approved in the harness).
+- Settings sub-toggle "Let JARVIS click & type on my sites" (vision-checked).
+  Isolated + slice-24 navigate/read untouched.
 
 ### Slice 24 — real-browser mode: JARVIS drives a real logged-in Chrome (navigate + read)
 - Slice 14's isolation pillar is now **optional**: `web.profile_mode="real"`

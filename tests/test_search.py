@@ -11,6 +11,16 @@ from jarvis.core.settings_store import settings
 from jarvis.primitives import web
 
 
+@pytest.fixture(autouse=True)
+def _pin_isolated_browser():
+    """Pin isolated mode — the machine's persisted data/settings.json may have
+    real mode on (slice 24/25), which would make web-click classify BLOCKED
+    instead of the confirm/auto this file asserts."""
+    settings.set("web.profile_mode", "isolated", persist=False)
+    settings.set("web.allow_actions", False, persist=False)
+    yield
+
+
 def _rows(n):
     return [{"title": f"Result {i}", "body": f"snippet {i} about the topic",
              "href": f"https://example.com/{i}"} for i in range(n)]

@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-18, after **Slice 24 (real-browser mode — drive a real logged-in Chrome)**. See `git log --oneline` for the tip.
+> Last updated: 2026-07-18, after **Slice 25 (act in the real browser — click/type on logged-in sites, committal-gated)**. See `git log --oneline` for the tip.
 
 ---
 
@@ -138,6 +138,14 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 ### Slice 20 — PC-control latency PROFILE (measurement only)
 - The user reported PC control felt slow. Profiled before touching anything (slice-16/19 "metric before mechanism"): `tests/harness_latency_eval.py` monkeypatch-wraps timing around existing seams (all restored; no product change), drives real chains, attributes >99% of wall-clock. **Finding: the bottleneck is UIA window enumeration, NOT the model/audit/orchestration.** Notepad chain 34.4 s median: `win_resolve` 55%, launch-poll 14%, readback 14%, model only 11%. Committed harness = a re-runnable baseline. Fix deferred to slice 21 (measure first, then propose).
 
+### Slice 25 — Act in the real browser (click/type/submit on logged-in sites, committal-gated)
+- Unlocks the committal browser actions slice 24 deliberately withheld — the user wanted JARVIS to actually DO things ("search MrBeast, open a random video"; "open Claude, type a prompt"). Behind a SECOND default-off opt-in `web.allow_actions` (real mode stays navigate+read until it's on).
+- **Gating (user-chosen): committal-only CONFIRM.** Typing + clicking videos/links = AUTO (smooth); committal actions (post/buy/send/delete/submit) CONFIRM via the reused `input._click_tier`/`is_committal_name`, and the confirm names the SITE ("Click 'Delete' on youtube.com"). Off (default) → `browse_click`/`browse_fill`/`browse_key` withheld from the schema AND refused via classify — both layers gate on `allow_actions`.
+- **Hardened the primitives so the tasks actually run (`web.py`):** new **`browse_key`** (Enter/Tab/Escape/arrows — presses the `:focus` locator, not the global keyboard which didn't reach a focused search box); **contenteditable fill** (Claude/ChatGPT ProseMirror — get_by_role textbox + `[contenteditable]`, readback via inner_text since input_value() throws); **editability-aware fill** (`_first_editable` skips look-alikes — YouTube's search *button* shares the input's "Search" aria-label, the bug the live run exposed); **click awaits navigation** (real resulting URL for "open a random video"); read cap 40→60; **stale-Chrome reaper** in `_launch_real` (kills only the dedicated-profile pid — test-pinned it spares the user's Chrome).
+- **Live acceptance (real brain + signed-in Chrome):** "go to YouTube, search MrBeast, open a video" → an actual `watch?v=…` page opened end-to-end; Claude's ProseMirror box proven fillable (direct probe). Two live gaps found+fixed (the YouTube-button fill match; the harness lacking a cross-origin CONFIRM approver).
+- Settings sub-toggle "Let JARVIS click & type on my sites" (bound to `allow_actions`, honest warning, vision-checked). Isolated + slice-24 navigate/read byte-identical.
+- **Residuals (honest):** benign clicks/typing un-gated on the real account (the user's chosen trade); a click that itself triggers cross-host navigation isn't re-gated; rich editors vary by site (contenteditable is best-effort); `browse_key Enter` is AUTO (a committal submit should be a gated button click). Committal automation is the whole point of the CONFIRM line here.
+
 ### Slice 24 — Real-browser mode (drive a real logged-in Chrome; navigate + read)
 - Slice 14 deferred "driving the user's authenticated session" as its own slice — this is it. `web.profile_mode="real"` (default `"isolated"`) makes JARVIS operate a **dedicated real Chrome** logged into the user's accounts; "go to <any site>" opens it there. General navigation, not YouTube-specific.
 - **S0 pivot gate earned its keep** (slice-12/13 doctrine — two mechanisms probed DEAD before any build): (1) `launch_persistent_context` on the real **Default** profile HANGS (Chrome self-relaunch breaks Playwright's pipe, 180s timeout, reproduced twice); (2) `--remote-debugging-port` on the **default dir** is BLOCKED by **Chrome 136+** (this machine runs 150) + app-bound cookie encryption resists copying Default's logins — Google deliberately prevents automating the literal Default profile. **VERIFIED working:** launch the real Chrome on a **separate `--user-data-dir`** (`data/browser_profile/`) with `--remote-debugging-port`, then `connect_over_cdp`. The user signs into each site **once**; it persists. JARVIS's Chrome **coexists** with the user's everyday Chrome (separate dir) — no closing their browser.
@@ -234,7 +242,7 @@ e:\J.A.R.V.I.S\
                               settings.{html,css,js} ← the /settings page (slice 23, gear in HUD header)
   tray_start.pyw            ← slice 23: 4-line root launcher the autostart Run key points at
 
-  tests/                    ← 597 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                    ← 606 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
