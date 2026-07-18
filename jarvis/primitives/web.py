@@ -375,27 +375,51 @@ class BrowserSession:
             return {"ok": True, "message": f"clicked '{name or kind}'.{moved}"}
         return self._do(_c)
 
+    @staticmethod
+    def _first_editable(cand):
+        """The first VISIBLE, editable match in a locator (skips look-alikes —
+        e.g. YouTube's search BUTTON also has aria-label 'Search', but it isn't
+        fillable). Returns a locator or None."""
+        try:
+            n = min(cand.count(), 8)
+        except Exception:
+            return None
+        for i in range(n):
+            el = cand.nth(i)
+            try:
+                if not el.is_visible():
+                    continue
+                editable = el.evaluate(
+                    "e => { const t=e.tagName.toLowerCase();"
+                    " return t==='input'||t==='textarea'||e.isContentEditable"
+                    "||e.getAttribute('role')==='textbox'; }")
+                if editable:
+                    return el
+            except Exception:
+                continue
+        return None
+
     def fill(self, field: str, value: str) -> dict:
         def _f(page):
             loc = None
-            # get_by_role("textbox") catches contenteditable rich inputs
-            # (Claude/ChatGPT) that have no label/placeholder/name (slice 25).
-            for finder in (lambda: page.get_by_label(field, exact=False),
-                           lambda: page.get_by_placeholder(field, exact=False),
-                           lambda: page.get_by_role("textbox", name=field)):
+            # Placeholder first (only real inputs carry one); role=textbox catches
+            # contenteditable rich inputs (Claude/ChatGPT). Each candidate must be
+            # an EDITABLE element — skip look-alike buttons with the same label.
+            for finder in (lambda: page.get_by_placeholder(field, exact=False),
+                           lambda: page.get_by_role("textbox", name=field),
+                           lambda: page.get_by_label(field, exact=False)):
                 try:
-                    cand = finder()
-                    if cand.count() > 0:
-                        loc = cand.first
+                    loc = self._first_editable(finder())
+                    if loc is not None:
                         break
                 except Exception:
                     continue
             if loc is None:
                 cand = page.locator(
                     f"input[name='{field}'], textarea[name='{field}'], #{field}, "
+                    f"input[placeholder*='{field}' i], textarea[placeholder*='{field}' i], "
                     f"[contenteditable=''], [contenteditable='true'], [role='textbox']")
-                if cand.count() > 0:
-                    loc = cand.first
+                loc = self._first_editable(cand)
             if loc is None:
                 return {"ok": False, "message": f"couldn't find a field matching '{field}'"}
             loc.fill(value, timeout=_timeout_ms())
