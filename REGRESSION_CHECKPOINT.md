@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-19 (after Slice 27 — cross-host click re-gating)
-**Tip commit at capture:** see `git log -1` (Slice 27)
+**Checkpoint date:** 2026-07-19 (after Slice 28 — audit-log HUD viewer)
+**Tip commit at capture:** see `git log -1` (Slice 28)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -17,7 +17,7 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
+> Previous checkpoints: (slice 28) 644; (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
 > `867986f` (slice 23) 588; `90db8d4` (slice 22) 570; (slice 21, no new tests)
 > 550; (slice 20, harness only, not collected) 550; `5e3f0dc` (slice 19) 547;
 > `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
@@ -27,7 +27,35 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (632 tests: 619 + 13 cross-host click)
+## 1. Regression signal — test suite (644 tests: 632 + 12 audit viewer)
+
+**Slice-28 full-suite run (2026-07-19):** **641 passed / 3 failed / 0 skipped**
+(271s, idle desktop). The 3 failures are the SAME standing live-MODEL RPM trio
+as slice 27 (`test_email_live`, `test_search_live`, `test_web_live` cross-host)
+— none touch the audit code. Re-verified after a healthy 5/5 burst-probe:
+web_live + search_live passed together, email_live passed alone after a pause.
+No deterministic test failed; **all 12 new audit tests (9 API + 3 audit.py)
+passed in the full run**, and the **vision check PASSED** (12 DOM asserts +
+screenshot Read: tier/status badges, dry marker, enc-null "no data", a
+revealed payload in the amber mono box). A single clean `644 / 0 / 0` capture
+still wants a fresh daily bucket (the unchanged free-tier condition).
+
+### Slice 28 — audit-log HUD viewer (read-only records browser)
+- Turns the slice-18 durable audit log (which had only a decrypt CLI) into a
+  browsable `/audit` page. **Envelope-first / reveal-on-demand:**
+  `GET /api/audit?tail=N` returns only the plaintext envelope timeline — the
+  DPAPI payload is NEVER decrypted for a browse (pinned: a seeded
+  `SECRET_MARKER` arg is absent from the list JSON, present only via
+  `GET /api/audit/{index}/payload`, the sole decrypt path, on explicit reveal).
+- `audit.py` gained `read_envelopes()` (no-decrypt, indexes each line) +
+  `read_payload(index)` (decrypt one; out-of-range → None; enc-null/undecrypt-
+  able → `payload_error`). `read()` + CLI unchanged. `JARVIS_AUDIT_FILE` env
+  override lets the visual harness seed a temp log without touching data/audit.
+- Front-end `static/audit.{html,js,css}` reuses the settings shell + hud tokens;
+  filterable table, per-row reveal into an amber mono box, honest "no data"
+  (enc-null) + "no records" (empty) states; all record text via `textContent`
+  (injection-safe). Read-only, localhost-only, no new mutation path.
+
 
 **Slice-27 full-suite run (2026-07-19):** **629 passed / 3 failed / 0 skipped**
 (265s, idle desktop). All 3 failures are the standing live-MODEL RPM rotation
@@ -549,7 +577,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 632 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 644 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-19, after **Slice 27 (re-gate cross-host navigation from a browser click)**. See `git log --oneline` for the full slice history.
+> Last updated: 2026-07-19, after **Slice 28 (audit-log HUD viewer — read-only records browser)**. See `git log --oneline` for the full slice history.
 
 ---
 
@@ -9,21 +9,21 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–27), grouped by area:**
+**Capability set, built slice by slice (1–28), grouped by area:**
 - **Core loop & HUD:** voice loop (push-to-talk + wake word), a reactive HUD (orb states, transcript, Action Log, telemetry, chain plan strip), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, real **multi-step agentic chains** (visible plan, replan, retry guards).
 - **PC control:** launch/close/read-screen/click/type/press primitives, a **vision fallback** for icon-only controls (measured accuracy + pre-click point verification so the control you approve is the control that gets clicked), **app discovery** (desktop shortcuts + Steam + Epic library URIs — not just registry App Paths), **smooth cursor motion**, and a **win32 latency fix** that cut a typical multi-step chain from 34.4 s to ~5.3 s.
 - **Wider verbs:** browser tab list/close, caged file search, volume/media/brightness, **`run_shell`** (denylist + verbatim-confirm + tree-kill), **`send_email`** (Gmail API, verbatim-confirm, caged attachments), **`set_dnd`/`get_dnd`** (real Settings toggle + readback).
 - **Memory:** DPAPI-encrypted long-term memory with **semantic (local embedding) retrieval + pinned always-on preferences**, explicit-intent writes only, forget-never-guesses.
 - **Web:** an **isolated** sandbox browser (navigate/read/fill/click, untrusted-content boundary, cross-origin + committal-click gating) plus keyless **`web_search`** — AND, as of slices 24–25, an opt-in **real-browser mode**: JARVIS can drive a dedicated real Chrome logged into the user's own accounts, first navigate+read only, now (behind a second opt-in) able to **click/type/submit** on the user's real sites with committal actions CONFIRM-gated. As of slice 27, a **click that would leave the current host** is re-gated through the same cross-origin CONFIRM as a navigate (anchor destinations resolved pre-click; JS-driven jumps flagged post-click) — closing the slice-25 residual.
-- **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
+- **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 632 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 644 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
 - **All 4 spec acceptance scripts (§1.6) pass:** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email Sam ✅, #4 brightness+DND ✅ (brightness honestly unsupported on this monitor — hardware, not code). Status tracked in `REGRESSION_CHECKPOINT.md`.
-- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), inbox reading/triage, a HUD audit-log viewer, committal desktop-native automation hardening beyond what `input.py` already does. **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
+- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), inbox reading/triage, committal desktop-native automation hardening beyond what `input.py` already does. **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
 
 ---
 
@@ -176,6 +176,14 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **Scope:** safety gap ONLY (user-confirmed). Rich-editor `fill()` coverage and a HUD "acting-live" indicator remain separate future slices.
 - **Live-proven:** real brain told to open a page and click a cross-host link → a CONFIRM naming the destination host fired while STILL on the origin host (auto-approver recorded host-at-confirm-time = the origin), proving pre-click gating (`test_web_live.py::test_live_cross_host_click_prompts_before_navigating`).
 
+### Slice 28 — Audit-log HUD viewer (read-only records browser)
+- **The trust payoff of slice 18.** The durable audit log (every `execute()` + memory mutation, DPAPI-encrypted, `data/audit/`) had no UI — only the decrypt CLI. This adds `/audit`: a read-only page to *see* what JARVIS did (tool / tier / gate / status / dry_run) and, on explicit request, the verbatim args.
+- **Envelope-first / reveal-on-demand (user-chosen privacy model):** `GET /api/audit?tail=N` returns only the **plaintext envelope** timeline — the sensitive payload is NEVER decrypted for a browse (a test pins that a seeded secret-marker arg is absent from the list). `GET /api/audit/{index}/payload` is the sole path that decrypts ONE record, only when the user clicks "reveal".
+- **`audit.py` gained two read primitives** (the sole owner of the file format keeps it): `read_envelopes()` (no-decrypt, tags each with its absolute line `index` + `has_payload`) and `read_payload(index)` (decrypt one; out-of-range → None; enc-null/undecryptable → `payload_error`). `read()` and the CLI are unchanged. Absolute line index is the record handle (appends don't shift it; a mid-session rotation → honest "not available").
+- **Front-end:** `static/audit.{html,js,css}` reuses the settings-page shell + hud.css tokens; a filterable table (tier/status/tool + tail selector), per-row reveal into an amber mono box (the `.confirm-command` aesthetic), honest "no data" for enc-null rows and "no records" for an empty log. All record text rendered via `textContent` (injection-safe). One `🗎` link beside the settings gear in the HUD header. **No new mutation path — read-only, localhost-only.**
+- **Testability seam:** a `JARVIS_AUDIT_FILE` env override on the `audit_log` singleton lets the visual harness point a real server at a seeded temp log without touching `data/audit/`.
+- **Vision check PASSED** (`harness_audit_visual.py`): 12 DOM asserts (tier/status badges, dry marker, enc-null "no data", reveal shows the decrypted arg) + the screenshot Read claim-by-claim (badges visually distinct, revealed payload in the amber mono box).
+
 ---
 
 ## 3. Architecture & repo map
@@ -217,6 +225,9 @@ e:\J.A.R.V.I.S\
       audit.py              ← slice 18: AuditLog (durable JSONL, plaintext envelope +
                               DPAPI payload, rotation-never-delete) + dump CLI
                               (python -m jarvis.core.audit); records live in data/audit/
+                              slice 28: read_envelopes() (no-decrypt timeline) +
+                              read_payload(index) (decrypt ONE) power the /audit viewer;
+                              JARVIS_AUDIT_FILE env override for the visual harness
       embedder.py            ← slice 19: local MiniLM sentence embeddings (onnxruntime;
                               no torch, no network, no key) + one-time setup CLI
                               (python -m jarvis.core.embedder --setup → data/models/minilm/)
@@ -266,8 +277,10 @@ e:\J.A.R.V.I.S\
                               chain strip, Action Log + telemetry panels, monospace shell-confirm box
                               settings.{html,css,js} ← the /settings page (slice 23, gear in HUD header;
                               real-Chrome + allow_actions toggles added slices 24-25)
+                              audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
+                              read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 606 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 644 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -285,6 +298,11 @@ e:\J.A.R.V.I.S\
                               rates for pre-click verification (both rates, always)
     test_audit.py              ← slice 18: store + splice tests (declined/timeout/blocked
                               all logged; write-failure loud-but-alive; DPAPI degradation)
+                              + slice 28: read_envelopes (no-decrypt) / read_payload (by index)
+    test_audit_api.py           ← slice 28: /api/audit envelope list (privacy-pinned: no
+                              decrypted arg in the timeline) + /payload reveal + /audit page
+    harness_audit_visual.py     ← slice 28: seeds a temp log (JARVIS_AUDIT_FILE), drives /audit,
+                              reveals a record, screenshots (the vision check)
     test_dryrun.py              ← slice 18: mechanical dry-run guarantees + gated live dry-run
     test_desktop_guard.py       ← guard: full runs refuse to start over a fullscreen app
     harness_latency_eval.py     ← slice 20: PC-control latency profile (per-seam wall-clock;
@@ -344,7 +362,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 632 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 644 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -414,7 +432,7 @@ All four spec §1.6 scripts pass; real-browser navigate+read AND committal actio
 3. **Real-browser mode, round 3** — cross-host click re-gating shipped in slice 27. Remaining round-2 residuals: broader rich-editor `fill()` coverage beyond Claude's ProseMirror box (Slate/Draft/Lexical/CodeMirror); a HUD indicator for when real-browser mode / allow_actions is live (user deprioritized 2026-07-19 — "if it's just an indicator there isn't really a need right now"); and the narrowed slice-27 JS-navigation residual (a named-benign button that navigates cross-host via JS is flagged post-click, not pre-gated — request-interception was considered and rejected as deadlock-risky).
 4. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags, driving the residual ~18% paraphrase misses down (re-run `harness_memory_eval.py` first).
 5. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
-6. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only); an audit-log **viewer** (HUD panel) — the durable record exists, deliberately without a UI. (Undo shipped in slice 26.)
+6. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only). (Undo shipped in slice 26; the audit-log viewer shipped in slice 28 — `/audit`, though rotated `audit-*.jsonl` browsing and a HUD live-indicator are still open.)
 7. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
 8. **Email widenings** (each a deliberate slice): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface).
 9. **Web/search widenings** — the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.

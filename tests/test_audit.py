@@ -161,6 +161,55 @@ def test_dpapi_unavailable_envelope_only(log, log_path, monkeypatch):
     assert rec["tool"] == "send_email"    # the timeline survives
 
 
+# ---------------------------------------------------------------- slice 28:
+# read_envelopes (no-decrypt timeline) + read_payload (decrypt ONE record) —
+# the primitives the audit-viewer endpoints stand on.
+
+def test_read_envelopes_does_not_decrypt(log):
+    if not dpapi.available():
+        pytest.fail("DPAPI must be available on this machine (pywin32)")
+    log.record(tool="send_email", tier="confirm", status="ok", gate="approved",
+               args={"body": SENTINEL}, result=SENTINEL)
+    log.record(tool="launch_app", tier="auto", status="ok",
+               args={"name": "notepad"}, result="OK")
+    envs = log.read_envelopes()
+    assert [e["index"] for e in envs] == [0, 1]          # file order, indexed
+    for e in envs:
+        assert e["has_payload"] is True
+        assert "args" not in e and "payload" not in e     # NEVER decrypted here
+        for k in ("ts", "tool", "tier", "gate", "status", "dry_run"):
+            assert k in e
+    assert SENTINEL not in json.dumps(envs)               # the privacy contract
+
+
+def test_read_payload_by_index_roundtrip(log):
+    if not dpapi.available():
+        pytest.fail("DPAPI must be available on this machine (pywin32)")
+    log.record(tool="send_email", tier="confirm", status="ok", gate="approved",
+               args={"body": SENTINEL}, result=f"OK {SENTINEL}")
+    log.record(tool="launch_app", tier="auto", status="ok",
+               args={"name": "notepad"}, result="OK")
+    p0 = log.read_payload(0)
+    assert p0["args"] == {"body": SENTINEL}
+    assert SENTINEL in json.dumps(p0)                     # decrypt only on ask
+    assert log.read_payload(1)["args"] == {"name": "notepad"}
+    assert log.read_payload(99) is None                   # out of range, honest
+
+
+def test_read_payload_surfaces_error_when_encrypted_unavailable(log, monkeypatch):
+    def boom(_data):
+        raise RuntimeError("DPAPI down")
+    monkeypatch.setattr(dpapi, "protect", boom)
+    monkeypatch.setattr(dpapi, "available", lambda: False)
+    log.record(tool="send_email", tier="confirm", status="ok",
+               args={"body": SENTINEL}, result=SENTINEL)
+    # enc is null on disk -> read_envelopes flags no payload, read_payload errors
+    (env,) = log.read_envelopes()
+    assert env["has_payload"] is False and "payload_error" in env
+    p = log.read_payload(0)
+    assert "payload_error" in p and "args" not in p
+
+
 # ================================================================ Stage 2:
 # the execute()/brain splices — gate outcomes, blocked, unknown tool,
 # write-failure posture, meta-tool mutations. Patterns mirror test_shell.py.

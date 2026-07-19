@@ -150,10 +150,73 @@ class AuditLog:
             records.append(env)
         return records
 
+    # ---------- viewer reads (slice 28): envelope-first, decrypt-on-demand ----
+
+    def read_envelopes(self, path: Path | str | None = None) -> list[dict]:
+        """The timeline view — plaintext envelopes ONLY, never decrypted.
+        Each record carries its absolute line `index` (a stable handle for a
+        later read_payload) and `has_payload`. This is what the /api/audit
+        list serves, so the sensitive DPAPI payload is never decrypted or
+        shipped for a browse. Same honest degradation as read()."""
+        p = Path(path) if path else self.path
+        out: list[dict] = []
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            return out
+        for i, line in enumerate(text.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                env = json.loads(line)
+            except Exception:
+                continue  # a corrupt line damages only itself
+            if not isinstance(env, dict):
+                continue
+            enc = env.pop("enc", None)
+            env["index"] = i
+            env["has_payload"] = enc is not None
+            if enc is None:
+                env.setdefault("payload_error", "encryption unavailable")
+            out.append(env)
+        return out
+
+    def read_payload(self, index: int, path: Path | str | None = None) -> dict | None:
+        """Decrypt and return ONE record's payload — the only path that
+        reveals the verbatim args/result, and only when explicitly asked.
+        Returns {args, result, result_len, truncated}, or {payload_error} when
+        the record has no blob / can't be decrypted, or None when `index` is
+        out of range (e.g. after a rotation). Never raises."""
+        p = Path(path) if path else self.path
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            return None
+        lines = [l for l in text.splitlines() if l.strip()]
+        if not isinstance(index, int) or index < 0 or index >= len(lines):
+            return None
+        try:
+            env = json.loads(lines[index])
+        except Exception:
+            return {"payload_error": "record could not be read"}
+        enc = env.get("enc")
+        if enc is None:
+            return {"payload_error": "encryption unavailable"}
+        try:
+            raw = dpapi.unprotect(base64.b64decode(enc))
+            return json.loads(raw.decode("utf-8"))
+        except Exception:
+            return {"payload_error": "payload could not be decrypted"}
+
 
 # One process-wide log. Splices must reach it via the module attribute
 # (audit.audit_log), never a from-import, so tests can swap it per-test.
-audit_log = AuditLog()
+# JARVIS_AUDIT_FILE lets a separate process (the visual harness) point at a
+# seeded temp log without ever touching the real data/audit/ record.
+import os as _os
+
+audit_log = AuditLog(_os.environ.get("JARVIS_AUDIT_FILE") or DEFAULT_PATH)
 
 
 def _main() -> None:

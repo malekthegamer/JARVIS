@@ -444,5 +444,47 @@ def settings_page():
     return JSONResponse({"status": "settings page not built"}, status_code=404)
 
 
+# ---------- audit-log viewer (slice 28): READ-ONLY, envelope-first ----------
+
+@app.get("/api/audit")
+def get_audit(tail: int = 200) -> JSONResponse:
+    """The durable audit timeline — plaintext ENVELOPES only, newest-first.
+    Never decrypts the payload (that's /payload, on explicit reveal). Reads
+    the audit.audit_log singleton via the module attribute (test-swappable)."""
+    from jarvis.core import audit
+    envs = audit.audit_log.read_envelopes()
+    try:
+        n = max(1, min(int(tail), 5000))
+    except (TypeError, ValueError):
+        n = 200
+    rows = list(reversed(envs[-n:]))       # last N, newest first
+    return JSONResponse({"records": rows, "total": len(envs)})
+
+
+@app.get("/api/audit/{index}/payload")
+def get_audit_payload(index: int) -> JSONResponse:
+    """Decrypt and return ONE record's verbatim args/result — the sole path
+    that reveals payload, only when explicitly asked. Out-of-range / undecrypt-
+    able records return payload=None + an honest payload_error, never a crash."""
+    from jarvis.core import audit
+    payload = audit.audit_log.read_payload(index)
+    if payload is None:
+        return JSONResponse({"payload": None,
+                             "payload_error": "that record is no longer "
+                                              "available (index out of range)."})
+    if "payload_error" in payload and "args" not in payload:
+        return JSONResponse({"payload": None,
+                             "payload_error": payload["payload_error"]})
+    return JSONResponse({"payload": payload})
+
+
+@app.get("/audit")
+def audit_page():
+    page = STATIC_DIR / "audit.html"
+    if page.exists():
+        return FileResponse(page)
+    return JSONResponse({"status": "audit page not built"}, status_code=404)
+
+
 if STATIC_DIR.exists():
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

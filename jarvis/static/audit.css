@@ -1,0 +1,153 @@
+/* ============================================================
+   JARVIS audit-log viewer — standalone stylesheet (slice 28).
+   Reuses the hud.css/settings.css tokens + header shell; self-
+   contained so a redesign of one page can never unstyle another.
+   ============================================================ */
+@font-face {
+  font-family: "Space Grotesk"; font-weight: 500; font-display: swap;
+  src: url("/static/fonts/SpaceGrotesk-500.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Space Grotesk"; font-weight: 700; font-display: swap;
+  src: url("/static/fonts/SpaceGrotesk-700.woff2") format("woff2");
+}
+
+:root {
+  --void: #05070A;
+  --panel: #0A0E14;
+  --panel-2: #070B11;
+  --line: rgba(59, 232, 255, 0.14);
+  --text: #C9D6E3;
+  --text-bright: #EAF6FF;
+  --hud: #5E7286;
+  --hud-dim: #3a4a5a;
+  --arc: #3BE8FF;
+  --amber: #FFB020;
+  --red: #ff6b6b;
+  --ok: #7dd97b;
+  --halo: rgba(59, 232, 255, 0.13);
+  --display: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+  --body: "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", ui-monospace, Consolas, monospace;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  background: radial-gradient(1100px 700px at 50% 0%, #0a1320 0%, var(--void) 55%), var(--void);
+  color: var(--text); font-family: var(--body); font-size: 15px; line-height: 1.5;
+}
+a { color: var(--arc); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font-family: var(--body); cursor: pointer; }
+:focus-visible { outline: 1.5px solid var(--arc); outline-offset: 2px; }
+.hidden { display: none !important; }
+
+/* ---------- shell & header (shared look) ---------- */
+.shell { display: flex; flex-direction: column; height: 100vh; }
+header.bar {
+  display: flex; align-items: center; gap: 14px; padding: 12px 22px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(10, 14, 20, 0.7); backdrop-filter: blur(10px);
+}
+.wordmark { font-family: var(--display); font-weight: 700; font-size: 16px; letter-spacing: 0.34em; color: var(--text); }
+.wordmark span { color: var(--arc); }
+.bar .spacer { flex: 1; }
+.bar .navlink { font-family: var(--mono); font-size: 12px; color: var(--hud); letter-spacing: 0.1em; }
+.bar .navlink:hover { color: var(--arc); text-decoration: none; }
+.arc-wrap { display: flex; align-items: center; gap: 10px; }
+.arc {
+  width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--arc);
+  position: relative; box-shadow: 0 0 10px var(--halo), inset 0 0 5px var(--halo);
+  animation: breathe 4s ease-in-out infinite;
+}
+.arc::after {
+  content: ""; position: absolute; inset: 4px; border-radius: 50%;
+  background: radial-gradient(circle, var(--arc) 0%, transparent 65%); opacity: 0.55;
+}
+.status-word { font-family: var(--mono); font-size: 11px; color: var(--hud); letter-spacing: 0.14em; text-transform: uppercase; }
+@keyframes breathe { 0%,100% { box-shadow: 0 0 5px var(--halo); } 50% { box-shadow: 0 0 16px rgba(59,232,255,0.35); } }
+@media (prefers-reduced-motion: reduce) { .arc { animation: none; } }
+
+/* ---------- body ---------- */
+.audit-wrap { max-width: 1000px; margin: 0 auto; padding: 26px 24px 120px; width: 100%; overflow-y: auto; }
+.lede { color: var(--hud); font-size: 13px; max-width: 720px; margin-bottom: 20px; }
+
+.controls {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 12px 14px; margin-bottom: 14px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.controls label { font-family: var(--mono); font-size: 11px; color: var(--hud);
+  letter-spacing: 0.08em; text-transform: uppercase; display: flex; align-items: center; gap: 6px; }
+.controls select, .controls input {
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px;
+  padding: 5px 8px; text-transform: none; letter-spacing: 0;
+}
+.controls input { width: 150px; }
+#refresh {
+  font-family: var(--mono); font-size: 12px; color: var(--arc);
+  background: rgba(59,232,255,0.08); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 12px;
+}
+#refresh:hover { background: rgba(59,232,255,0.16); }
+.count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--hud-dim); }
+
+/* ---------- table ---------- */
+.table-head, .row-main {
+  display: grid;
+  grid-template-columns: 190px 1.6fr 92px 110px 100px 78px;
+  gap: 10px; align-items: center;
+}
+.table-head {
+  padding: 8px 14px; font-family: var(--mono); font-size: 10px;
+  color: var(--hud-dim); letter-spacing: 0.12em; text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+.audit-list { list-style: none; }
+.audit-row {
+  border-bottom: 1px solid rgba(59,232,255,0.07);
+  animation: fadein 0.18s ease-out;
+}
+@keyframes fadein { from { opacity: 0; } to { opacity: 1; } }
+.row-main { padding: 9px 14px; }
+.row-main:hover { background: rgba(59,232,255,0.04); }
+.c-ts { font-family: var(--mono); font-size: 12px; color: var(--hud); }
+.c-tool { font-family: var(--mono); font-size: 13px; color: var(--text-bright); }
+.c-tool .dry { color: var(--amber); font-size: 10px; letter-spacing: 0.08em; margin-left: 6px; }
+
+/* tier + status badges */
+.badge {
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.06em;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid transparent; text-transform: lowercase;
+}
+.tier-auto    { color: var(--arc);   border-color: rgba(59,232,255,0.4);  background: rgba(59,232,255,0.08); }
+.tier-confirm { color: var(--amber); border-color: rgba(255,176,32,0.45); background: rgba(255,176,32,0.10); }
+.tier-blocked { color: var(--red);   border-color: rgba(255,107,107,0.5); background: rgba(255,107,107,0.12); }
+.st-ok        { color: var(--ok); }
+.st-failed    { color: var(--red); }
+.st-cancelled { color: var(--amber); }
+.st-other     { color: var(--hud); }
+.c-gate { font-family: var(--mono); font-size: 11px; color: var(--hud); }
+
+.reveal-btn {
+  font-family: var(--mono); font-size: 11px; color: var(--hud);
+  background: transparent; border: 1px solid var(--line); border-radius: 6px; padding: 4px 9px;
+}
+.reveal-btn:hover { color: var(--arc); border-color: var(--arc); }
+.reveal-btn[disabled] { opacity: 0.4; cursor: default; }
+
+/* ---------- revealed payload (mono box, confirm-command aesthetic) ---------- */
+.payload {
+  margin: 0 14px 12px; padding: 12px 14px;
+  background: rgba(5,7,10,0.6); border: 1px solid rgba(255,176,32,0.35);
+  border-radius: 8px; font-family: var(--mono); font-size: 12.5px;
+  color: var(--text-bright); white-space: pre-wrap; word-break: break-word; line-height: 1.5;
+}
+.payload .plabel { color: var(--amber); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; display: block; margin-bottom: 4px; }
+.payload .pblock + .plabel { margin-top: 12px; }
+.payload .perror { color: var(--red); }
+.payload .ptrunc { color: var(--hud-dim); font-size: 11px; }
+
+.empty { text-align: center; color: var(--hud-dim); font-family: var(--mono); padding: 40px 0; }
