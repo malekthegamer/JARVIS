@@ -346,17 +346,20 @@ class BrowserSession:
 
     def find_clickable(self, target: str) -> dict:
         """Metadata of the element a click would resolve to (for tiering).
-        Does NOT launch the browser — if nothing is open, nothing is found."""
+        Does NOT launch the browser — if nothing is open, nothing is found.
+        `href` is the anchor's absolute destination ('' for non-anchors) so the
+        classifier can re-gate a click that would leave the current host."""
         if not self.running:
-            return {"found": False, "name": "", "kind": ""}
+            return {"found": False, "name": "", "kind": "", "href": ""}
         def _f(page):
-            _h, name, kind = _match_clickable(page, target)
-            return {"found": bool(_h is not None or kind), "name": name, "kind": kind}
+            _h, name, kind, href = _match_clickable(page, target)
+            return {"found": bool(_h is not None or kind), "name": name,
+                    "kind": kind, "href": href}
         return self._do(_f)
 
     def click(self, target: str) -> dict:
         def _c(page):
-            h, name, kind = _match_clickable(page, target)
+            h, name, kind, _href = _match_clickable(page, target)
             if h is None:
                 return {"ok": False, "message": f"couldn't find '{target}' on the page"}
             before = page.url
@@ -370,8 +373,19 @@ class BrowserSession:
                 pass
             page.wait_for_timeout(300)
             after = page.url
-            moved = f" Page went to {after}." if after != before else " (no navigation)"
             self.current_url = after
+            if after == before:
+                moved = " (no navigation)"
+            else:
+                # Cross-host jumps that couldn't be pre-gated (JS-driven, no
+                # inspectable href) are FLAGGED here — never silent (slice 27).
+                bh = urlparse(before).hostname or ""
+                ah = urlparse(after).hostname or ""
+                if ah and ah != bh:
+                    moved = (f" Note: this moved to a different site ({ah}) — "
+                             f"{after}.")
+                else:
+                    moved = f" Page went to {after}."
             return {"ok": True, "message": f"clicked '{name or kind}'.{moved}"}
         return self._do(_c)
 
@@ -464,14 +478,19 @@ def _describe(handle) -> dict:
     return handle.evaluate("""el => {
       const name = (el.getAttribute('aria-label') || el.innerText || el.value
                     || el.getAttribute('title') || '').trim();
-      return {name, kind: el.tagName.toLowerCase() === 'a' ? 'link' : 'button'};
+      // el.href is the DOM property (absolute-resolved) — only anchors expose a
+      // destination we can inspect BEFORE clicking; '' for everything else and
+      // for anchors without a real href (# / no href).
+      const href = el.tagName.toLowerCase() === 'a' ? (el.href || '') : '';
+      return {name, href, kind: el.tagName.toLowerCase() === 'a' ? 'link' : 'button'};
     }""")
 
 
 def _match_clickable(page, target: str):
-    """(handle, name, kind) for the element best matching `target`, or
-    (None, '', ''). Named matches win; a submit-ish target falls back to the
-    first button (which may be nameless → the fail-closed case)."""
+    """(handle, name, kind, href) for the element best matching `target`, or
+    (None, '', '', ''). Named matches win; a submit-ish target falls back to the
+    first button (which may be nameless → the fail-closed case). `href` is the
+    anchor's absolute destination (or '') — used to re-gate cross-host jumps."""
     target_n = (target or "").strip().lower()
     handles = page.query_selector_all(
         "a, button, input[type=submit], input[type=button], [role=button]")
@@ -480,11 +499,11 @@ def _match_clickable(page, target: str):
         try:
             d = _describe(h)
         except Exception:
-            d = {"name": "", "kind": "button"}
-        described.append((h, d["name"], d["kind"]))
+            d = {"name": "", "kind": "button", "href": ""}
+        described.append((h, d["name"], d["kind"], d.get("href", "")))
 
     best, best_score = None, 0
-    for h, name, kind in described:
+    for h, name, kind, href in described:
         if not name:
             continue
         n = name.lower()
@@ -497,15 +516,15 @@ def _match_clickable(page, target: str):
         else:
             score = 0
         if score > best_score:
-            best, best_score = (h, name, kind), score
+            best, best_score = (h, name, kind, href), score
     if best:
         return best
 
     if any(w in target_n for w in _SUBMIT_WORDS):
-        for h, name, kind in described:
+        for h, name, kind, href in described:
             if kind == "button":
-                return h, name, kind
-    return None, "", ""
+                return h, name, kind, href
+    return None, "", "", ""
 
 
 _REAL_MODE_READONLY = ("Real-browser mode is navigate + read only — turn on "
@@ -524,6 +543,27 @@ def _site_host() -> str:
         return f" on {h}" if h else ""
     except Exception:
         return ""
+
+
+def _cross_host(target_url: str) -> str | None:
+    """The destination HOST when navigating to `target_url` would leave the
+    current page's host — else None. Shared by classify_navigate and
+    classify_web_click so a click and a navigate to the same place gate
+    identically (same subdomain-sensitive hostname comparison). Only http/https
+    with a hostname counts; a '#'/javascript:/relative-same-host/blank target,
+    or an unparseable one, returns None. Never raises."""
+    try:
+        parsed = urlparse(str(target_url or "").strip())
+        if (parsed.scheme or "").lower() not in ("http", "https"):
+            return None
+        target_host = parsed.hostname or ""
+        cur = session.current_url
+        cur_host = (urlparse(cur).hostname if cur else None)
+        if cur_host and target_host and target_host != cur_host:
+            return target_host
+        return None
+    except Exception:
+        return None
 
 
 def classify_web_fill(args: dict) -> dict:
@@ -568,6 +608,18 @@ def classify_web_click(args: dict) -> dict:
         return {"tier": "confirm",
                 "description": f"Click an unlabeled {m['kind'] or 'button'}{where} "
                                f"(no visible name — review before clicking)."}
+    # Re-gate a click that would LEAVE the current host (slice 27): an anchor's
+    # href is a knowable destination, so route it through the same cross-origin
+    # CONFIRM as browse_navigate — verbatim URL in the mono box — even if the
+    # element's name reads benign. (JS-driven navigation has no href and is
+    # flagged post-click instead.)
+    dest_host = _cross_host(m.get("href", ""))
+    if dest_host:
+        return {"tier": "confirm", "expect_name": name,
+                "command": m["href"],
+                "description": f"Click '{name}'{where} — it leaves this site for "
+                               f"a different one ({dest_host}). Review the URL "
+                               f"before continuing."}
     tier = _click_tier(name, False)
     return {"tier": tier, "expect_name": name,
             "description": f"Click '{name}'{where}"}
@@ -689,12 +741,10 @@ def classify_navigate(args: dict) -> dict:
             return {"tier": "blocked",
                     "description": f"BLOCKED: only http/https URLs are allowed "
                                    f"(refusing '{url}')."}
-        target_host = parsed.hostname or ""
-        cur = session.current_url
-        cur_host = (urlparse(cur).hostname if cur else None)
-        if cur_host and target_host and target_host != cur_host:
+        dest_host = _cross_host(url)  # shared with classify_web_click
+        if dest_host:
             return {"tier": "confirm", "command": url,
-                    "description": f"Navigate to a different site ({target_host}) "
+                    "description": f"Navigate to a different site ({dest_host}) "
                                    f"— review the URL before continuing."}
         return {"tier": "auto", "description": f"Navigate to {url}"}
     except Exception as exc:

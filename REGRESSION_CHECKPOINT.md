@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-18 (after Slice 26 — undo)
-**Tip commit at capture:** see `git log -1` (Slice 26)
+**Checkpoint date:** 2026-07-19 (after Slice 27 — cross-host click re-gating)
+**Tip commit at capture:** see `git log -1` (Slice 27)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -17,7 +17,7 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
+> Previous checkpoints: (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
 > `867986f` (slice 23) 588; `90db8d4` (slice 22) 570; (slice 21, no new tests)
 > 550; (slice 20, harness only, not collected) 550; `5e3f0dc` (slice 19) 547;
 > `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
@@ -27,7 +27,48 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (619 tests: 606 + 13 undo)
+## 1. Regression signal — test suite (632 tests: 619 + 13 cross-host click)
+
+**Slice-27 full-suite run (2026-07-19):** **629 passed / 3 failed / 0 skipped**
+(265s, idle desktop). All 3 failures are the standing live-MODEL RPM rotation
+(`test_email_live::test_live_script3_invoice_chain`,
+`test_search_live::test_live_search_then_read_chain`,
+`test_web_live::test_live_cross_host_click_prompts_before_navigating`) — the
+suite's clustered live calls exhaust the free-tier per-minute cap by the time
+it reaches them (the web_live one failed fast at 3.6s = an immediate 429, zero
+tool calls). **Each was re-verified in isolation after a healthy 5/5
+burst-probe: all three pass** (email_live 7.2s, web_live 6.6s, search earlier).
+No deterministic test and **no slice-27 test** failed. The change is `web.py`
+cross-host click gating only; `test_web.py` is **49/49** (12 new + the
+navigate/click regression pins). A single clean `632 / 0 / 0` capture still
+wants a fresh daily bucket (the standing free-tier condition, unchanged since
+slice 20) — the code is proven regardless.
+
+### Slice 27 — re-gate cross-host navigation from a browser click
+- Closes the slice-25 residual "a click that itself triggers cross-host
+  navigation isn't re-gated." `classify_navigate` already CONFIRMs a
+  cross-origin `browse_navigate`; `classify_web_click` reasoned only on the
+  element name, so a benign-named link to another host navigated un-gated.
+- **Anchors (knowable):** `find_clickable` now surfaces the anchor's absolute
+  `href`; a shared `_cross_host(url)` (factored out of `classify_navigate`,
+  which reuses it — identical behaviour) makes `classify_web_click` CONFIRM
+  when the href leaves the host, naming the destination host + verbatim URL
+  in the mono box, in **both** isolated and real mode.
+- **JS navigation (unknowable pre-click):** no href to inspect →
+  `session.click()` flags a cross-host move in its result message ("moved to
+  a different site …"). Request-interception rejected (deadlock-risky). The
+  residual is narrowed to a *named-benign-JS-navigating* control, detected
+  not silent.
+- Scope: safety gap only (user-confirmed); rich-editor coverage + HUD
+  indicator remain future slices.
+- **Real-Chrome live acceptance (2026-07-19, idle desktop):** the real brain
+  driving JARVIS's DEDICATED Chrome via CDP (`profile_mode=real`,
+  `allow_actions=true`) was told to open a local `/linkto` page and click a
+  link to a different host — the cross-origin CONFIRM fired **while still on
+  the origin host (127.0.0.1)**, naming the destination, before navigating.
+  Confirms the gate is engine-agnostic (real Chrome == isolated Chromium for
+  href extraction). Settings restored after.
+
 
 **Slice-26 run (2026-07-18):** 616 passed / 3 failed / 0 skipped (239s).
 All three failures are live-MODEL tests (`test_dryrun::test_live_dry_run_notepad`,
@@ -508,7 +549,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 619 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 632 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

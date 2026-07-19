@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.server
 import threading
 import time
+from urllib.parse import parse_qs, quote, urlparse
 
 import pytest
 
@@ -54,6 +55,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             # context, the exact reddit-style race that broke a naive title().
             body = (b"<title>Redirector</title>"
                     b"<script>location.replace('/other')</script>")
+        elif self.path.startswith("/linkto"):
+            # an ANCHOR whose (absolute) href is passed in via ?u= — used to
+            # build a real cross-host link the classifier can inspect pre-click.
+            u = parse_qs(urlparse(self.path).query).get("u", [""])[0]
+            body = (b"<title>Linkto</title><a href=\""
+                    + u.encode("utf-8") + b"\">go elsewhere</a>")
+        elif self.path.startswith("/jsjump"):
+            # a BUTTON that navigates via JavaScript (no href to inspect) — the
+            # unknowable-before-click case; proves the post-click cross-host flag.
+            u = parse_qs(urlparse(self.path).query).get("u", [""])[0]
+            body = (b"<title>JsJump</title><button type=\"button\" onclick=\""
+                    b"location.href='" + u.encode("utf-8") + b"'\">leave</button>")
         elif self.path.startswith("/bare"):
             # an actionable button with NO accessible name (the JS-button blind spot)
             body = b"<title>Bare</title><form><button type='submit' id='b'></button></form>"
@@ -495,6 +508,129 @@ def test_click_awaits_navigation_reports_real_url(servers):
     r = web.click_element("go slow")
     assert r["ok"], r
     assert "/other" in (web.session.current_url or ""), web.session.current_url
+
+
+# ================================================================ Slice 27:
+# re-gate a CLICK that navigates cross-host (the asymmetry vs. classify_navigate).
+# Anchors expose a resolvable href before the click -> route through the same
+# cross-origin CONFIRM. JS-driven navigation is unknowable pre-click -> flagged
+# post-click, never silent.
+
+def test_click_cross_host_anchor_is_confirm_with_dest_url(monkeypatch):
+    """A benign-named link whose href leaves the current host must CONFIRM,
+    name the destination host, and show the verbatim URL in the mono box —
+    exactly like a cross-origin browse_navigate."""
+    web.session.current_url = "https://news.example.com/article"
+    try:
+        monkeypatch.setattr(web.session, "find_clickable",
+            lambda t: {"found": True, "name": "Read more", "kind": "link",
+                       "href": "https://tracker.other.com/landing"})
+        info = web.classify_web_click({"target": "Read more"})
+        assert info["tier"] == "confirm", info
+        assert "tracker.other.com" in info["description"], info
+        assert info["command"] == "https://tracker.other.com/landing", info
+    finally:
+        web.session.current_url = None
+
+
+def test_click_same_host_anchor_stays_auto(monkeypatch):
+    """A same-host link is untouched by the cross-host gate (no false stops —
+    guards the pre-existing 'plain link is auto' behaviour)."""
+    web.session.current_url = "https://news.example.com/article"
+    try:
+        monkeypatch.setattr(web.session, "find_clickable",
+            lambda t: {"found": True, "name": "Read more", "kind": "link",
+                       "href": "https://news.example.com/other-article"})
+        assert web.classify_web_click({"target": "Read more"})["tier"] == "auto"
+    finally:
+        web.session.current_url = None
+
+
+def test_click_cross_host_takes_precedence_over_benign_name(monkeypatch):
+    """'more' would be AUTO on name alone; a cross-host destination overrides
+    that to CONFIRM."""
+    web.session.current_url = "https://a.example.com/"
+    try:
+        monkeypatch.setattr(web.session, "find_clickable",
+            lambda t: {"found": True, "name": "more", "kind": "link",
+                       "href": "https://b.example.org/deal"})
+        info = web.classify_web_click({"target": "more"})
+        assert info["tier"] == "confirm", info
+        assert "b.example.org" in info["description"], info
+    finally:
+        web.session.current_url = None
+
+
+@pytest.mark.parametrize("href", ["", "#", "#section", "javascript:void(0)", None])
+def test_click_href_none_or_fragment_is_not_cross_host(monkeypatch, href):
+    """No real destination (empty/fragment/javascript:) -> not a cross-host
+    jump; falls back to the benign name tier (AUTO)."""
+    web.session.current_url = "https://news.example.com/article"
+    try:
+        monkeypatch.setattr(web.session, "find_clickable",
+            lambda t: {"found": True, "name": "Read more", "kind": "link",
+                       "href": href})
+        assert web.classify_web_click({"target": "Read more"})["tier"] == "auto"
+    finally:
+        web.session.current_url = None
+
+
+def test_click_committal_name_still_confirm_without_href(monkeypatch):
+    """No regression: a committal-named element with no href still CONFIRMs."""
+    web.session.current_url = "https://shop.example.com/cart"
+    try:
+        monkeypatch.setattr(web.session, "find_clickable",
+            lambda t: {"found": True, "name": "Buy now", "kind": "button", "href": ""})
+        assert web.classify_web_click({"target": "Buy now"})["tier"] == "confirm"
+    finally:
+        web.session.current_url = None
+
+
+def test_cross_host_click_gated_in_real_mode_too(monkeypatch):
+    """The cross-host gate applies in real mode too (symmetric with navigate's
+    cross-origin CONFIRM, which is already mode-agnostic)."""
+    _real_actions(True)
+    web.session.current_url = "https://www.youtube.com/feed"
+    try:
+        monkeypatch.setattr(web.session, "find_clickable",
+            lambda t: {"found": True, "name": "Read more", "kind": "link",
+                       "href": "https://external.example.com/x"})
+        info = web.classify_web_click({"target": "Read more"})
+        assert info["tier"] == "confirm", info
+        assert "external.example.com" in info["description"], info
+    finally:
+        web.session.current_url = None
+        _reset_mode()
+
+
+def test_find_clickable_extracts_real_anchor_href(servers):
+    """Proves the DOM extraction (not a mock): navigate a page with a real
+    cross-host anchor; find_clickable returns its absolute href and classify
+    gates it."""
+    pa, pb = servers
+    dest = f"http://localhost:{pb}/other"
+    assert web.navigate(f"http://127.0.0.1:{pa}/linkto?u={quote(dest, safe='')}")["ok"]
+    m = web.session.find_clickable("go elsewhere")
+    assert m["found"], m
+    assert dest in m["href"], m
+    info = web.classify_web_click({"target": "go elsewhere"})
+    assert info["tier"] == "confirm", info
+    assert f"localhost:{pb}" in info["command"], info
+
+
+def test_js_navigation_flagged_in_click_result(servers):
+    """JS-driven navigation can't be gated before the click (no href) — so it
+    must be FLAGGED after: the click result names the different site it landed
+    on. The honest backstop for the unknowable residual."""
+    pa, pb = servers
+    dest = f"http://localhost:{pb}/other"
+    assert web.navigate(f"http://127.0.0.1:{pa}/jsjump?u={quote(dest, safe='')}")["ok"]
+    # classify can't know a JS button's destination -> AUTO (the honest residual)
+    assert web.classify_web_click({"target": "leave"})["tier"] == "auto"
+    r = web.click_element("leave")
+    assert r["ok"], r
+    assert "different site" in r["message"].lower(), r
+    assert "localhost" in r["message"], r
 
 
 # ------------------------------------------- S3: stale-Chrome reaper
