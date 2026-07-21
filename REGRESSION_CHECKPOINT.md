@@ -27,7 +27,34 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (684 tests: 671 + 13 clipboard)
+## 1. Regression signal — test suite (705 tests: 684 + 21 real-FS access)
+
+**Slice-32 full-suite run (2026-07-20):** **699 passed / 6 failed / 0 skipped**
+(255s, idle desktop). All 6 are live-brain tests — the RPM cluster grew because
+this slice adds another live-model test (fsaccess-live) to the suite
+(clipboard-live, dryrun-live, email-live, files-live, fsaccess-live, web-live).
+Burst-probe healthy 5/5; fsaccess-live (mine) + web-live re-verified GREEN
+together in isolation; the other four are standing live-model tests unrelated
+to slice 32 (`fsaccess.py` only). **All 20 new deterministic fsaccess tests
+passed in the full run.** New baseline **705**; a single clean `705/0/0` still
+wants a fresh daily bucket (the per-minute cap now carries 6 live-brain tests).
+
+### Slice 32 — real-filesystem access (browse / delete-to-Recycle-Bin / shortcut)
+- JARVIS now operates on the whole PC (new `fsaccess.py`), not just the
+  workspace. `list_directory` (AUTO), `delete_path` (→ Recycle Bin),
+  `create_shortcut`. Zero new deps (pywin32).
+- **Security = layered, NOT the denylist** (user chose broad access after the
+  honest reframing): the **CONFIRM gate on the verbatim resolved path is the
+  boundary**; a **BLOCKED denylist** is a backstop for catastrophic targets
+  (Windows tree, Program Files/ProgramData/C:\Users roots, drive roots, profile
+  root, JARVIS's own dirs); **deletes go to the Recycle Bin** (recoverable).
+- `classify_path_risk` runs on the `.resolve()`d path (follows `..`+symlinks)
+  BEFORE the check — traversal/symlink can't smuggle a target past it
+  (test-pinned); case-insensitive; ancestors-of-protected blocked too.
+- Kill-switch `fs.enabled` (default on) withholds all three verbs.
+- Live-proven (real brain): Desktop shortcut to a temp folder + delete a temp
+  file to the Recycle Bin + **"delete System32" refused, System32 intact**.
+
 
 **Slice-31 full-suite run (2026-07-20):** **681 passed / 3 failed / 0 skipped**
 (263s, idle desktop). All 3 are the standing live-model RPM trio
@@ -680,7 +707,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 684 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 705 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

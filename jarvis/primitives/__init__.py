@@ -15,9 +15,9 @@ from jarvis.core import audit, chain
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
 from jarvis.core.undo import UndoEntry, undo_stack
-from jarvis.primitives import (apps, email as jemail, files, input as jinput,
-                               screen, shell, system, tabs, ui_tree, web,
-                               windows)
+from jarvis.primitives import (apps, email as jemail, files, fsaccess,
+                               input as jinput, screen, shell, system, tabs,
+                               ui_tree, web, windows)
 from jarvis.state import AgentState, broadcaster
 
 # Verify: how long we poll for the launched app's window to appear.
@@ -333,6 +333,28 @@ def _run_set_clipboard(args: dict, gate_info: dict | None = None) -> str:
 
 def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
     r = windows.close_window(str(args.get("title", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+# ---- real-filesystem access (slice 32): browse / delete-to-Recycle-Bin / shortcut ----
+
+def _run_list_directory(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.list_directory(str(args.get("path", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_delete_path(args: dict, gate_info: dict | None = None) -> str:
+    """Runs only after the CONFIRM gate approved (or BLOCKED returned earlier).
+    Recycle-Bin delete — recoverable, so no JARVIS undo entry (the bin IS the
+    recovery)."""
+    r = fsaccess.delete_path(str(args.get("path", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_create_shortcut(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.create_shortcut(str(args.get("target", "")),
+                                 name=str(args.get("name", "")),
+                                 location=str(args.get("location", "") or "desktop"))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
@@ -824,6 +846,50 @@ PRIMITIVES: dict[str, dict] = {
                                                           "description": "The text to place on the clipboard"}},
                                   "required": ["text"]}},
     },
+    "list_directory": {
+        "fn": _run_list_directory,
+        "tier": "auto",
+        "schema": {"name": "list_directory",
+                   "description": ("Browse ANY folder on the PC (read-only) — list "
+                                   "its files and subfolders. Accepts full paths or "
+                                   "aliases like 'desktop', 'downloads', 'documents'. "
+                                   "Use this to find a folder the user refers to."),
+                   "parameters": {"type": "object",
+                                  "properties": {"path": {"type": "string",
+                                                          "description": "Folder path or alias (e.g. 'downloads', 'C:/Users/me/Games')"}},
+                                  "required": ["path"]}},
+    },
+    "delete_path": {
+        "fn": _run_delete_path,
+        "classify": fsaccess.classify_delete_path,   # BLOCKED catastrophic / CONFIRM else
+        "schema": {"name": "delete_path",
+                   "description": ("Delete a file or folder ANYWHERE on the PC — it "
+                                   "goes to the Recycle Bin (recoverable). The user "
+                                   "must approve the exact path first; system-critical "
+                                   "locations (Windows, Program Files, drive roots, …) "
+                                   "are refused outright. Use ONLY when the user asks "
+                                   "to delete something."),
+                   "parameters": {"type": "object",
+                                  "properties": {"path": {"type": "string",
+                                                          "description": "Path or alias of the file/folder to delete"}},
+                                  "required": ["path"]}},
+    },
+    "create_shortcut": {
+        "fn": _run_create_shortcut,
+        "classify": fsaccess.classify_create_shortcut,
+        "schema": {"name": "create_shortcut",
+                   "description": ("Create a shortcut (.lnk) to a file or folder — by "
+                                   "default on the Desktop. The user approves it first."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "target": {"type": "string",
+                                                 "description": "Path/alias the shortcut points at"},
+                                      "name": {"type": "string",
+                                               "description": "Shortcut name (optional; defaults to the target's name)"},
+                                      "location": {"type": "string",
+                                                   "description": "Where to put it (optional; default 'desktop')"}},
+                                  "required": ["target"]}},
+    },
     "close_window": {
         "fn": _run_close_window,
         "tier": "confirm",
@@ -965,6 +1031,10 @@ def tools_schema() -> list[dict]:
         withheld.update({"browse_click", "browse_fill", "browse_key"})
     if not settings.get("search.enabled", True):
         withheld.add("web_search")
+    if not settings.get("fs.enabled", True):
+        # slice 32: real-filesystem access (the most powerful surface) off ->
+        # withhold all three verbs (a direct call also refuses via classify).
+        withheld.update({"list_directory", "delete_path", "create_shortcut"})
     return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]
 
 
