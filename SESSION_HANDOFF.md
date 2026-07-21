@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-19, after **Slice 28 (audit-log HUD viewer — read-only records browser)**. See `git log --oneline` for the full slice history.
+> Last updated: 2026-07-20, after **Slice 29 (spec §1.2 input completion — scroll + double/right click)**. See `git log --oneline` for the full slice history.
 
 ---
 
@@ -9,16 +9,16 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–28), grouped by area:**
+**Capability set, built slice by slice (1–29), grouped by area:**
 - **Core loop & HUD:** voice loop (push-to-talk + wake word), a reactive HUD (orb states, transcript, Action Log, telemetry, chain plan strip), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, real **multi-step agentic chains** (visible plan, replan, retry guards).
-- **PC control:** launch/close/read-screen/click/type/press primitives, a **vision fallback** for icon-only controls (measured accuracy + pre-click point verification so the control you approve is the control that gets clicked), **app discovery** (desktop shortcuts + Steam + Epic library URIs — not just registry App Paths), **smooth cursor motion**, and a **win32 latency fix** that cut a typical multi-step chain from 34.4 s to ~5.3 s.
+- **PC control:** launch/close/read-screen/click/type/press/**scroll** primitives (click supports `kind=single|double|right` — slice 29), a **vision fallback** for icon-only controls (measured accuracy + pre-click point verification so the control you approve is the control that gets clicked), **app discovery** (desktop shortcuts + Steam + Epic library URIs — not just registry App Paths), **smooth cursor motion**, and a **win32 latency fix** that cut a typical multi-step chain from 34.4 s to ~5.3 s.
 - **Wider verbs:** browser tab list/close, caged file search, volume/media/brightness, **`run_shell`** (denylist + verbatim-confirm + tree-kill), **`send_email`** (Gmail API, verbatim-confirm, caged attachments), **`set_dnd`/`get_dnd`** (real Settings toggle + readback).
 - **Memory:** DPAPI-encrypted long-term memory with **semantic (local embedding) retrieval + pinned always-on preferences**, explicit-intent writes only, forget-never-guesses.
 - **Web:** an **isolated** sandbox browser (navigate/read/fill/click, untrusted-content boundary, cross-origin + committal-click gating) plus keyless **`web_search`** — AND, as of slices 24–25, an opt-in **real-browser mode**: JARVIS can drive a dedicated real Chrome logged into the user's own accounts, first navigate+read only, now (behind a second opt-in) able to **click/type/submit** on the user's real sites with committal actions CONFIRM-gated. As of slice 27, a **click that would leave the current host** is re-gated through the same cross-origin CONFIRM as a navigate (anchor destinations resolved pre-click; JS-driven jumps flagged post-click) — closing the slice-25 residual.
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 644 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 652 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -184,6 +184,14 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **Testability seam:** a `JARVIS_AUDIT_FILE` env override on the `audit_log` singleton lets the visual harness point a real server at a seeded temp log without touching `data/audit/`.
 - **Vision check PASSED** (`harness_audit_visual.py`): 12 DOM asserts (tier/status badges, dry marker, enc-null "no data", reveal shows the decrypted arg) + the screenshot Read claim-by-claim (badges visually distinct, revealed payload in the amber mono box).
 
+### Slice 29 — Spec §1.2 input completion: scroll + double/right click
+- **Closes a silently-missing spec gap.** §1.2's action list names `scroll`, `double_click`, `right_click` (plus `move_mouse`, `drag`) — none existed and none were documented as deferred. Impact was mechanical: the agent couldn't reach below-the-fold content, open items in Explorer, or use context menus.
+- **`scroll(direction, amount, window)`** — new AUTO tool. `click` gained an optional **`kind = single|double|right`** (default single), threaded through BOTH the fast text path and the vision-point path; `_click_xy` maps kinds to pydirectinput/pyautogui `click`/`doubleClick`/`rightClick`. **`classify_click` is untouched — kind NEVER weakens the gate** (a right/double on a "Delete" target still CONFIRMs; the slice-17 vision `verify_point` still guards vision double/right). Test-pinned.
+- **STAGE-0 MECHANISM PIVOT (the load-bearing lesson):** the first cut used a synthetic **mouse-wheel** (`pyautogui.scroll`) — it shipped mocked-green but was **live-dead**. Five probes proved synthetic wheel (`pyautogui.scroll` / `mouse_event WHEEL` / `WM_MOUSEWHEEL`) moves a real Win11 WinUI Notepad **at most once then never** (foreground confirmed intact). **Keyboard PageUp/PageDown into the focused control moved the view every press.** So scroll is **keyboard paging, vertical only** (left/right fail closed — no clean keyboard analog); `amount` = page steps, clamped 1..`input.scroll_max_notches` (20). Same "probe kills the planned mechanism, pivot to what works" doctrine as slices 12/24.
+- **Verify by WINDOW-REGION diff:** a scroll changes only the target window, a small fraction of the full desktop (real page-scroll ≈ 0.5% whole-screen but ≈ 12% of the window region). `scroll()` returns the window `bbox`; `_run_scroll` diffs only that crop (threshold 0.02) — below-threshold reports honestly ("the view didn't change — likely already at the end"), never a false OK.
+- **Live-proven (mechanical):** real Notepad scrolled via `_run_scroll` (region-diff VERIFIED; at-the-top scroll honestly reports no change); and a **real-brain chain** ("scroll down in this window") called `scroll` → the executor's region-diff independently confirmed a **13.1% view change**, not the model's word.
+- **Deliberate deferrals (now documented, so they stop being *silent* gaps):** `drag` (rare, hard to verify honestly, genuinely riskier — sliders/selection/file-move; its own slice if ever needed), `move_mouse` (no user-visible value — cursor motion is already internal, slice 22), horizontal scroll (no reliable keyboard analog), `clipboard`/`wifi` from §1.2's system_control (clipboard a future candidate; wifi dubious value/risk). **Runner-up next slice: caged file authoring** — `data/agent_files/README.md` promises "create/delete" but only delete+search exist (a shipped half-truth to close).
+
 ---
 
 ## 3. Architecture & repo map
@@ -249,7 +257,10 @@ e:\J.A.R.V.I.S\
                               _win32_windows()/find_window() → hwnd → pywinauto wrap
                               (was a ~1.7s×2 UIA enum per keystroke-level action)
                               input.py also: is_committal_name (i18n+CJK, slice 16),
-                              _move_cursor (smooth glide, slice 22)
+                              _move_cursor (smooth glide, slice 22),
+                              scroll (KEYBOARD paging PageUp/Down, slice 29 — synthetic
+                              wheel is dead on WinUI; verify via window-region diff) +
+                              click kind=single|double|right (_click_xy, slice 29)
       app_discovery.py        ← slice 22: desktop .lnk/.url + Steam (vdf/acf) + Epic (*.item)
                               discovery fallback after apps.py's fast ladder misses
       tabs.py                 ← list_tabs (AUTO) / close_tabs (CONFIRM)          (slice 8)
@@ -280,7 +291,7 @@ e:\J.A.R.V.I.S\
                               audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
                               read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 644 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 652 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -362,7 +373,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 644 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 652 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -432,7 +443,7 @@ All four spec §1.6 scripts pass; real-browser navigate+read AND committal actio
 3. **Real-browser mode, round 3** — cross-host click re-gating shipped in slice 27. Remaining round-2 residuals: broader rich-editor `fill()` coverage beyond Claude's ProseMirror box (Slate/Draft/Lexical/CodeMirror); a HUD indicator for when real-browser mode / allow_actions is live (user deprioritized 2026-07-19 — "if it's just an indicator there isn't really a need right now"); and the narrowed slice-27 JS-navigation residual (a named-benign button that navigates cross-host via JS is flagged post-click, not pre-gated — request-interception was considered and rejected as deadlock-risky).
 4. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags, driving the residual ~18% paraphrase misses down (re-run `harness_memory_eval.py` first).
 5. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
-6. **PowerShell as a second shell** for `run_shell` (currently cmd.exe only). (Undo shipped in slice 26; the audit-log viewer shipped in slice 28 — `/audit`, though rotated `audit-*.jsonl` browsing and a HUD live-indicator are still open.)
+6. **Caged file authoring (RUNNER-UP, the audit's #2 finding):** `data/agent_files/README.md` (written by `files.py`) promises the user "Files JARVIS may manage (**create**/delete on request) live here", but only delete+search exist — a shipped half-truth. A `write_file`/`read_file` pair (caged like delete_file; write is CONFIRM-tier, undoable via the slice-26 quarantine pattern) closes it and unblocks "draft me a note / write the attachment". **PowerShell as a second shell** for `run_shell` (cmd.exe only). (Undo shipped slice 26; audit viewer slice 28; scroll + double/right-click slice 29 — `drag`/`move_mouse`/`clipboard`/`wifi`/horizontal-scroll are documented *deliberate* deferrals in the slice-29 section, no longer silent gaps.)
 7. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
 8. **Email widenings** (each a deliberate slice): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface).
 9. **Web/search widenings** — the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.

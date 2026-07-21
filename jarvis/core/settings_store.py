@@ -137,6 +137,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # latency budget (~4% of a post-slice-21 chain, worst case).
         "smooth_cursor": True,
         "cursor_move_max_ms": 200,
+        # Slice 29: hostile-input bound on scroll() — one wheel notch ≈ one
+        # wheel click; a request above this is clamped and the clamp is reported.
+        "scroll_max_notches": 20,
     },
     "apps": {
         # Slice 22: launcher-mediated game launches (steam:// / Epic URIs)

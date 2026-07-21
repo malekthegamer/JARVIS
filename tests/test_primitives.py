@@ -174,3 +174,17 @@ def test_ui_tree_com_threadpool_soak():
         with ThreadPoolExecutor(max_workers=1) as pool:
             windows = pool.submit(ui_tree.list_windows).result(timeout=20)
         assert isinstance(windows, list) and windows, f"iteration {i}: {windows!r}"
+
+
+# ---------------------------------------------------------------- slice 29
+def test_scroll_and_click_kind_exposed_in_schema():
+    """The model must be able to SEE the new verbs: scroll as its own tool,
+    and click's optional kind enum (single|double|right)."""
+    from jarvis import primitives
+    schemas = {s["name"]: s for s in primitives.tools_schema()}
+    assert "scroll" in schemas
+    sprops = schemas["scroll"]["parameters"]["properties"]
+    assert {"direction", "amount", "window"} <= set(sprops)
+    kind = schemas["click"]["parameters"]["properties"].get("kind")
+    assert kind is not None, "click schema must expose 'kind'"
+    assert set(kind.get("enum", [])) == {"single", "double", "right"}

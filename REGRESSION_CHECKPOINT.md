@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-19 (after Slice 28 — audit-log HUD viewer)
-**Tip commit at capture:** see `git log -1` (Slice 28)
+**Checkpoint date:** 2026-07-20 (after Slice 29 — scroll + double/right click)
+**Tip commit at capture:** see `git log -1` (Slice 29)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -27,7 +27,54 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (644 tests: 632 + 12 audit viewer)
+## 1. Regression signal — test suite (652 tests: 644 + 8 scroll/click-kind)
+
+**Slice-29 full-suite run (2026-07-20):** **648 passed / 4 failed / 0 skipped**
+(277s, idle desktop). The 4 broke into TWO REAL + two environmental:
+- **2 REAL, FIXED** — `test_agent_loop`'s vision-point-click stubs had a stale
+  `jinput.click` lambda signature (missing the new `kind=` kwarg the lost-turn
+  code correctly passes); a TypeError, not a logic bug. Fixed the 3 stubs →
+  `test_agent_loop` 16/16, and a 208-test combined run (test_input +
+  test_agent_loop + test_primitives + test_server) green — proving the fix and
+  that slice-29 files don't leak state.
+- **2 environmental** — `test_confirm_primitives::test_close_window_closes_notepad`
+  (the recurring unsaved-Notepad session-restore orphan; my scroll tests
+  open/kill Notepad heavily) passed in isolation after clearing strays;
+  `test_search_live::test_live_search_then_read_chain` (free-tier Gemini RPM)
+  passed in isolation after a pause.
+- **Honest note:** a follow-up run that EXCLUDED the 6 live-model files (to
+  confirm the deterministic core post-fix) surfaced ONE ordering-artifact —
+  `test_server::test_state_endpoint` saw a leaked THINKING state from an
+  earlier file's `execute()`-outside-`think()` (the pre-existing broadcaster
+  leak documented since slice 18). It passes alone (16/16) and did NOT fail in
+  the authoritative full run; it is NOT a slice-29 regression (the 208-test
+  combined run with test_server was green). A conftest broadcaster-reset guard
+  is a sensible future hygiene item, out of scope here.
+- New baseline **652**; a single clean `652/0/0` capture still wants a fresh
+  daily bucket (the standing free-tier condition).
+
+### Slice 29 — spec §1.2 input completion: scroll + double/right click
+- Closes a **silently-missing** spec gap (§1.2 named scroll/double_click/
+  right_click; none existed, none documented as deferred). `scroll` = new AUTO
+  tool; `click` gained `kind=single|double|right` threaded through the fast
+  AND vision paths. **`classify_click` untouched — kind never weakens the
+  gate** (committal target CONFIRMs for every kind; test-pinned).
+- **STAGE-0 mechanism pivot:** synthetic mouse-wheel (`pyautogui.scroll` /
+  `mouse_event WHEEL` / `WM_MOUSEWHEEL`) is UNRELIABLE on Win11 WinUI (5 probes:
+  moved once then never; foreground intact). Pivoted to **keyboard PageUp/
+  PageDown** into the focused control (moved every press, 4/4). Vertical only;
+  left/right fail closed. The lost-turn wheel impl had been mocked-green but
+  live-dead — the pivot makes the live test real.
+- **Verify by window-REGION diff** (not full-screen — a scroll changes only the
+  target window, ≈12% of its region vs ≈0.5% of the desktop): `scroll()`
+  returns the bbox, `_run_scroll` diffs that crop (threshold 0.02), honest
+  "view didn't change" below it.
+- **Live-proven:** `_run_scroll` on real Notepad (region-diff VERIFIED;
+  at-the-top honest no-change); real-brain chain scrolled and the executor
+  independently confirmed a **13.1% view change**.
+- **Deliberate deferrals (documented, no longer silent):** drag, move_mouse,
+  horizontal scroll, clipboard, wifi — each with a one-line reason.
+
 
 **Slice-28 full-suite run (2026-07-19):** **641 passed / 3 failed / 0 skipped**
 (271s, idle desktop). The 3 failures are the SAME standing live-MODEL RPM trio
@@ -577,7 +624,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 644 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 652 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

@@ -231,7 +231,7 @@ def _stub_click_guards(monkeypatch, click_spy):
     monkeypatch.setattr(jinput, "_refocus_foreground", lambda t: True)
     monkeypatch.setattr(jinput, "_element_present_at", lambda p: True)
     monkeypatch.setattr(jinput, "_click_xy",
-                        lambda x, y, label: click_spy.append((x, y, label))
+                        lambda x, y, label, kind="single": click_spy.append((x, y, label, kind))
                         or {"ok": True, "message": f"Clicked {label}."})
 
 
@@ -632,3 +632,166 @@ def test_click_paths_use_move_cursor(monkeypatch):
     assert out["ok"]
     assert calls[0] == (321, 654), "move to the exact target first"
     assert calls[1] == ("click", 321, 654)
+
+
+# ================================================================ Slice 29:
+# spec §1.2 input completion — scroll (new AUTO verb) + click kinds
+# (double/right). The tier pin is the load-bearing test: kind must NEVER
+# weaken the gate.
+
+import sys as _sys
+
+from jarvis import primitives as _prims
+from jarvis.core.settings_store import settings as _settings
+
+
+class _FakeMouseLib:
+    """Stands in for pydirectinput AND pyautogui (capture-only)."""
+    def __init__(self):
+        self.calls = []
+
+    def moveTo(self, *a, **k): pass
+    def position(self): return type("P", (), {"x": 0, "y": 0})()
+    def click(self, *a, **k): self.calls.append("click")
+    def doubleClick(self, *a, **k): self.calls.append("doubleClick")
+    def rightClick(self, *a, **k): self.calls.append("rightClick")
+    def press(self, key, *a, **k): self.calls.append(("press", key))  # scroll = keyboard paging
+
+
+class _ScrollWin:
+    def rectangle(self):
+        return type("R", (), {"left": 0, "top": 0, "right": 800, "bottom": 600})()
+
+
+@pytest.fixture()
+def fake_mouse(monkeypatch):
+    fake = _FakeMouseLib()
+    monkeypatch.setitem(_sys.modules, "pydirectinput", fake)
+    monkeypatch.setitem(_sys.modules, "pyautogui", fake)
+    _settings.set("input.smooth_cursor", False, persist=False)
+    yield fake
+    _settings.set("input.smooth_cursor", True, persist=False)
+
+
+@pytest.fixture()
+def scroll_window_ok(monkeypatch):
+    monkeypatch.setattr(jinput, "_target_window", lambda h: (_ScrollWin(), "Notepad"))
+    monkeypatch.setattr(jinput, "_acquire_focus", lambda w, t, attempts=4: True)
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda t: True)
+
+
+def test_scroll_registered_auto_tier_and_schema():
+    prim = _prims.PRIMITIVES.get("scroll")
+    assert prim is not None, "scroll must be a registered tool"
+    assert prim["tier"] == "auto"
+    props = prim["schema"]["parameters"]["properties"]
+    for want in ("direction", "amount", "window"):
+        assert want in props, f"scroll schema missing '{want}'"
+
+
+def test_scroll_amount_clamped_and_nonnumeric_fails_closed(
+        fake_mouse, scroll_window_ok):
+    r = jinput.scroll("down", 999)
+    assert r["ok"], r
+    # keyboard paging: clamped to the max number of PageDown presses
+    assert fake_mouse.calls.count(("press", "pagedown")) == 20, fake_mouse.calls
+    assert "clamp" in r["message"].lower()
+
+    fake_mouse.calls.clear()
+    r = jinput.scroll("down", "lots")
+    assert r["ok"] is False and fake_mouse.calls == []
+
+    r = jinput.scroll("sideways", 3)
+    assert r["ok"] is False and "up" in r["message"]  # names the allowed set
+
+    fake_mouse.calls.clear()
+    r = jinput.scroll("left", 3)   # horizontal is honestly unsupported
+    assert r["ok"] is False and "sideways" in r["message"] and fake_mouse.calls == []
+
+    fake_mouse.calls.clear()
+    r = jinput.scroll("up", 2)     # up -> PageUp, exact count
+    assert r["ok"] and fake_mouse.calls == [("press", "pageup"), ("press", "pageup")]
+
+
+def test_scroll_refuses_when_window_unresolved_or_focus_lost(
+        fake_mouse, monkeypatch):
+    monkeypatch.setattr(jinput, "_target_window", lambda h: (None, None))
+    r = jinput.scroll("down", 5, window_hint="Ghost")
+    assert r["ok"] is False and fake_mouse.calls == []
+
+    monkeypatch.setattr(jinput, "_target_window", lambda h: (_ScrollWin(), "Notepad"))
+    monkeypatch.setattr(jinput, "_acquire_focus", lambda w, t, attempts=4: True)
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda t: False)
+    r = jinput.scroll("down", 5, window_hint="Notepad")
+    assert r["ok"] is False and fake_mouse.calls == []
+
+
+def test_click_kind_double_and_right_map_to_correct_calls(fake_mouse):
+    for kind, expect in (("single", "click"), ("double", "doubleClick"),
+                         ("right", "rightClick")):
+        fake_mouse.calls.clear()
+        out = jinput._click_xy(10, 20, "the item", kind=kind)
+        assert out["ok"], out
+        assert expect in fake_mouse.calls, (kind, fake_mouse.calls)
+
+
+def test_click_kind_invalid_fails_closed_naming_allowed_set(fake_mouse, monkeypatch):
+    monkeypatch.setattr(jinput, "resolve_target",
+                        lambda d, window_hint=None: {"ok": True, "element_name": "File",
+                                                     "window_title": "Notepad",
+                                                     "mid_point": (5, 5)})
+    r = jinput.click("File", kind="triple")
+    assert r["ok"] is False
+    assert "single" in r["message"] and "double" in r["message"] \
+        and "right" in r["message"]
+    assert fake_mouse.calls == [], "an invalid kind must never click"
+
+
+def test_committal_target_confirms_for_every_click_kind(monkeypatch):
+    """THE tier pin: kind never weakens the gate — a committal name CONFIRMs
+    whether it's a single, double or right click."""
+    monkeypatch.setattr(jinput, "resolve_target",
+                        lambda d, window_hint=None: {"ok": True,
+                                                     "element_name": "Delete changes",
+                                                     "window_title": "App",
+                                                     "is_dialog": False,
+                                                     "mid_point": (5, 5)})
+    for kind in ("single", "double", "right"):
+        info = jinput.classify_click({"target": "Delete changes", "kind": kind})
+        assert info["tier"] == "confirm", (kind, info)
+
+
+def _open_notepad_file(lines: int, tmp_path):
+    path = tmp_path / "scrollpad.txt"
+    path.write_text("\n".join(f"line {i:03d} {'x' * 30}" for i in range(lines)),
+                    encoding="utf-8")
+    subprocess.Popen(["notepad.exe", str(path)])
+    deadline = time.time() + 12
+    while time.time() < deadline and not ui_tree.window_present("scrollpad"):
+        time.sleep(0.4)
+    assert ui_tree.window_present("scrollpad")
+    time.sleep(0.8)
+
+
+def test_live_scroll_notepad_screen_changes(tmp_path):
+    """Live: scrolling a real 200-line Notepad document visibly changes the
+    screen (diff-verified by the executor wrapper), and an extra scroll-up at
+    the top honestly reports no change — never a false OK."""
+    _kill_notepad()
+    time.sleep(0.5)
+    try:
+        _open_notepad_file(200, tmp_path)
+        down = _prims._run_scroll({"direction": "down", "amount": 20,
+                                   "window": "scrollpad"})
+        assert down.startswith("OK"), down
+        assert "VERIFIED" in down, f"scroll down must be diff-verified: {down}"
+
+        _prims._run_scroll({"direction": "up", "amount": 20, "window": "scrollpad"})
+        time.sleep(0.4)
+        top = _prims._run_scroll({"direction": "up", "amount": 20,
+                                  "window": "scrollpad"})
+        assert top.startswith("OK")
+        assert "didn't change" in top or "not confirmed" in top.lower(), \
+            f"an at-the-top scroll must report honestly: {top}"
+    finally:
+        _kill_notepad()

@@ -283,17 +283,57 @@ def _run_click(args: dict, gate_info: dict | None = None) -> str:
     if gi.get("vision_failed") and not gi.get("vision_point"):
         return f"FAILED: couldn't find '{target}' — {gi['vision_failed']}."
 
+    kind = str(args.get("kind", "single") or "single")
     before = screen.capture_screen()
     if gi.get("vision_point"):
         r = jinput.click(target, window_hint=window, point=gi["vision_point"],
-                         expect_label=gi.get("vision_label"))
+                         expect_label=gi.get("vision_label"), kind=kind)
     else:
-        r = jinput.click(target, window_hint=window, expect_name=gi.get("expect_name"))
+        r = jinput.click(target, window_hint=window,
+                         expect_name=gi.get("expect_name"), kind=kind)
     if not r["ok"]:
         return f"FAILED: {r['message']}"
     time.sleep(0.3)
     frac = screen.screenshot_diff(before, screen.capture_screen())
     return f"OK: {r['message']} VERIFY: screen changed {frac:.1%}."
+
+
+# A scroll changes only the target WINDOW, which is often a small fraction of
+# the whole virtual desktop — so a full-screen diff under-measures it (a real
+# page-scroll of a modest Notepad reads ~0.5% whole-screen but ~12% of the
+# window region). Verify against the window's own rectangle instead.
+SCROLL_DIFF_MEANINGFUL = 0.02
+
+
+def _region_diff(before, after, bbox) -> float:
+    """screenshot_diff restricted to a window bbox (clamped to frame bounds);
+    falls back to the whole frame when no bbox is known."""
+    if not bbox:
+        return screen.screenshot_diff(before, after)
+    h, w = before.shape[:2]
+    l, t, r, b = bbox
+    y0, y1 = max(0, int(t)), min(h, int(b))
+    x0, x1 = max(0, int(l)), min(w, int(r))
+    if y1 - y0 < 2 or x1 - x0 < 2:                 # degenerate/offscreen crop
+        return screen.screenshot_diff(before, after)
+    return screen.screenshot_diff(before[y0:y1, x0:x1], after[y0:y1, x0:x1])
+
+
+def _run_scroll(args: dict, gate_info: dict | None = None) -> str:
+    """Scroll + verify the screen actually moved — diffing the WINDOW REGION
+    (the slice-2 verify seam, scoped so a small window isn't lost in the full
+    desktop). A below-threshold diff reports honestly — never a false OK."""
+    before = screen.capture_screen()
+    r = jinput.scroll(str(args.get("direction", "")), args.get("amount", 3),
+                      window_hint=args.get("window"))
+    if not r["ok"]:
+        return f"FAILED: {r['message']}"
+    time.sleep(0.3)
+    frac = _region_diff(before, screen.capture_screen(), r.get("bbox"))
+    if frac >= SCROLL_DIFF_MEANINGFUL:
+        return f"OK: {r['message']} VERIFY [VERIFIED]: view changed {frac:.1%}."
+    return (f"OK: {r['message']} VERIFY: the view didn't change ({frac:.1%}) — "
+            f"likely already at the end, or this view doesn't scroll.")
 
 
 def _run_type_text(args: dict, gate_info: dict | None = None) -> str:
@@ -683,7 +723,10 @@ PRIMITIVES: dict[str, dict] = {
             "description": ("Click an on-screen element described in natural language "
                             "(e.g. 'the Save button', 'the search field'). Provide the "
                             "'window' you are working in. Committal clicks (Save, Send, "
-                            "Delete, OK in a dialog, …) are confirmation-gated."),
+                            "Delete, OK in a dialog, …) are confirmation-gated. Use "
+                            "kind='double' to OPEN an item (e.g. a file in Explorer) and "
+                            "kind='right' to open its context menu — then click the menu "
+                            "item you want as a normal (gated) click."),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -691,8 +734,34 @@ PRIMITIVES: dict[str, dict] = {
                                "description": "Natural-language description of the element to click"},
                     "window": {"type": "string",
                                "description": "Title (or part) of the window it's in — strongly recommended"},
+                    "kind": {"type": "string", "enum": ["single", "double", "right"],
+                             "description": "single (default) | double (open) | right (context menu)"},
                 },
                 "required": ["target"],
+            },
+        },
+    },
+    "scroll": {
+        "fn": _run_scroll,
+        "tier": "auto",
+        "schema": {
+            "name": "scroll",
+            "description": ("Scroll a window up or down to reach content that's "
+                            "off-screen (below/above the fold). Provide the 'window'. "
+                            "Pages the focused view; verified by a screen-change check "
+                            "— reports honestly when nothing moved (already at the "
+                            "end / not scrollable)."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": ["up", "down"],
+                                  "description": "Which way to scroll (vertical only)"},
+                    "amount": {"type": "number",
+                               "description": "Page steps (default 3; clamped to a safe max)"},
+                    "window": {"type": "string",
+                               "description": "Title (or part) of the window to scroll"},
+                },
+                "required": ["direction"],
             },
         },
     },

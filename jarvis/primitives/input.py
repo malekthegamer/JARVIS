@@ -473,23 +473,38 @@ def _move_cursor(x: int, y: int) -> None:
         pydirectinput.moveTo(x, y)  # a moveTo without _pause (incl. test fakes)
 
 
-def _click_xy(x: int, y: int, label: str) -> dict:
+# Click kinds (slice 29). Maps to the identically-named pydirectinput/pyautogui
+# method — both libraries expose click/doubleClick/rightClick.
+CLICK_KINDS = {"single": "click", "double": "doubleClick", "right": "rightClick"}
+_CLICK_VERB = {"single": "Clicked", "double": "Double-clicked", "right": "Right-clicked"}
+
+
+def _click_xy(x: int, y: int, label: str, kind: str = "single") -> dict:
+    method = CLICK_KINDS.get(kind)
+    if method is None:                    # fail closed — never guess a click kind
+        return {"ok": False,
+                "message": f"Unknown click kind '{kind}'. "
+                           f"Allowed: {', '.join(sorted(CLICK_KINDS))}."}
+    verb = _CLICK_VERB[kind]
+    note = (" A context menu is now open — click the item you want, or press "
+            "Escape to dismiss it." if kind == "right" else "")
     try:
         import pydirectinput
         _move_cursor(x, y)
-        pydirectinput.click(x, y)
-        return {"ok": True, "message": f"Clicked {label}."}
+        getattr(pydirectinput, method)(x, y)
+        return {"ok": True, "message": f"{verb} {label}.{note}"}
     except Exception:
         pass
     try:
         import pyautogui
-        pyautogui.click(x, y)
-        return {"ok": True, "message": f"Clicked {label}."}
+        getattr(pyautogui, method)(x, y)
+        return {"ok": True, "message": f"{verb} {label}.{note}"}
     except Exception as exc:
-        return {"ok": False, "message": f"Couldn't click at ({x},{y}): {exc}"}
+        return {"ok": False, "message": f"Couldn't {kind}-click at ({x},{y}): {exc}"}
 
 
-def _click_at_point(point, window_hint: str | None, expect_label: str | None) -> dict:
+def _click_at_point(point, window_hint: str | None, expect_label: str | None,
+                    kind: str = "single") -> dict:
     """Click a vision-provided point, with the same safety re-checks as a text
     click: window focused, point still inside the window, a real element there.
     Never reuses coords blind — every guard must pass first."""
@@ -521,20 +536,25 @@ def _click_at_point(point, window_hint: str | None, expect_label: str | None) ->
     if not v.get("verified"):
         return {"ok": False, "message": v.get("reason") or
                 "couldn't confirm what's at that point — not clicking."}
-    return _click_xy(int(point[0]), int(point[1]), expect_label or "the element")
+    return _click_xy(int(point[0]), int(point[1]), expect_label or "the element", kind)
 
 
 def click(description: str, window_hint: str | None = None,
           expect_name: str | None = None, point=None,
-          expect_label: str | None = None) -> dict:
-    """Click an element. Two paths:
+          expect_label: str | None = None, kind: str = "single") -> dict:
+    """Click an element. `kind` ∈ single|double|right (slice 29) — never
+    weakens the tier (classify_click decides from the resolved NAME). Two paths:
     - point given (vision fallback): click those coords after re-verifying
       focus + bounds + a real element is there (never reuse coords blind).
     - otherwise (fast path): resolve the description by text and click its
       centre, RE-resolving at execution time; if the caller passed the
       approved name, a fresh resolution to a different element aborts."""
+    if kind not in CLICK_KINDS:                # fail closed before any action
+        return {"ok": False,
+                "message": f"Unknown click kind '{kind}'. "
+                           f"Allowed: {', '.join(sorted(CLICK_KINDS))}."}
     if point is not None:
-        return _click_at_point(point, window_hint, expect_label)
+        return _click_at_point(point, window_hint, expect_label, kind)
     r = resolve_target(description, window_hint=window_hint)
     if not r["ok"]:
         cands = r.get("candidates") or []
@@ -548,21 +568,10 @@ def click(description: str, window_hint: str | None = None,
         return {"ok": False,
                 "message": "Focus moved to another window before the click — aborted."}
     x, y = r["mid_point"]
-    try:
-        import pydirectinput
-        _move_cursor(x, y)
-        pydirectinput.click(x, y)
-        return {"ok": True, "message": f"Clicked '{r['element_name']}'.",
-                "element_name": r["element_name"]}
-    except Exception:
-        pass
-    try:
-        import pyautogui
-        pyautogui.click(x, y)
-        return {"ok": True, "message": f"Clicked '{r['element_name']}'.",
-                "element_name": r["element_name"]}
-    except Exception as exc:
-        return {"ok": False, "message": f"Couldn't click '{r['element_name']}': {exc}"}
+    out = _click_xy(x, y, f"'{r['element_name']}'", kind)
+    if out["ok"]:
+        out["element_name"] = r["element_name"]
+    return out
 
 
 # ============================ tier classification ============================
@@ -638,6 +647,67 @@ def classify_click(args: dict) -> dict:
     return {"tier": tier, "expect_name": None,
             "vision_point": v["point"], "vision_label": v["label"],
             "description": f"Click '{v['label']}' (identified visually) in '{v['window_title']}'"}
+
+
+# Scroll directions (slice 29): KEYBOARD paging, not synthetic mouse-wheel.
+# Stage-0 probe finding — a synthetic wheel (pyautogui.scroll / mouse_event
+# WHEEL / WM_MOUSEWHEEL) is UNRELIABLE on Win11's WinUI apps (moved once, then
+# nothing, on real Notepad); PageUp/PageDown into the focused control moved the
+# view on every press (4/4, both directions). So scroll pages the focused
+# scroll container. Vertical only — keyboard has no clean horizontal analog;
+# left/right fail closed honestly. `amount` = number of page steps.
+_SCROLL_DIRS = {"up": "pageup", "down": "pagedown"}
+
+
+def scroll(direction: str, amount=3, window_hint: str | None = None) -> dict:
+    """Page the focused scroll container up/down (PageUp/PageDown). AUTO.
+    Fail-closed on an unknown/horizontal direction, a non-numeric amount, or a
+    window that can't be resolved/focused (never scroll whatever happens to be
+    focused). `amount` = page steps, clamped 1..input.scroll_max_notches. Never
+    raises. Returns the window `bbox` so the executor wrapper can verify the
+    screen actually moved by diffing that region."""
+    direction = str(direction or "").strip().lower()
+    key = _SCROLL_DIRS.get(direction)
+    if key is None:
+        extra = (" — I can only scroll up or down, not sideways"
+                 if direction in ("left", "right") else "")
+        return {"ok": False,
+                "message": f"Unknown scroll direction '{direction}'. "
+                           f"Allowed: up, down.{extra}"}
+    try:
+        n = int(amount)
+    except (TypeError, ValueError):
+        return {"ok": False, "message": f"Scroll amount '{amount}' isn't a number."}
+    from jarvis.core.settings_store import settings
+    cap = int(settings.get("input.scroll_max_notches", 20))
+    clamped = max(1, min(abs(n), cap))
+    note = "" if clamped == abs(n) else f" (clamped from {n} — max {cap} steps)"
+
+    win, title = _target_window(window_hint)
+    if win is None:
+        return {"ok": False,
+                "message": "Couldn't find the window to scroll — not scrolling."}
+    if not _acquire_focus(win, title) or not _refocus_foreground(title):
+        return {"ok": False,
+                "message": "Couldn't focus the target window — not scrolling."}
+    bbox = None
+    try:
+        r = win.rectangle()
+        bbox = (r.left, r.top, r.right, r.bottom)
+    except Exception:
+        pass
+    # Page the FOCUSED control (a synthetic wheel is unreliable on WinUI — see
+    # _SCROLL_DIRS). pydirectinput.press is the same key path type_text/press use.
+    try:
+        import pydirectinput
+        for _ in range(clamped):
+            pydirectinput.press(key)
+            time.sleep(0.03)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't scroll: {exc}"}
+    return {"ok": True, "bbox": bbox,
+            "message": f"Scrolled {direction} {clamped} step(s){note} "
+                       f"in '{title or 'the window'}'."}
 
 
 def classify_type(args: dict) -> dict:

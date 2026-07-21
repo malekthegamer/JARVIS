@@ -302,7 +302,7 @@ def test_run_click_routes_vision_point(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         primitives.jinput, "click",
-        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None:
+        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None, kind="single":
             captured.update(point=point, label=expect_label) or
             {"ok": True, "message": "Clicked the element."})
     out = primitives._run_click(
@@ -336,7 +336,7 @@ def test_vision_destructive_click_walks_confirm(monkeypatch, state_log, confirm_
                         "window_title": "IconPad", "confidence": 0.9})
     clicked = {}
     monkeypatch.setattr(primitives.jinput, "click",
-                        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None:
+                        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None, kind="single":
                         clicked.update(point=point) or {"ok": True, "message": "Clicked."})
 
     unsubscribe = _auto_resolver(approved=True)
@@ -364,7 +364,7 @@ def test_vision_safe_click_is_auto_no_modal(monkeypatch, state_log, confirm_even
                         "label": "bold", "tier": "auto", "window_title": "IconPad",
                         "confidence": 0.95})
     monkeypatch.setattr(primitives.jinput, "click",
-                        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None:
+                        lambda target, window_hint=None, point=None, expect_name=None, expect_label=None, kind="single":
                         {"ok": True, "message": "Clicked."})
     provider = ToolCallingProvider(tool_name="click",
                                    tool_args={"target": "the bold icon", "window": "IconPad"})
