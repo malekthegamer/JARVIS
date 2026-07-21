@@ -294,3 +294,60 @@ def set_dnd(enabled) -> dict:
                                f"(readback confirmed)."}
     except Exception:
         return {"ok": False, "enabled": None, "message": _DND_UNAVAILABLE}
+
+
+# ---------------------------------------------------------------- slice 31:
+# clipboard (spec §1.2 system_control). pyperclip (a declared dep) over the
+# Windows clipboard. No window/focus targeting — it's process-global OS state.
+# _clip_get/_clip_set are thin seams so tests can mock them (the _dnd_session
+# fake pattern). Both verbs return {ok, ..., message} and never raise.
+
+CLIPBOARD_MAX_CHARS = 100_000     # cap a read so a huge copy can't blow up context
+
+
+def _clip_get() -> str:
+    import pyperclip  # lazy
+    return pyperclip.paste() or ""
+
+
+def _clip_set(text: str) -> None:
+    import pyperclip  # lazy
+    pyperclip.copy(text)
+
+
+def get_clipboard() -> dict:
+    """Read the clipboard TEXT (AUTO). Non-text (image/files) reads as '' on
+    Windows -> reported honestly. Oversize text truncated. Never raises."""
+    try:
+        text = _clip_get() or ""
+        if not text:
+            return {"ok": True, "text": "",
+                    "message": "The clipboard is empty (or holds non-text I can't read)."}
+        if len(text) > CLIPBOARD_MAX_CHARS:
+            return {"ok": True, "text": text[:CLIPBOARD_MAX_CHARS],
+                    "message": f"Read the clipboard (truncated to "
+                               f"{CLIPBOARD_MAX_CHARS} of {len(text)} chars)."}
+        return {"ok": True, "text": text,
+                "message": f"Read the clipboard ({len(text)} chars)."}
+    except Exception as exc:
+        return {"ok": False, "text": "",
+                "message": f"Couldn't read the clipboard: {exc}"}
+
+
+def set_clipboard(text) -> dict:
+    """Put TEXT on the clipboard (AUTO). Reads the PREVIOUS text first and
+    surfaces it as 'previous' so an overwrite can be undone (slice 26). Never
+    raises."""
+    text = "" if text is None else str(text)
+    try:
+        try:
+            previous = _clip_get() or ""
+        except Exception:
+            previous = ""          # best-effort; undo simply won't be offered
+        _clip_set(text)
+        return {"ok": True, "previous": previous,
+                "message": f"Put {len(text)} chars on the clipboard "
+                           f"(paste with Ctrl+V)."}
+    except Exception as exc:
+        return {"ok": False, "previous": "",
+                "message": f"Couldn't set the clipboard: {exc}"}

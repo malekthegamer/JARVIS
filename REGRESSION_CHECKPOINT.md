@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-20 (after Slice 30 — caged file authoring)
-**Tip commit at capture:** see `git log -1` (Slice 30)
+**Checkpoint date:** 2026-07-20 (after Slice 31 — clipboard)
+**Tip commit at capture:** see `git log -1` (Slice 31)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -27,7 +27,32 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (671 tests: 652 + 19 file authoring)
+## 1. Regression signal — test suite (684 tests: 671 + 13 clipboard)
+
+**Slice-31 full-suite run (2026-07-20):** **681 passed / 3 failed / 0 skipped**
+(263s, idle desktop). All 3 are the standing live-model RPM trio
+(`test_email_live`, `test_files` live, `test_web_live` cross-host) — none touch
+clipboard code (system.py/__init__/brain). Each re-verified GREEN in isolation
+after a healthy 5/5 burst-probe (email alone after a pause). **All 13 clipboard
+tests — including the live-brain set-clipboard — passed in the full run.** New
+baseline **684**; a single clean `684/0/0` still wants a fresh daily bucket.
+
+
+### Slice 31 — clipboard (get_clipboard + set_clipboard)
+- Spec §1.2 system_control's last unbuilt verb. Backend `pyperclip` (declared
+  dep; Stage-0 probe confirmed it works). Both AUTO; `set_clipboard` undoable
+  (restores prior text via the slice-26 stack, only when prior text existed).
+- **Privacy (user-chosen): audit redaction.** A new general `redact_audit`
+  registry flag makes `_audit_record` store the envelope (tool/tier/status) but
+  a placeholder instead of verbatim args/result — a copied password never lands
+  in the durable log. Pinned: a seeded secret marker is absent from the audit
+  record; the seam is opt-in (normal verbs still log verbatim). The model still
+  gets the real content for the task.
+- `get_clipboard` output wrapped in `web._wrap_untrusted` (clipboard bytes are
+  DATA, not instructions — hostile-page-copy defense).
+- Live-proven: real-OS round-trip (restore-in-teardown) + gated real-brain
+  "put '<marker>' on my clipboard" → pyperclip.paste() equalled the marker.
+
 
 **Slice-30 full-suite run (2026-07-20):** **665 passed / 6 failed / 0 skipped**
 (267s, idle desktop). All 6 are environmental — a heavier-than-usual live
@@ -655,7 +680,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 671 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 684 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

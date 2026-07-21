@@ -300,6 +300,37 @@ def _run_set_dnd(args: dict, gate_info: dict | None = None) -> str:
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
+def _run_get_clipboard(args: dict, gate_info: dict | None = None) -> str:
+    """Read the clipboard; wrap the text in the untrusted-content boundary —
+    clipboard bytes may be copied off a hostile page, so they are DATA, never
+    instructions (same discipline as read_file/read_page). The verbatim content
+    is redacted from the audit log (redact_audit)."""
+    r = system.get_clipboard()
+    if not r["ok"]:
+        return "FAILED: " + r["message"]
+    if not r["text"]:
+        return "OK: " + r["message"]
+    wrapped = web._wrap_untrusted("CLIPBOARD CONTENT", "from the system clipboard",
+                                  r["text"])
+    return f"OK: {r['message']}\n{wrapped}"
+
+
+def _run_set_clipboard(args: dict, gate_info: dict | None = None) -> str:
+    """Put text on the clipboard; push an undo entry restoring the PREVIOUS
+    text — only when there was non-empty prior text that differs (a prior
+    non-text/empty clipboard can't be meaningfully restored). Mirrors
+    _run_set_dnd's conditional push. Content is redacted from the audit."""
+    text = str(args.get("text", ""))
+    r = system.set_clipboard(text)
+    prev = r.get("previous") or ""
+    if r["ok"] and prev and prev != text:
+        undo_stack.push(UndoEntry(
+            tool="set_clipboard",
+            description="the clipboard change (restores your previous text)",
+            undo_fn=lambda p=prev: system.set_clipboard(p)))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_close_window(args: dict, gate_info: dict | None = None) -> str:
     r = windows.close_window(str(args.get("title", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
@@ -768,6 +799,31 @@ PRIMITIVES: dict[str, dict] = {
                                                              "description": "true = on (silence), false = off"}},
                                   "required": ["enabled"]}},
     },
+    "get_clipboard": {
+        "fn": _run_get_clipboard,
+        "tier": "auto",
+        "redact_audit": True,          # slice 31: content never in the durable log
+        "schema": {"name": "get_clipboard",
+                   "description": ("Read the text currently on the system "
+                                   "clipboard, so you can act on what the user "
+                                   "just copied. Use ONLY when the user refers to "
+                                   "the clipboard or 'what I copied' — never read "
+                                   "it speculatively."),
+                   "parameters": {"type": "object", "properties": {}}},
+    },
+    "set_clipboard": {
+        "fn": _run_set_clipboard,
+        "tier": "auto",
+        "redact_audit": True,
+        "schema": {"name": "set_clipboard",
+                   "description": ("Put text on the system clipboard so the user "
+                                   "can paste it (Ctrl+V) anywhere — handy for a "
+                                   "long draft instead of typing it into an app."),
+                   "parameters": {"type": "object",
+                                  "properties": {"text": {"type": "string",
+                                                          "description": "The text to place on the clipboard"}},
+                                  "required": ["text"]}},
+    },
     "close_window": {
         "fn": _run_close_window,
         "tier": "confirm",
@@ -1015,12 +1071,23 @@ def _audit_record(name: str, args: dict, outcome: dict, result: str) -> str:
     tracker = chain.current()
     status = ("failed" if outcome["tier"] == "unknown"
               else chain.status_from_result(result))
+    # Redaction seam (slice 31): a tool marked redact_audit keeps its ENVELOPE
+    # (tool/tier/gate/status) in the durable log but never its content — the
+    # verbatim args/result are replaced with a placeholder before recording.
+    # Clipboard is the first user (a copied password must not land in the log);
+    # the model still receives the real `result` we return below.
+    prim = PRIMITIVES.get(name)
+    if prim and prim.get("redact_audit"):
+        audit_args: dict = {"redacted": True}
+        audit_result = "[clipboard content redacted]"
+    else:
+        audit_args, audit_result = args, result
     try:
         ok = audit.audit_log.record(
             tool=name, tier=outcome["tier"], gate=outcome["gate"],
             status=status, dry_run=bool(outcome.get("dry_run")),
             chain_id=tracker.chain_id if tracker else None,
-            args=args, result=result)
+            args=audit_args, result=audit_result)
     except Exception:
         ok = False
     if not ok:

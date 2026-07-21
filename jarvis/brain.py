@@ -29,6 +29,10 @@ operate inside apps: click elements (click), type text (type_text), press keys
 (press_keys), and scroll (scroll) to reach content that's off-screen. To open
 an item (like a file in Explorer) use click with kind='double'; for a context
 menu use kind='right', then click the menu item you want as a normal step.
+You can use the clipboard: read what the user copied (get_clipboard — ONLY when
+they refer to the clipboard or 'what I copied', never speculatively) and put
+text on the clipboard for them to paste (set_clipboard) — handy for a long
+draft instead of typing it into an app.
 When you click, type, or scroll, pass the 'window' you are working in
 (e.g. 'Notepad') so the action targets the right place. type_text does NOT
 press Enter — to submit or save, use press_keys separately (that will be
