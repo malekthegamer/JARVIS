@@ -27,7 +27,60 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (717 tests: 716 + 1 threshold-drift pin)
+## 1. Regression signal — test suite (727 tests: 717 + 10 safety-integrity pins)
+
+**Slice-35 gate (2026-07-22) — PARTIAL, and honestly so.** **698 deterministic
+passed / 0 failed**, run in two parts because BOTH environmental blockers hit
+at once: 499 non-desktop, then 199 desktop-driving (`test_agent_loop`,
+`test_input`, `test_system`, `test_tabs`) after the user freed the desktop —
+the conftest fullscreen guard had refused the first attempt, working exactly as
+designed. **The ~29 live-MODEL tests were NOT run:** the free-tier Gemini daily
+bucket was exhausted by the slice-34 gate plus ~10 isolation re-runs, and a
+burst-probe returned **1/5 healthy (429 RESOURCE_EXHAUSTED on a bare "say OK"
+call)** — proof the failure is upstream of any code. They need a fresh bucket
+(resets 07:00 UTC). `test_agent_loop` — the file that caught slice 29's real
+regression and which exercises the restructured tier dispatch — passed.
+
+**A real self-inflicted regression was caught and fixed during this gate, not
+dismissed:** `test_server::test_state_endpoint` failed on a leaked THINKING
+state. It resembles the pre-existing broadcaster-leak ordering artifact
+documented in slice 29 — but re-running the same selection with the new tests
+deselected passed 487/0, proving the new tests caused it (they call `execute()`
+outside `think()`). Fixed with the standing autouse leak guard
+(`test_shell.py`/`test_audit.py` pattern). **Lesson: a new failure that
+matches a documented artifact still has to be proven to be that artifact.**
+
+### Slice 35 — safety integrity: the kill switches are now a boundary
+- **The bug:** `fs.enabled` / `web.enabled` / `search.enabled` only ever
+  WITHHELD a verb from `tools_schema()`. Unlike `shell.enabled`/`email.enabled`
+  (re-checked in their classifiers), nothing stopped a **direct** `execute()`
+  by name — so the switch for the most powerful surface in the app (delete/
+  write anywhere on the PC) was advice to the model, not a boundary. Two code
+  comments claimed "a direct call also refuses via classify" — **false**.
+- **Fix — one choke point, not 15 guards.** New `_KILL_SWITCHES` map is the
+  single source of truth: `tools_schema()` derives withholding from it AND
+  `_disabled_by_switch()` refuses execution, checked **before the gate and
+  before dry-run** (a disabled capability is refused, not rehearsed). This also
+  covers the verbs with NO classifier at all (`list_directory`, `read_path`,
+  `web_search`, `read_page`, `close_browser` are plain `tier:"auto"`), which a
+  per-classifier fix would have missed entirely. An anti-drift test pins that
+  withheld and enforced sets stay identical. `web.allow_actions` is untouched —
+  it was already properly enforced via `_actions_blocked()`.
+- **Tier dispatch now fails closed.** `_execute_inner` special-cased only
+  `"blocked"`/`"confirm"` and **ran everything else** — a classifier returning
+  `"CONFIRM"` (merely wrong-cased) executed UNGATED. Proven live by the test
+  before the fix, not theorised. Now only the literal `"auto"` runs ungated.
+- **Killed a shipped falsehood.** The workspace README claimed *"Nothing
+  outside this folder is reachable by the agent's file tools"* — true until
+  slices 32-33. Worse, `if not _README.exists()` meant it could **never** be
+  corrected on an existing install (the on-disk copy was still pre-slice-30
+  text). Now content-driven self-heal, and the text discloses the real-FS
+  reach. Verified by reading the actual bytes on disk.
+- **Manually verified (not just test-green):** each of the 5 switches off →
+  direct call returns BLOCKED; for `delete_path` the victim file was still on
+  disk with contents intact.
+
+
 
 **Slice-34 full-suite run (2026-07-21):** **711 passed / 6 failed / 0 skipped**
 (312s, idle desktop). All 6 are the standing environmental cluster, **each

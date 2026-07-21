@@ -3,8 +3,22 @@ launch_app / ui_tree coverage (incl. the hostile and mangled-name cases)."""
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from jarvis.primitives import screen
+
+
+@pytest.fixture(autouse=True)
+def _broadcaster_back_to_idle():
+    """Leak guard (slice 18 pattern, same as test_shell.py / test_audit.py).
+    Slice 35's tier tests call execute() outside think(), which parks the
+    broadcaster at THINKING; without this, test_server::test_state_endpoint
+    later sees the leaked state. Caught by running this file's new tests both
+    in and out of the selection — it was a real regression, not the
+    pre-existing ordering artifact it resembled."""
+    yield
+    from jarvis.state import AgentState, broadcaster
+    broadcaster.set(AgentState.IDLE)
 
 
 # ---------- stage 2: capture_screen + screenshot_diff ----------
@@ -174,6 +188,139 @@ def test_ui_tree_com_threadpool_soak():
         with ThreadPoolExecutor(max_workers=1) as pool:
             windows = pool.submit(ui_tree.list_windows).result(timeout=20)
         assert isinstance(windows, list) and windows, f"iteration {i}: {windows!r}"
+
+
+# ---------------------------------------------------------------- slice 35
+# Kill switches must be a BOUNDARY, not advice to the model. Before this slice
+# fs/web/search.enabled only WITHHELD the verb from tools_schema; a direct
+# execute() by name still ran at full power (shell/email were the only two
+# re-checked inside their classifier). These pin the enforcement.
+
+def _switch_off(monkeypatch, key):
+    """Flip one capability switch for the duration of a test, in memory only."""
+    from jarvis.core.settings_store import settings
+    real = settings.get
+    monkeypatch.setattr(
+        settings, "get",
+        lambda path, default=None: (False if path == key else real(path, default)))
+
+
+def _explode(*_a, **_k):
+    raise AssertionError("the primitive ran despite its kill switch being OFF")
+
+
+def test_fs_kill_switch_blocks_direct_call(monkeypatch, tmp_path):
+    """The most powerful surface: a direct delete_path with fs.enabled=False
+    must refuse WITHOUT reaching the recycler."""
+    from jarvis import primitives
+    from jarvis.primitives import fsaccess
+
+    victim = tmp_path / "keep_me.txt"
+    victim.write_text("still here", encoding="utf-8")
+    monkeypatch.setattr(fsaccess, "_recycle", _explode)
+    _switch_off(monkeypatch, "fs.enabled")
+
+    out = primitives.execute("delete_path", {"path": str(victim)})
+    assert out.startswith("BLOCKED"), out
+    assert victim.exists(), "the file must survive a blocked delete"
+
+
+def test_web_kill_switch_blocks_direct_call(monkeypatch):
+    from jarvis import primitives
+    from jarvis.primitives import web
+
+    monkeypatch.setattr(web, "navigate", _explode, raising=False)
+    _switch_off(monkeypatch, "web.enabled")
+    out = primitives.execute("browse_navigate", {"url": "https://example.com"})
+    assert out.startswith("BLOCKED"), out
+
+
+def test_search_kill_switch_blocks_direct_call(monkeypatch):
+    from jarvis import primitives
+    from jarvis.primitives import web
+
+    monkeypatch.setattr(web, "web_search", _explode, raising=False)
+    _switch_off(monkeypatch, "search.enabled")
+    out = primitives.execute("web_search", {"query": "anything"})
+    assert out.startswith("BLOCKED"), out
+
+
+def test_kill_switch_blocks_classifierless_auto_verb(monkeypatch, tmp_path):
+    """list_directory is tier='auto' with NO classifier — a per-classifier fix
+    would have missed it entirely. The central choke point must still refuse."""
+    from jarvis import primitives
+    from jarvis.primitives import fsaccess
+
+    monkeypatch.setattr(fsaccess, "list_directory", _explode, raising=False)
+    _switch_off(monkeypatch, "fs.enabled")
+    out = primitives.execute("list_directory", {"path": str(tmp_path)})
+    assert out.startswith("BLOCKED"), out
+
+
+def test_kill_switch_blocks_even_in_dry_run(monkeypatch, tmp_path):
+    """A disabled capability is refused, not rehearsed."""
+    from jarvis import primitives
+    from jarvis.core import chain
+    from jarvis.primitives import fsaccess
+
+    monkeypatch.setattr(fsaccess, "_recycle", _explode)
+    _switch_off(monkeypatch, "fs.enabled")
+    chain.start(dry_run=True)
+    try:
+        out = primitives.execute("delete_path", {"path": str(tmp_path / "x.txt")})
+    finally:
+        chain.clear("done")
+    assert out.startswith("BLOCKED"), out
+
+
+def test_kill_switch_map_matches_tools_schema_withholding(monkeypatch):
+    """ANTI-DRIFT PIN — the bug this slice fixes was two lists disagreeing.
+    Every verb in the enforcement map must actually disappear from the schema
+    when its switch is off, and must be a real registered primitive."""
+    from jarvis import primitives
+
+    for key, verbs in primitives._KILL_SWITCHES.items():
+        assert verbs <= set(primitives.PRIMITIVES), f"{key}: unknown verb(s)"
+        with monkeypatch.context() as mp:
+            _switch_off(mp, key)
+            advertised = {s["name"] for s in primitives.tools_schema()}
+        assert not (verbs & advertised), f"{key} off but still advertised: {verbs & advertised}"
+
+
+def test_unknown_tier_string_fails_closed_to_confirm(monkeypatch):
+    """Doctrine: unknown -> CONFIRM. A classifier returning a malformed tier
+    ('CONFIRM', 'block', 'blocked ') must NEVER fall through to execution."""
+    from jarvis import primitives
+
+    for bad in ("CONFIRM", "block", "blocked ", "weird", ""):
+        ran: list = []
+
+        def _fn(_a, _g, _ran=ran):
+            _ran.append(True)          # track invocation DIRECTLY — execute()
+            return "OK: ran"           # swallows exceptions, so raising here
+                                       # would silently look like a pass
+        fake = {"schema": {"name": "_probe"}, "fn": _fn,
+                "classify": lambda _a, t=bad: {"tier": t, "description": "probe"}}
+        with monkeypatch.context() as mp:
+            mp.setitem(primitives.PRIMITIVES, "_probe", fake)
+            # No approver is subscribed, so the gate times out -> declined.
+            # Correct behaviour = gated (never runs). Buggy = runs immediately.
+            mp.setattr(primitives.settings, "get",
+                       lambda p, d=None: 0.01 if p == "confirm.timeout_s" else d)
+            primitives.execute("_probe", {})
+        assert not ran, f"tier {bad!r} executed the primitive UNGATED"
+
+
+def test_known_tiers_still_dispatch_unchanged(monkeypatch):
+    """Regression guard for the dispatch restructure: a plain auto verb runs."""
+    from jarvis import primitives
+
+    fake = {"schema": {"name": "_probe_ok"}, "tier": "auto",
+            "fn": lambda _a, _g: "OK: ran"}
+    with monkeypatch.context() as mp:
+        mp.setitem(primitives.PRIMITIVES, "_probe_ok", fake)
+        out = primitives.execute("_probe_ok", {})
+    assert out.startswith("OK: ran"), out
 
 
 # ---------------------------------------------------------------- slice 29

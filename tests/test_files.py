@@ -179,6 +179,34 @@ def test_readme_promises_only_verbs_that_exist():
                 f"README promises '{verb}' but {tool} isn't a registered tool"
 
 
+def test_workspace_readme_makes_no_false_containment_claim():
+    """Slice 35: the README shipped 'Nothing outside this folder is reachable
+    by the agent's file tools.' That became FALSE at slices 32-33, when
+    fsaccess gained read/write/move/rename/copy/delete ANYWHERE on the PC.
+    A user-facing safety claim must not overstate the cage."""
+    from jarvis.primitives.files import _README
+    text = _README.read_text(encoding="utf-8").lower()
+    assert {"delete_path", "write_path", "read_path"} <= set(primitives.PRIMITIVES), \
+        "fixture assumption: the real-FS verbs exist"
+    assert "nothing outside this folder is reachable" not in text, \
+        "README still claims total containment, which fsaccess made false"
+    assert "real-filesystem" in text or "anywhere on this pc" in text, \
+        "README must positively disclose that JARVIS can reach outside the cage"
+
+
+def test_workspace_readme_self_heals_when_stale(tmp_path, monkeypatch):
+    """The original `if not _README.exists()` guard meant an existing install
+    kept a stale claim FOREVER — the real reason the false line survived.
+    Refresh must be content-driven, not absence-driven."""
+    from jarvis.primitives import files as jfiles
+    stale = tmp_path / "README.md"
+    stale.write_text("# JARVIS agent workspace\n\nNothing outside this folder "
+                     "is reachable by the agent's file tools.\n", encoding="utf-8")
+    monkeypatch.setattr(jfiles, "_README", stale)
+    jfiles._ensure_readme()
+    assert stale.read_text(encoding="utf-8") == jfiles._README_TEXT
+
+
 # ---------- live (gated) ----------
 
 @pytest.mark.skipif(not config.get_api_key("gemini"),

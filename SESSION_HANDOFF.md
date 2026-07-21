@@ -18,7 +18,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 717 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 727 collected; slice-35 gate verified 698 deterministic / 0 failed (the ~29 live-model tests await a fresh Gemini bucket)** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -221,6 +221,39 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 35 — safety integrity: the kill switches are now a real boundary
+- **Found by auditing `jarvis/` for gaps the docs DIDN'T name.** Three defects
+  in the safety layer itself, all verified in code before planning.
+- **(1) `fs.enabled` / `web.enabled` / `search.enabled` were advisory.** They
+  only withheld the verb from `tools_schema()`; unlike `shell.enabled`/
+  `email.enabled` (re-checked inside their classifiers), a **direct**
+  `execute()` by name still ran at full power — so the switch for the most
+  powerful surface in the app (delete/write anywhere on the PC) didn't stop a
+  tool name carried in conversation history after the user flips it, or a
+  prompt-injected page naming the verb. Two comments asserted the opposite.
+  **Fixed with ONE source of truth** (`_KILL_SWITCHES`): `tools_schema()`
+  derives withholding from it and `_disabled_by_switch()` enforces execution,
+  before the gate AND before dry-run. Critically this also covers the verbs
+  with **no classifier at all** (`list_directory`/`read_path`/`web_search`/
+  `read_page`/`close_browser` are plain `tier:"auto"`) — a per-classifier fix
+  would have silently missed them. Anti-drift test pins the two sets equal.
+  `web.allow_actions` was already correctly enforced (`_actions_blocked()`).
+- **(2) An unrecognized tier string executed UNGATED.** `_execute_inner`
+  handled `"blocked"`/`"confirm"` and fell through to running everything else;
+  `_decide_tier` fails closed on a *missing* key but not a malformed value. The
+  test proved it live before the fix — tier `"CONFIRM"` (wrong case) ran the
+  primitive. Now only literal `"auto"` runs ungated; unknown → CONFIRM, as the
+  doctrine always claimed.
+- **(3) A shipped falsehood, reopened.** The workspace README claimed *"Nothing
+  outside this folder is reachable by the agent's file tools"* — true until
+  slices 32-33. And `if not _README.exists()` meant it could never be corrected
+  on an existing install (the on-disk copy was still pre-slice-30 text). Now
+  content-driven self-heal + text that discloses the real-FS reach honestly.
+- **Gate (honest): 698 deterministic passed / 0 failed; the ~29 live-model
+  tests could NOT be run** — daily Gemini quota exhausted, burst-probe 1/5 with
+  429 on a bare API call. Re-run them on a fresh bucket. A self-inflicted
+  broadcaster leak was caught mid-gate and fixed (see REGRESSION_CHECKPOINT).
+
 ### Slice 34 — memory retrieval recall: measured, no safe lever, nothing tuned
 - **The slice-16 pattern repeated: the measurement overruled the plan, and the
   honest outcome was to ship the instrument, not a change.** Target was the
@@ -382,7 +415,7 @@ e:\J.A.R.V.I.S\
                               audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
                               read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 717 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 727 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -473,7 +506,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 717 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 727 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -513,6 +546,31 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   a DND change re-opens Settings briefly (the original action's same cost);
   tabs/media-keys/email/shell are categorically irreversible and test-pinned
   as never-undoable. Redo does not exist (undoing an undo is out of scope).
+- **Open findings from the slice-35 safety audit (verified in code, NOT yet
+  fixed — each deferred deliberately, not overlooked):**
+  - **`browse_key("Enter")` is AUTO** while the desktop equivalent is
+    CONFIRM-gated (`input.py` `_CONFIRM_COMBOS` treats bare Enter as "submit").
+    So `browse_fill(...)` + `browse_key("Enter")` submits a web form with no
+    gate, while `browse_click("Submit")` on the same form IS gated. Closing it
+    changes user-facing behaviour (submits start asking), so it's a product
+    decision, not a pure bug fix — its own slice.
+  - **No `input.enabled` kill switch.** `click`/`type_text`/`press_keys`/
+    `scroll` is the universal actuator (it drives any window, including an open
+    terminal or the signed-in real browser) and is the only major surface with
+    no switch — shell/email/web/search/fs/memory/audit/vision all have one. The
+    `input` settings section already exists, so the seam is free.
+  - **Four registered classifiers have ZERO deterministic tier test:**
+    `classify_type`, `classify_web_key`, `classify_create_shortcut`,
+    `classify_rename_path`. Tier classification is the safety-critical part;
+    each is a small table-driven test.
+  - **Live tests write REAL user state.** ~17 live `think()` call sites use the
+    real `memory_store` (a model-called `remember` persists into the user's own
+    memory, and real memories get injected into test prompts = nondeterminism);
+    5 test files write the real `data/agent_files` instead of `tmp_path` (one
+    really deletes); several run `taskkill /IM notepad.exe /F`, killing the
+    USER's Notepad windows with unsaved work (`test_tabs.py` already shows the
+    right pattern: kill by PID). `test_search.py`'s autouse settings fixture
+    has no teardown at all.
 - **Recurring test-isolation lesson (slices 24-25):** `data/settings.json` can have `web.profile_mode="real"` persisted from live testing/actual use. Any test that classifies web clicks or drives the browser MUST pin `web.profile_mode="isolated"` + `web.allow_actions=False` in an autouse fixture, or it will see BLOCKED instead of the tier it expects. `test_web.py`, `test_web_live.py`, `test_search.py`, `test_search_live.py` all do this — follow the same pattern for any new web-adjacent test file.
 
 ---
@@ -542,16 +600,24 @@ All four spec §1.6 scripts pass; real-browser navigate+read AND committal actio
 1. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is the single biggest drag on the test gate (rate-limited runs at nearly every recent checkpoint, now carrying 6-7 live-brain tests). Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent. Highest quality-of-life-per-effort item on the list.
 2. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these visibly-disabled ("not ported yet"). Each needs a tool-calling adapter mapping the full primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
 3. **Double-click reliability** (low priority — user call, 2026-07-20) — `click kind='double'` is confirmed flaky in real manual use, real mouse/UIA timing (§5). Single-click and right-click are solid. Not urgent; revisit only if it becomes a real friction point.
-4. **Real-browser mode, round 3** — cross-host click re-gating shipped in slice 27. Remaining residuals: broader rich-editor `fill()` coverage beyond Claude's ProseMirror box (Slate/Draft/Lexical/CodeMirror); a HUD indicator for when real-browser mode / allow_actions is live (user deprioritized 2026-07-19); and the narrowed slice-27 JS-navigation residual (a named-benign button that navigates cross-host via JS is flagged post-click, not pre-gated — request-interception was considered and rejected as deadlock-risky).
-5. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags. **The "drive the ~18% paraphrase misses down" item is CLOSED as measured-and-not-safely-reachable (slice 34)** — every lever (threshold, retrieve_k, stemming, three rival embedding models) was measured and each cost more privacy than it bought recall; see §5 and `harness_memory_eval.py --verbose`. Reopen only with a materially better retrieval model or a rerank stage, and re-measure before believing it.
-6. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
-7. **Real-FS round 3 (small, optional)** — a `make_folder` verb (deferred from slice 33, same `fsaccess` core); PowerShell as a second `run_shell` backend (cmd.exe only).
-8. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
-9. **Email widenings** (each a deliberate slice): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface).
-10. **Web/search widenings** — the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.
-11. **Wake-word refinements** — a HUD wake toggle; custom "hey jarvis" sensitivity; self-trigger suppression during TTS beyond the `_busy` drop.
-12. **DND without the Settings pop** — revisit the CloudStore serialized blob for a silent path.
-13. **Desktop-native automation hardening** — beyond the browser: more robust arbitrary native-app automation (the plan for slice 25 explicitly scoped this out in favor of browser web-apps; `input.py`'s click/type/press already work on any window, but haven't had the same measurement/hardening pass as the browser primitives — see the double-click item above).
+4. **Close the slice-35 audit's deferred findings** (all verified in code, all
+   recorded in §5): gate `browse_key("Enter")` like the desktop Enter combo;
+   add an `input.enabled` kill switch (the universal actuator is the only major
+   surface without one); deterministic tier tests for the four untested
+   classifiers (`classify_type`, `classify_web_key`, `classify_create_shortcut`,
+   `classify_rename_path`); and stop live tests writing REAL user state (the
+   real memory store, the real `data/agent_files`, `taskkill /IM notepad.exe`).
+   The last group is a natural "test integrity" slice on its own.
+5. **Real-browser mode, round 3** — cross-host click re-gating shipped in slice 27. Remaining residuals: broader rich-editor `fill()` coverage beyond Claude's ProseMirror box (Slate/Draft/Lexical/CodeMirror); a HUD indicator for when real-browser mode / allow_actions is live (user deprioritized 2026-07-19); and the narrowed slice-27 JS-navigation residual (a named-benign button that navigates cross-host via JS is flagged post-click, not pre-gated — request-interception was considered and rejected as deadlock-risky).
+6. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags. **The "drive the ~18% paraphrase misses down" item is CLOSED as measured-and-not-safely-reachable (slice 34)** — every lever (threshold, retrieve_k, stemming, three rival embedding models) was measured and each cost more privacy than it bought recall; see §5 and `harness_memory_eval.py --verbose`. Reopen only with a materially better retrieval model or a rerank stage, and re-measure before believing it.
+7. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
+8. **Real-FS round 3 (small, optional)** — a `make_folder` verb (deferred from slice 33, same `fsaccess` core); PowerShell as a second `run_shell` backend (cmd.exe only).
+9. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
+10. **Email widenings** (each a deliberate slice): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface).
+11. **Web/search widenings** — the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.
+12. **Wake-word refinements** — a HUD wake toggle; custom "hey jarvis" sensitivity; self-trigger suppression during TTS beyond the `_busy` drop.
+13. **DND without the Settings pop** — revisit the CloudStore serialized blob for a silent path.
+14. **Desktop-native automation hardening** — beyond the browser: more robust arbitrary native-app automation (the plan for slice 25 explicitly scoped this out in favor of browser web-apps; `input.py`'s click/type/press already work on any window, but haven't had the same measurement/hardening pass as the browser primitives — see the double-click item above).
 
 Deliberate, documented deferrals (not silent gaps — each has a one-line reason on record): `drag`, `move_mouse`, horizontal scroll, `wifi` (slice 29); a real-FS `fs.enabled` kill-switch exists but no per-verb granularity. ElevenLabs/local-Whisper providers are ported (slice 23); OpenAI/Claude/Ollama brain providers still sit in `legacy/` until item 2 above.
 
@@ -560,6 +626,6 @@ Deliberate, documented deferrals (not silent gaps — each has a one-line reason
 ## 8. First moves in the new session
 
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **717** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **727** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status (all passing) and the most recent gate run's honest failure breakdown.
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode. If the new slice depends on an unverified mechanism, probe it first (see §6).

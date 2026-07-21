@@ -1106,32 +1106,63 @@ _CANCEL_REASONS = {
 }
 
 
+# Capability kill switches — ONE source of truth (slice 35).
+#
+# Both uses derive from this map: tools_schema() stops ADVERTISING the verb,
+# and _disabled_by_switch() stops it EXECUTING. Until slice 35 those were two
+# hand-written lists and they drifted: fs/web/search only ever withheld, so a
+# direct execute() by name (a tool name still in conversation history after
+# the user flips the switch, or a prompt-injected page naming the verb) ran at
+# full power. Withholding is advice to the model; the enforcement is the
+# boundary. Add a verb here and it gets BOTH, automatically.
+_KILL_SWITCHES: dict[str, set[str]] = {
+    "shell.enabled": {"run_shell"},
+    "email.enabled": {"send_email"},
+    "web.enabled": {"browse_navigate", "read_page", "browse_click",
+                    "browse_fill", "browse_key", "close_browser"},
+    "search.enabled": {"web_search"},
+    # slices 32-33: real-filesystem access — the most powerful surface.
+    "fs.enabled": {"list_directory", "delete_path", "create_shortcut",
+                   "write_path", "read_path", "move_path", "rename_path",
+                   "copy_path"},
+}
+
+_SWITCH_LABELS = {
+    "shell.enabled": "shell execution",
+    "email.enabled": "email sending",
+    "web.enabled": "browser automation",
+    "search.enabled": "web search",
+    "fs.enabled": "real-filesystem access",
+}
+
+
+def _disabled_by_switch(name: str) -> str | None:
+    """The BLOCKED message if this verb's capability switch is off, else None.
+    Consulted before the gate AND before dry-run narration — a disabled
+    capability is refused, never rehearsed."""
+    for key, verbs in _KILL_SWITCHES.items():
+        if name in verbs and not settings.get(key, True):
+            return (f"BLOCKED: {_SWITCH_LABELS.get(key, key)} is disabled in "
+                    f"settings.")
+    return None
+
+
 def tools_schema() -> list[dict]:
-    """Schemas the model may call. A disabled high-risk verb (run_shell,
-    send_email) is withheld entirely — not even advertised (a direct call
-    still refuses via classify)."""
+    """Schemas the model may call. A verb whose capability switch is off is
+    withheld entirely — not even advertised — and _disabled_by_switch() also
+    refuses it if called directly by name."""
     withheld = set()
-    if not settings.get("shell.enabled", True):
-        withheld.add("run_shell")
-    if not settings.get("email.enabled", True):
-        withheld.add("send_email")
-    if not settings.get("web.enabled", True):
-        withheld.update({"browse_navigate", "read_page", "browse_click",
-                         "browse_fill", "browse_key", "close_browser"})
-    elif (settings.get("web.profile_mode", "isolated") == "real"
-          and not settings.get("web.allow_actions", False)):
+    for key, verbs in _KILL_SWITCHES.items():
+        if not settings.get(key, True):
+            withheld.update(verbs)
+    if (settings.get("web.enabled", True)
+            and settings.get("web.profile_mode", "isolated") == "real"
+            and not settings.get("web.allow_actions", False)):
         # Real-browser mode (slice 24) defaults to NAVIGATE + READ only —
         # committal actions are withheld until web.allow_actions is turned on
-        # (slice 25). A direct call also refuses via classify.
+        # (slice 25). This one IS separately enforced, in web.py's classifiers
+        # via _actions_blocked() — hence not part of _KILL_SWITCHES.
         withheld.update({"browse_click", "browse_fill", "browse_key"})
-    if not settings.get("search.enabled", True):
-        withheld.add("web_search")
-    if not settings.get("fs.enabled", True):
-        # slices 32-33: real-filesystem access (the most powerful surface) off ->
-        # withhold every real-FS verb (a direct call also refuses via classify).
-        withheld.update({"list_directory", "delete_path", "create_shortcut",
-                         "write_path", "read_path", "move_path", "rename_path",
-                         "copy_path"})
     return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]
 
 
@@ -1159,6 +1190,12 @@ def _execute_inner(name: str, args: dict, outcome: dict) -> str:
     prim = PRIMITIVES.get(name)
     if prim is None:
         return f"Unknown tool: {name}"
+    disabled = _disabled_by_switch(name)
+    if disabled is not None:
+        # Slice 35: the capability switch is a BOUNDARY, checked before the
+        # gate AND before dry-run — an off switch refuses, it doesn't rehearse.
+        outcome["tier"] = "blocked"
+        return disabled
     tracker = chain.current()
     if tracker is not None and tracker.dry_run:
         # Slice 18 dry-run: the mechanical guarantee. Narrate INSTEAD of
@@ -1172,7 +1209,12 @@ def _execute_inner(name: str, args: dict, outcome: dict) -> str:
             # The spec's third tier: refused outright. NEVER gates (no
             # approvable modal) and NEVER runs — the command dies here.
             return description or "BLOCKED: refused."
-        if tier == "confirm":
+        if tier != "auto":
+            # Slice 35: "auto" is the ONLY value that runs ungated. Anything
+            # else — "confirm", or a malformed/typo'd tier from a buggy
+            # classifier ("CONFIRM", "block", "") — takes the gate. Previously
+            # only the literal "confirm" gated and every other unrecognized
+            # string fell through to execution, inverting unknown -> CONFIRM.
             if description is None:
                 return "FAILED: nothing matching that to act on right now."
             command = gate_info.get("command") if gate_info else None

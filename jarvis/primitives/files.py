@@ -47,13 +47,48 @@ def _purge_old_trash() -> None:
         pass
 
 _README = AGENT_FILES_DIR / "README.md"
-if not _README.exists():
-    _README.write_text(
-        "# JARVIS agent workspace\n\n"
-        "Files JARVIS may manage (create/read/delete on request) live here.\n"
-        "Nothing outside this folder is reachable by the agent's file tools.\n",
-        encoding="utf-8",
-    )
+
+# Slice 35: this text must stay TRUE. The previous version claimed "Nothing
+# outside this folder is reachable by the agent's file tools" — accurate until
+# slices 32-33 gave fsaccess read/write/move/rename/copy/delete anywhere on the
+# PC, after which it was a false user-facing SAFETY claim. Overstating the cage
+# is worse than describing it plainly.
+_README_TEXT = (
+    "# JARVIS agent workspace\n"
+    "\n"
+    "This folder is the cage for JARVIS's **workspace** file tools —\n"
+    "`write_file`, `read_file`, `delete_file`, `search_files`. Those four\n"
+    "cannot touch anything outside this folder. Deleting one quarantines it\n"
+    "first, so it can be restored.\n"
+    "\n"
+    "It is NOT a limit on JARVIS as a whole. The real-filesystem tools\n"
+    "(`list_directory`, `read_path`, `write_path`, `move_path`, `rename_path`,\n"
+    "`copy_path`, `delete_path`, `create_shortcut`) reach anywhere on this PC.\n"
+    "Every one of their changes asks you first and shows the exact resolved\n"
+    "path; deletes and overwrites go to the Recycle Bin; catastrophic targets\n"
+    "are refused outright. Turn them off entirely with `fs.enabled` in\n"
+    "settings.\n"
+)
+
+
+def _ensure_readme() -> None:
+    """Write JARVIS's own workspace README, refreshing it when the text has
+    CHANGED — not only when the file is missing.
+
+    The original `if not _README.exists()` guard meant an existing install
+    could never be corrected: the pre-slice-32 containment claim survived on
+    disk long after fsaccess made it false. Content-driven refresh is what
+    makes a fixed falsehood actually reach the user. Never raises — a
+    read-only workspace must not break import."""
+    try:
+        if _README.exists() and _README.read_text(encoding="utf-8") == _README_TEXT:
+            return
+        _README.write_text(_README_TEXT, encoding="utf-8")
+    except Exception:
+        pass
+
+
+_ensure_readme()
 
 
 def _quarantine(target: Path) -> str:
