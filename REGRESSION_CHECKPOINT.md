@@ -17,7 +17,7 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: (slice 32) 705; (slice 31) 684; (slice 30) 671; (slice 29) 652; (slice 28) 644; (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
+> Previous checkpoints: (slice 33) 716; (slice 32) 705; (slice 31) 684; (slice 30) 671; (slice 29) 652; (slice 28) 644; (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
 > `867986f` (slice 23) 588; `90db8d4` (slice 22) 570; (slice 21, no new tests)
 > 550; (slice 20, harness only, not collected) 550; `5e3f0dc` (slice 19) 547;
 > `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
@@ -27,7 +27,49 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (716 tests: 705 + 11 real-FS authoring)
+## 1. Regression signal — test suite (717 tests: 716 + 1 threshold-drift pin)
+
+**Slice-34 full-suite run (2026-07-21):** **711 passed / 6 failed / 0 skipped**
+(312s, idle desktop). All 6 are the standing environmental cluster, **each
+re-verified GREEN individually**: 5 live-brain (`test_dryrun`, `test_email_live`,
+`test_files`, and BOTH `test_fsaccess` live tests) + 1 live-UIA
+(`test_input::test_live_scroll_notepad_screen_changes`). Burst-probe 5/5
+healthy. **Diagnostic note worth keeping:** the two fsaccess tests failed
+*again* when re-run as a group of three — only passing when run strictly ONE
+at a time (12.1s / 10.0s). A "re-run in isolation" that still bundles several
+live-brain tests is itself a cluster and reproduces the RPM failure; isolation
+means one test, alone. Both fsaccess tests' FIRST brain call succeeded and only
+the SECOND failed — the per-minute cap biting mid-test, not a logic fault.
+No deterministic test failed; nothing in slice 34 touches these paths.
+
+### Slice 34 — memory retrieval recall: MEASURED, no safe lever, nothing tuned
+- **The slice-16 outcome repeated: measurement overruled the plan.** The goal
+  was driving the residual ~18% paraphrase miss down. Every candidate lever was
+  measured and **ruled out**; no threshold/model change shipped, because each
+  would have cost more privacy than it bought recall.
+- **Root cause (new, and the reason this gap is not a tuning gap):** the 4
+  missing paraphrases score cosine **0.169-0.280**, while 3 genuinely
+  UNRELATED negatives score **0.292-0.453**. The negatives *outrank* the
+  misses, so **no threshold can separate them** — it is a small-embedding-model
+  discrimination limit.
+- **Levers measured dead:** lowering `semantic_threshold` (0.35→0.30 buys ZERO
+  recall and DOUBLES false-surface; →0.22 buys +3 recall and TRIPLES it);
+  widening `retrieve_k` (0 of the 4 misses were k-truncated — all failed the
+  threshold outright); stemming the lexical guard (verified computationally:
+  an aggressive stemmer creates overlap on NONE of the 4 pairs).
+- **Stronger embedding model — probed head-to-head, also dead.** Best
+  paraphrase recall at the false-surface≤0.067 bar: shipped **MiniLM-L6-v2
+  0.818**, bge-small-en-v1.5 0.773 (mean) / 0.727 (cls+query-instruction) /
+  0.682 (cls), gte-small never reaches the bar at all (cosines bunch near 0.9).
+  Those rival numbers are *optimistic* (computed ignoring top-k truncation),
+  so even their ceiling is below MiniLM's delivered figure.
+- **Shipped:** `harness_memory_eval.py --verbose` (a permanent instrument:
+  per-query cosine/margin/miss-reason, per-negative headroom, and a threshold
+  sweep printing win beside cost) + a real latent-bug fix — `memory.py`'s
+  inline fallback read `0.30` while `DEFAULT_SETTINGS` read `0.35`, now pinned
+  equal by `test_semantic_threshold_fallback_matches_settings_default`.
+- Metrics **unchanged** and re-verified this slice: paraphrase 0.818, keyword
+  1.000, distractor top-1 1.000, false-surface 0.067.
 
 **Slice-33 full-suite run (2026-07-20):** **709 passed / 7 failed / 0 skipped**
 (262s, idle desktop). All 7 are live-brain tests — the RPM cluster now includes
@@ -485,6 +527,14 @@ Frozen golden set: 25 memories, 22 zero-token-overlap paraphrase queries
 sibling-distractor probes. Local MiniLM embeddings (onnxruntime — no new
 deps, no network, no key; `python -m jarvis.core.embedder --setup` once).
 Re-run the harness rather than trusting this table.
+
+> **Slice-34 re-measurement (2026-07-21): these numbers still hold, and the
+> residual is now explained.** The 4 remaining paraphrase misses are NOT a
+> tuning gap — they score 0.169-0.280 while 3 unrelated negatives score
+> 0.292-0.453, so no threshold separates them, and three rival embedding
+> models all scored WORSE at the false-surface bar. Run
+> `python tests/harness_memory_eval.py --verbose` for the per-query evidence
+> before attempting this again.
 
 | Metric | lexical (slice 10) | hybrid (shipped, thr 0.35) |
 |---|---|---|

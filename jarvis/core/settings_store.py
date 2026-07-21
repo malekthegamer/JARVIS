@@ -105,6 +105,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "semantic_threshold": 0.35,  # min cosine to surface — tuned on the
                                      # golden set (0.32-0.35 plateau: recall
                                      # 0.818, false-surface == lexical baseline)
+                                     # Slice 34 re-measured: do NOT lower this
+                                     # to chase the 4 remaining misses. They
+                                     # score 0.169-0.280 while 3 UNRELATED
+                                     # negatives score 0.292-0.453, so every
+                                     # lower value costs more privacy than it
+                                     # buys recall (0.30 buys zero recall and
+                                     # doubles false-surface). See
+                                     # harness_memory_eval.py --verbose.
         "pinned_max": 10,            # newest pinned prefs always in the prompt
     },
     "wake": {

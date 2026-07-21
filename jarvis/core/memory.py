@@ -191,7 +191,7 @@ class MemoryStore:
             qvec = None  # degrade, never break think()
         if qvec is None:
             return self._retrieve_lexical(query, k, threshold)
-        sem_threshold = float(settings.get("memory.semantic_threshold", 0.30))
+        sem_threshold = float(settings.get("memory.semantic_threshold", 0.35))
         q = set(_tokens(query))
         scored = []
         with self._lock:

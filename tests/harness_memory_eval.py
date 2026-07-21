@@ -20,6 +20,25 @@ numbers is system tuning; editing the set after seeing results is benchmark
 gaming — don't. Paraphrase queries are mechanically validated to share ZERO
 content tokens with their target (via memory._tokens); the harness refuses
 to run if that invariant breaks.
+
+--- Slice 34: what has ALREADY been measured and ruled out (don't redo it) ---
+Run with --verbose for the per-query cosines behind all of this.
+  * Lowering semantic_threshold: DEAD. The 4 remaining paraphrase misses score
+    0.169-0.280, but 3 UNRELATED negatives score 0.292-0.453 — the negatives
+    OUTRANK the misses, so no threshold separates them. 0.35->0.30 buys zero
+    recall and doubles false-surface; ->0.22 buys +3 recall and triples it.
+  * Widening retrieve_k: DEAD. All 4 misses are below-threshold, 0 k-truncated.
+  * Stemming the lexical guard: DEAD. None of the 4 pairs share a
+    morphological root (unwell/doctor, type-online/wifi-password,
+    verbose/replies, house-locked/spare-key) — there is no variant to recover.
+  * A stronger embedding model: DEAD, probed head-to-head on this set at the
+    false-surface<=0.067 bar — bge-small-en-v1.5 0.773 (mean) / 0.727 (cls +
+    query-instruction) / 0.682 (cls), gte-small never even reaches the bar
+    (its cosines bunch near 0.9). Shipped MiniLM-L6-v2 = 0.818, and those
+    rival numbers are OPTIMISTIC (computed ignoring top-k truncation).
+The residual ~18% is a small-embedding-model discrimination limit, not a
+tuning gap. Reopen only with a materially better retrieval model (or a
+rerank stage), and re-measure with this harness before believing it.
 """
 from __future__ import annotations
 
@@ -167,7 +186,117 @@ def _force_mode(mode: str) -> None:
         sys.exit("embedder model missing — run: python -m jarvis.core.embedder --setup")
 
 
-def run(mode: str, k: int) -> None:
+def _cos(qvec, rec) -> float:
+    vec = rec.get("vec")
+    return sum(a * b for a, b in zip(qvec, vec)) if vec else -1.0
+
+
+def _lex_hit(qtok: set, rec: dict, lex_thr: int) -> bool:
+    return bool(jmemory.LEXICAL_GUARD and qtok
+                and len(qtok & set(_tokens(rec["text"]))) >= lex_thr)
+
+
+def _diagnose(store: MemoryStore, ids: list[str], k: int) -> None:
+    """Slice 34 Stage 0 — WHY each paraphrase miss missed.
+
+    Additive diagnostic ONLY: it re-derives cosines outside retrieve() and
+    prints them. It does not touch the golden set or the scoring logic that
+    produced the numbers above. Reaching into store._records is deliberate,
+    the same 'harness pokes internals for a diagnostic' style as the
+    LEXICAL_GUARD knob in _force_mode.
+
+    A miss is one of two structurally different things, and the fix differs:
+      below-threshold : cosine never cleared semantic_threshold  -> threshold/
+                        embedding lever
+      k-truncated     : it qualified but lost its top-k slot     -> retrieve_k
+                        lever
+    """
+    try:
+        from jarvis.core import embedder
+        if not embedder.available():
+            print("\n(verbose diagnostic needs the embedder — skipped in this mode)")
+            return
+    except ImportError:
+        print("\n(verbose diagnostic needs jarvis.core.embedder — skipped)")
+        return
+
+    sem_thr = float(settings.get("memory.semantic_threshold", 0.30))
+    lex_thr = int(settings.get("memory.relevance_threshold", 1))
+    recs = store._records  # intentional diagnostic reach-in (see docstring)
+
+    print(f"\n--- per-paraphrase diagnostic (semantic_threshold={sem_thr}) ---")
+    print(f"{'query':<50}{'cos':>7}{'margin':>8}{'rank':>6}  verdict")
+    below = trunc = 0
+    for q, idx in PARAPHRASE:
+        qvec = embedder.embed([q])[0]
+        qtok = set(_tokens(q))
+        target = next(r for r in recs if r["id"] == ids[idx])
+        c = _cos(qvec, target)
+        qualified = (c >= sem_thr) or _lex_hit(qtok, target, lex_thr)
+        # how many OTHER records outrank it among those that also qualify
+        better = sum(1 for r in recs
+                     if not r.get("pinned") and r["id"] != target["id"]
+                     and _cos(qvec, r) > c
+                     and (_cos(qvec, r) >= sem_thr or _lex_hit(qtok, r, lex_thr)))
+        hit = any(r["id"] == ids[idx] for r in store.retrieve(q, k=k))
+        if hit:
+            verdict = "hit"
+        elif qualified:
+            verdict = "MISS  k-truncated"
+            trunc += 1
+        else:
+            verdict = "MISS  below-threshold"
+            below += 1
+        print(f"{q[:50]:<50}{c:>7.3f}{c - sem_thr:>+8.3f}{better + 1:>6}  {verdict}")
+    print(f"  -> {below} below-threshold, {trunc} k-truncated")
+
+    print("\n--- per-negative diagnostic (how close the privacy cost runs) ---")
+    print(f"{'negative query':<50}{'maxcos':>8}{'margin':>8}  surfaced?")
+    for q in NEGATIVE:
+        qvec = embedder.embed([q])[0]
+        qtok = set(_tokens(q))
+        live = [r for r in recs if not r.get("pinned")]
+        best = max(_cos(qvec, r) for r in live)
+        got = store.retrieve(q, k=k)
+        if got:
+            drivers = []
+            for r in got:
+                full = next(x for x in recs if x["id"] == r["id"])
+                # BOTH gates can fire — showing only one would misattribute
+                # which lever could actually remove this surface.
+                why = ((["sem"] if _cos(qvec, full) >= sem_thr else [])
+                       + (["lex"] if _lex_hit(qtok, full, lex_thr) else []))
+                drivers.append("+".join(why) or "?")
+            mark = f"YES [{','.join(drivers)}] {got[0]['text'][:30]!r}"
+        else:
+            mark = "no"
+        print(f"{q[:50]:<50}{best:>8.3f}{best - sem_thr:>+8.3f}  {mark}")
+
+    # The money table: what a threshold retune would BUY and COST, together.
+    print("\n--- threshold sweep (win beside cost, HARNESS 6b) ---")
+    print(f"{'thr':>6}{'paraphrase':>12}{'keyword':>10}{'distr top1':>12}"
+          f"{'FALSE-SURFACE':>15}")
+    original = settings.get("memory.semantic_threshold", None)
+    try:
+        for cand in (0.15, 0.20, 0.22, 0.25, 0.27, 0.30, 0.32, 0.35, 0.40, 0.45):
+            settings.set("memory.semantic_threshold", cand, persist=False)
+            p = sum(1 for q, i in PARAPHRASE
+                    if any(r["id"] == ids[i] for r in store.retrieve(q, k=k)))
+            kw = sum(1 for q, i in KEYWORD
+                     if any(r["id"] == ids[i] for r in store.retrieve(q, k=k)))
+            d = sum(1 for q, i in DISTRACTOR
+                    if (lambda res: bool(res and res[0]["id"] == ids[i]))(
+                        store.retrieve(q, k=k)))
+            fs = sum(1 for q in NEGATIVE if store.retrieve(q, k=k))
+            flag = "  <- shipped" if abs(cand - float(original or -1)) < 1e-9 else ""
+            print(f"{cand:>6.2f}{p / len(PARAPHRASE):>12.3f}"
+                  f"{kw / len(KEYWORD):>10.3f}{d / len(DISTRACTOR):>12.3f}"
+                  f"{fs / len(NEGATIVE):>15.3f}{flag}")
+    finally:
+        settings.set("memory.semantic_threshold", original, persist=False)
+
+
+def run(mode: str, k: int, verbose: bool = False) -> None:
     _validate_paraphrase_invariant()
     _force_mode(mode)
     tmp = Path(tempfile.mkdtemp(prefix="jarvis-memeval-")) / "memories.bin"
@@ -206,6 +335,9 @@ def run(mode: str, k: int) -> None:
     print(f"median retrieve()    : {statistics.median(latencies):.1f} ms "
           f"({len(latencies)} calls)")
 
+    if verbose:
+        _diagnose(store, ids, k)
+
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
@@ -213,5 +345,7 @@ if __name__ == "__main__":
                     default="hybrid")
     ap.add_argument("--k", type=int,
                     default=int(settings.get("memory.retrieve_k", 5)))
+    ap.add_argument("--verbose", action="store_true",
+                    help="per-query cosines, miss reasons + a threshold sweep")
     ns = ap.parse_args()
-    run(ns.mode, ns.k)
+    run(ns.mode, ns.k, ns.verbose)

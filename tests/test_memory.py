@@ -199,6 +199,26 @@ def test_semantic_threshold_gates_low_similarity(store_path, fake_embedder):
     assert out == [], out
 
 
+def test_semantic_threshold_fallback_matches_settings_default():
+    """memory.py's inline get() fallback must equal DEFAULT_SETTINGS.
+
+    Slice 34: these had drifted (0.30 in memory.py vs 0.35 in settings_store).
+    Dead code while the key exists, but a settings.json wipe would silently
+    retrieve at a threshold nobody tuned. Pin them together.
+    """
+    import inspect
+    import re
+
+    from jarvis.core import memory as jmemory
+    from jarvis.core.settings_store import DEFAULT_SETTINGS
+
+    src = inspect.getsource(jmemory.MemoryStore.retrieve)
+    found = re.search(r'settings\.get\(\s*"memory\.semantic_threshold"\s*,\s*'
+                      r'([0-9.]+)\s*\)', src)
+    assert found, "semantic_threshold fallback not found in retrieve()"
+    assert float(found.group(1)) == DEFAULT_SETTINGS["memory"]["semantic_threshold"]
+
+
 def test_hybrid_keeps_lexical_keyword_hit(store_path, fake_embedder):
     """A record whose fake cosine is LOW but which shares a real content
     token must still surface — keyword recall can never regress."""

@@ -18,7 +18,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 716 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 717 passed, 0 failed, 0 skipped is the baseline** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -221,6 +221,38 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 34 — memory retrieval recall: measured, no safe lever, nothing tuned
+- **The slice-16 pattern repeated: the measurement overruled the plan, and the
+  honest outcome was to ship the instrument, not a change.** Target was the
+  residual ~18% paraphrase miss rate (recall 0.818). Every lever was measured
+  and **ruled out** because each cost more privacy (false-surface) than it
+  bought recall. Shipped metrics are **unchanged** — deliberately.
+- **Root cause found (this is the real deliverable):** the residual is a
+  **small-embedding-model discrimination limit, not a tuning gap.** The 4
+  missing paraphrases score cosine 0.169-0.280 while 3 genuinely UNRELATED
+  negatives score 0.292-0.453 — the negatives *outrank* the misses, so no
+  threshold can separate them.
+- **Levers measured dead:** threshold (0.35→0.30 buys ZERO recall and DOUBLES
+  false-surface; →0.22 buys +3 and TRIPLES it); `retrieve_k` (0 of 4 misses
+  were k-truncated); stemming (computationally verified to create overlap on
+  NONE of the 4 pairs); **and a stronger embedding model, probed head-to-head**
+  — at the false-surface≤0.067 bar: MiniLM (shipped) **0.818**, bge-small-en-v1.5
+  0.773/0.727/0.682 across poolings+query-instruction, gte-small never reaches
+  the bar (its cosines bunch near 0.9). The rivals' numbers are *optimistic*
+  (ignore top-k truncation), so even their ceiling loses.
+- **Shipped:** `harness_memory_eval.py --verbose` — a permanent diagnostic
+  (per-query cosine/margin/miss-reason, per-negative headroom, and a threshold
+  sweep printing the win beside the cost), plus its docstring now records every
+  dead lever so the experiment isn't repeated. Also fixed a real latent bug:
+  `memory.py`'s inline `semantic_threshold` fallback read `0.30` while
+  `DEFAULT_SETTINGS` read `0.35` — dead code today, but a `settings.json` wipe
+  would have silently retrieved at an untuned threshold. Pinned equal by
+  `test_semantic_threshold_fallback_matches_settings_default`.
+- **Gate note (honest):** 711/6/0. All 6 are the standing environmental cluster
+  and each was re-verified green **individually**. New lesson recorded: a
+  "re-run in isolation" that still bundles 3 live-brain tests **is itself a
+  cluster** and reproduces the RPM failure — isolation means ONE test, alone.
+
 ### Manual full-stack live acceptance (slices 29–33, 2026-07-20, user-run)
 After slice 33 shipped, the user ran a single manual session exercising all five
 slices end to end through the real HUD (not automated tests) — the workspace/
@@ -350,7 +382,7 @@ e:\J.A.R.V.I.S\
                               audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
                               read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 716 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 717 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -441,7 +473,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 716 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 717 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -459,7 +491,7 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
 - **Vision (re-measured slice 16, gap closed slice 17):** confabulation on blank targets **did NOT reproduce**; localization 1.0 easy / 0.88 hard; destructive vocab is no longer English-only (i18n + CJK). Adjacent-icon mis-localization closed by slice-17 pre-click verification (wrong-click 0.042 → 0.000 at a 0.023 false-refusal cost, ~2× latency on the vision path). **Residual:** ~2% of legitimate icon clicks are refused (fails closed, retryable). Re-run `tests/harness_vision_eval.py` + `tests/harness_click_verify_eval.py` rather than trusting these numbers.
 - **Destructive vocabulary is curated, not exhaustive** — an unlisted language/verb still classifies AUTO on the fast path.
 - **run_shell denylist is a BACKSTOP, not a boundary** — trivially defeated by obfuscation (tested). CONFIRM is the primary control. cmd.exe only.
-- **Memory (re-measured slice 19):** semantic + lexical-guarded retrieval, paraphrase recall 0.818 on the frozen golden set, but ~18% of paraphrases still miss (below the 0.35 cosine threshold); MiniLM is English-centric; needs the one-time model download (`python -m jarvis.core.embedder --setup`) else honest lexical fallback; a pinned memory is in EVERY prompt by design.
+- **Memory (re-measured slice 19; residual EXPLAINED slice 34):** semantic + lexical-guarded retrieval, paraphrase recall 0.818 on the frozen golden set, but ~18% of paraphrases still miss; MiniLM is English-centric; needs the one-time model download (`python -m jarvis.core.embedder --setup`) else honest lexical fallback; a pinned memory is in EVERY prompt by design. **Slice 34 measured the residual and found NO safe lever — do not re-attempt without reading `harness_memory_eval.py`'s docstring.** The 4 misses score 0.169-0.280 while 3 *unrelated* negatives score 0.292-0.453, so the negatives outrank the misses and no threshold separates them; lowering the threshold costs more privacy than it buys recall (0.35→0.30 = zero recall gain, double the false-surface); k-widening is irrelevant (0 misses were k-truncated); stemming recovers nothing (verified computationally on all 4 pairs); and three rival embedding models all scored WORSE at the false-surface≤0.067 bar (bge-small 0.773/0.727/0.682, gte-small never reaches it, vs MiniLM 0.818). It is a small-model discrimination limit, reopenable only with a materially better retrieval model or a rerank stage.
 - **Brightness** genuinely unsupported on this monitor (hardware, not code).
 - **DND (slice 12)**: uses the public UI surface, not a silent API — opens a Settings window (~2–4 s, focus-steal). Matches the toggle by automation_id/name; a Windows update renaming both → honest failure until the matcher is updated.
 - **Email**: "accepted by server" is the strongest verifiable claim. Google test-mode OAuth refresh tokens expire after **7 days** unless the OAuth app is published to production. Send-only, one recipient, one caged attachment.
@@ -511,7 +543,7 @@ All four spec §1.6 scripts pass; real-browser navigate+read AND committal actio
 2. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these visibly-disabled ("not ported yet"). Each needs a tool-calling adapter mapping the full primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
 3. **Double-click reliability** (low priority — user call, 2026-07-20) — `click kind='double'` is confirmed flaky in real manual use, real mouse/UIA timing (§5). Single-click and right-click are solid. Not urgent; revisit only if it becomes a real friction point.
 4. **Real-browser mode, round 3** — cross-host click re-gating shipped in slice 27. Remaining residuals: broader rich-editor `fill()` coverage beyond Claude's ProseMirror box (Slate/Draft/Lexical/CodeMirror); a HUD indicator for when real-browser mode / allow_actions is live (user deprioritized 2026-07-19); and the narrowed slice-27 JS-navigation residual (a named-benign button that navigates cross-host via JS is flagged post-click, not pre-gated — request-interception was considered and rejected as deadlock-risky).
-5. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags, driving the residual ~18% paraphrase misses down (re-run `harness_memory_eval.py` first).
+5. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags. **The "drive the ~18% paraphrase misses down" item is CLOSED as measured-and-not-safely-reachable (slice 34)** — every lever (threshold, retrieve_k, stemming, three rival embedding models) was measured and each cost more privacy than it bought recall; see §5 and `harness_memory_eval.py --verbose`. Reopen only with a materially better retrieval model or a rerank stage, and re-measure before believing it.
 6. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
 7. **Real-FS round 3 (small, optional)** — a `make_folder` verb (deferred from slice 33, same `fsaccess` core); PowerShell as a second `run_shell` backend (cmd.exe only).
 8. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
@@ -528,6 +560,6 @@ Deliberate, documented deferrals (not silent gaps — each has a one-line reason
 ## 8. First moves in the new session
 
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **606** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **717** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status (all passing) and the most recent gate run's honest failure breakdown.
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode. If the new slice depends on an unverified mechanism, probe it first (see §6).
