@@ -24,11 +24,13 @@ resolution all use pywin32 (already present). Every function returns
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 from jarvis import config
 
 LIST_CAP = 200                 # max entries returned by list_directory
+READ_MAX_CHARS = 256 * 1024    # cap read_path so a huge file can't blow up context
 
 
 # ------------------------------------------------------------------ resolution
@@ -284,3 +286,233 @@ def classify_create_shortcut(args: dict) -> dict:
     except Exception:
         return {"tier": "confirm",
                 "description": "Create a shortcut (couldn't classify — confirming)."}
+
+
+# ================================================================== slice 33:
+# authoring verbs — write / read / move / rename / copy anywhere. Same proven
+# core (resolve_user_path + classify_path_risk); every overwrite/clobber
+# recycles the prior version first so it stays recoverable (delete parity).
+
+def _write_text(path: Path, content: str) -> None:
+    path.write_text(content, encoding="utf-8")
+
+
+def _read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def _move(src: Path, dest: Path) -> None:
+    shutil.move(str(src), str(dest))
+
+
+def _copy(src: Path, dest: Path) -> None:
+    if Path(src).is_dir():
+        shutil.copytree(str(src), str(dest))
+    else:
+        shutil.copy2(str(src), str(dest))
+
+
+def _max_write_kb() -> int:
+    from jarvis.core.settings_store import settings
+    try:
+        return max(1, int(settings.get("fs.max_write_kb", 256)))
+    except (TypeError, ValueError):
+        return 256
+
+
+def write_path(path: str, content) -> dict:
+    """Write/create a UTF-8 text file anywhere. An overwrite recycles the prior
+    file first (recoverable). Creates parent dirs. Never raises."""
+    p = resolve_user_path(path)
+    if p is None:
+        return {"ok": False, "message": f"Couldn't understand the path '{path}'."}
+    if p.exists() and p.is_dir():
+        return {"ok": False, "message": f"'{p}' is a folder — I can't write over it."}
+    content = "" if content is None else str(content)
+    if len(content.encode("utf-8")) > _max_write_kb() * 1024:
+        return {"ok": False,
+                "message": f"That content is too large to write (> {_max_write_kb()} KB)."}
+    try:
+        replaced = p.exists()
+        if replaced:
+            _recycle(p)                 # old version -> Recycle Bin (recoverable)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        _write_text(p, content)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't write '{p}': {exc}"}
+    verb = "Replaced" if replaced else "Wrote"
+    tail = " (the previous version is in the Recycle Bin)" if replaced else ""
+    return {"ok": True, "message": f"{verb} '{p}' ({len(content)} chars){tail}."}
+
+
+def read_path(path: str) -> dict:
+    """Read a UTF-8 text file's content anywhere (AUTO). Size-capped. {ok,
+    content, message}. Never raises."""
+    p = resolve_user_path(path)
+    if p is None:
+        return {"ok": False, "content": "", "message": f"Couldn't understand the path '{path}'."}
+    if not p.exists():
+        return {"ok": False, "content": "", "message": f"There's no file at '{p}'."}
+    if p.is_dir():
+        return {"ok": False, "content": "",
+                "message": f"'{p}' is a folder — use list_directory to browse it."}
+    try:
+        raw = _read_text(p)
+    except Exception as exc:
+        return {"ok": False, "content": "", "message": f"Couldn't read '{p}': {exc}"}
+    if len(raw) > READ_MAX_CHARS:
+        return {"ok": True, "content": raw[:READ_MAX_CHARS],
+                "message": f"Read '{p}' (truncated to {READ_MAX_CHARS} of {len(raw)} chars)."}
+    return {"ok": True, "content": raw, "message": f"Read '{p}' ({len(raw)} chars)."}
+
+
+def _place(src: Path, dest: Path, mover) -> dict:
+    """Shared move/copy landing logic: dest-is-dir -> go inside it; an existing
+    FILE at the effective path is recycled first (recoverable); an existing
+    FOLDER is refused (no silent merge). Returns {ok, eff} / {ok:False}."""
+    eff = (dest / src.name) if (dest.exists() and dest.is_dir()) else dest
+    if eff.exists():
+        if eff.is_dir():
+            return {"ok": False,
+                    "message": f"a folder already exists at '{eff}' — I won't replace it."}
+        _recycle(eff)
+    eff.parent.mkdir(parents=True, exist_ok=True)
+    mover(src, eff)
+    return {"ok": True, "eff": eff}
+
+
+def move_path(source: str, dest: str) -> dict:
+    """Move (or rename) a file/folder. Never raises."""
+    s = resolve_user_path(source)
+    d = resolve_user_path(dest)
+    if s is None or d is None:
+        return {"ok": False, "message": f"Couldn't understand the paths ('{source}' -> '{dest}')."}
+    if not s.exists():
+        return {"ok": False, "message": f"There's nothing to move at '{s}'."}
+    try:
+        r = _place(s, d, _move)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't move '{s}': {exc}"}
+    if not r["ok"]:
+        return r
+    return {"ok": True, "message": f"Moved '{s}' to '{r['eff']}'."}
+
+
+def rename_path(path: str, new_name: str) -> dict:
+    """Rename in place (a move within the same folder). Never raises."""
+    new_name = str(new_name or "").strip()
+    if not new_name or any(sep in new_name for sep in ("/", "\\")) or ".." in new_name:
+        return {"ok": False,
+                "message": "Give me just a new name (not a path) to rename to."}
+    p = resolve_user_path(path)
+    if p is None:
+        return {"ok": False, "message": f"Couldn't understand the path '{path}'."}
+    if not p.exists():
+        return {"ok": False, "message": f"There's nothing to rename at '{p}'."}
+    try:
+        r = _place(p, p.parent / new_name, _move)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't rename '{p}': {exc}"}
+    if not r["ok"]:
+        return r
+    return {"ok": True, "message": f"Renamed '{p}' to '{r['eff']}'."}
+
+
+def copy_path(source: str, dest: str) -> dict:
+    """Copy a file/folder (the source stays). Never raises."""
+    s = resolve_user_path(source)
+    d = resolve_user_path(dest)
+    if s is None or d is None:
+        return {"ok": False, "message": f"Couldn't understand the paths ('{source}' -> '{dest}')."}
+    if not s.exists():
+        return {"ok": False, "message": f"There's nothing to copy at '{s}'."}
+    try:
+        r = _place(s, d, _copy)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't copy '{s}': {exc}"}
+    if not r["ok"]:
+        return r
+    return {"ok": True, "message": f"Copied '{s}' to '{r['eff']}'."}
+
+
+# ---- classifiers (mirror classify_delete_path; verbatim path(s) in `command`) ----
+
+def _confirm_or_block_path(raw: str, action: str, extra_block: str = "") -> dict | None:
+    """None => the path is fine (caller builds the confirm); a dict => BLOCKED."""
+    p = resolve_user_path(raw)
+    if p is None:
+        return None
+    level, why = classify_path_risk(p)
+    if level == "blocked":
+        return {"tier": "blocked",
+                "description": f"BLOCKED: I won't {action} — {why}{extra_block}"}
+    return None
+
+
+def classify_write_path(args: dict) -> dict:
+    raw = str(args.get("path", ""))
+    try:
+        blocked = _confirm_or_block_path(raw, "write there")
+        if blocked:
+            return blocked
+        p = resolve_user_path(raw)
+        if p is None:
+            return {"tier": "confirm", "command": raw,
+                    "description": f"Write '{raw}' (couldn't resolve — confirming)."}
+        verb = "Overwrite" if p.exists() else "Create"
+        note = " (the current version goes to the Recycle Bin)" if p.exists() else ""
+        return {"tier": "confirm", "command": str(p),
+                "description": f"{verb} this file on your PC{note}: {p}"}
+    except Exception:
+        return {"tier": "confirm", "command": raw,
+                "description": f"Write '{raw}' (couldn't classify — confirming)."}
+
+
+def classify_move_path(args: dict) -> dict:
+    src = str(args.get("source", ""))
+    dst = str(args.get("dest", ""))
+    try:
+        for raw, act in ((src, "move that"), (dst, "move it there")):
+            b = _confirm_or_block_path(raw, act)
+            if b:
+                return b
+        s, d = resolve_user_path(src), resolve_user_path(dst)
+        return {"tier": "confirm", "command": f"{s or src}  ->  {d or dst}",
+                "description": f"Move '{s or src}' to '{d or dst}'."}
+    except Exception:
+        return {"tier": "confirm", "description": "Move a file (couldn't classify — confirming)."}
+
+
+def classify_rename_path(args: dict) -> dict:
+    path = str(args.get("path", ""))
+    new_name = str(args.get("new_name", ""))
+    try:
+        p = resolve_user_path(path)
+        if p is not None:
+            level, why = classify_path_risk(p)
+            if level == "blocked":
+                return {"tier": "blocked", "description": f"BLOCKED: I won't rename that — {why}"}
+            dest = p.parent / new_name
+            dl, dwhy = classify_path_risk(dest)
+            if dl == "blocked":
+                return {"tier": "blocked", "description": f"BLOCKED: {dwhy}"}
+            return {"tier": "confirm", "command": f"{p}  ->  {dest}",
+                    "description": f"Rename '{p}' to '{new_name}'."}
+        return {"tier": "confirm", "description": f"Rename '{path}' (couldn't resolve — confirming)."}
+    except Exception:
+        return {"tier": "confirm", "description": "Rename a file (couldn't classify — confirming)."}
+
+
+def classify_copy_path(args: dict) -> dict:
+    # Copying doesn't destroy the source, so only the DESTINATION is gated.
+    src = str(args.get("source", ""))
+    dst = str(args.get("dest", ""))
+    try:
+        b = _confirm_or_block_path(dst, "copy it there")
+        if b:
+            return b
+        s, d = resolve_user_path(src), resolve_user_path(dst)
+        return {"tier": "confirm", "command": f"{s or src}  ->  {d or dst}",
+                "description": f"Copy '{s or src}' to '{d or dst}'."}
+    except Exception:
+        return {"tier": "confirm", "description": "Copy a file (couldn't classify — confirming)."}

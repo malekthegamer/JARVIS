@@ -358,6 +358,37 @@ def _run_create_shortcut(args: dict, gate_info: dict | None = None) -> str:
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
+def _run_write_path(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.write_path(str(args.get("path", "")), args.get("content", ""))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_read_path(args: dict, gate_info: dict | None = None) -> str:
+    """Read a file's content anywhere, wrapped in the untrusted-data boundary
+    (a file may hold web content JARVIS saved) — same discipline as read_file."""
+    name = str(args.get("path", ""))
+    r = fsaccess.read_path(name)
+    if not r["ok"]:
+        return "FAILED: " + r["message"]
+    wrapped = web._wrap_untrusted("FILE CONTENT", f"from {name}", r["content"])
+    return f"OK: {r['message']}\n{wrapped}"
+
+
+def _run_move_path(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.move_path(str(args.get("source", "")), str(args.get("dest", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_rename_path(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.rename_path(str(args.get("path", "")), str(args.get("new_name", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_copy_path(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.copy_path(str(args.get("source", "")), str(args.get("dest", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_click(args: dict, gate_info: dict | None = None) -> str:
     """Click, with screenshot-diff verify. Three cases, decided by gate_info:
     - vision_point present → click those coords (vision fallback path);
@@ -890,6 +921,70 @@ PRIMITIVES: dict[str, dict] = {
                                                    "description": "Where to put it (optional; default 'desktop')"}},
                                   "required": ["target"]}},
     },
+    "write_path": {
+        "fn": _run_write_path,
+        "classify": fsaccess.classify_write_path,   # BLOCKED protected / CONFIRM else
+        "schema": {"name": "write_path",
+                   "description": ("Create or overwrite a TEXT file ANYWHERE on the PC "
+                                   "(e.g. save a note to the Desktop). The user approves "
+                                   "the exact path first; overwriting recycles the old "
+                                   "version (recoverable). Text only."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "path": {"type": "string",
+                                               "description": "Full path/alias of the file to write (e.g. 'desktop/notes.txt')"},
+                                      "content": {"type": "string", "description": "The full text to write"}},
+                                  "required": ["path", "content"]}},
+    },
+    "read_path": {
+        "fn": _run_read_path,
+        "tier": "auto",
+        "schema": {"name": "read_path",
+                   "description": ("Read a TEXT file's contents from ANYWHERE on the PC. "
+                                   "Read-only. Use to see what a file says."),
+                   "parameters": {"type": "object",
+                                  "properties": {"path": {"type": "string",
+                                                          "description": "Full path/alias of the file to read"}},
+                                  "required": ["path"]}},
+    },
+    "move_path": {
+        "fn": _run_move_path,
+        "classify": fsaccess.classify_move_path,
+        "schema": {"name": "move_path",
+                   "description": ("Move a file or folder to a new location on the PC. "
+                                   "The user approves source and destination first; "
+                                   "system-critical locations are refused."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "source": {"type": "string", "description": "Path/alias to move"},
+                                      "dest": {"type": "string", "description": "Destination path or folder"}},
+                                  "required": ["source", "dest"]}},
+    },
+    "rename_path": {
+        "fn": _run_rename_path,
+        "classify": fsaccess.classify_rename_path,
+        "schema": {"name": "rename_path",
+                   "description": ("Rename a file or folder in place. The user approves "
+                                   "first. Give just the NEW NAME, not a path."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "path": {"type": "string", "description": "Path/alias to rename"},
+                                      "new_name": {"type": "string", "description": "The new name (e.g. 'groceries.txt')"}},
+                                  "required": ["path", "new_name"]}},
+    },
+    "copy_path": {
+        "fn": _run_copy_path,
+        "classify": fsaccess.classify_copy_path,
+        "schema": {"name": "copy_path",
+                   "description": ("Copy a file or folder to another location (the "
+                                   "original stays). The user approves the destination "
+                                   "first."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "source": {"type": "string", "description": "Path/alias to copy"},
+                                      "dest": {"type": "string", "description": "Destination path or folder"}},
+                                  "required": ["source", "dest"]}},
+    },
     "close_window": {
         "fn": _run_close_window,
         "tier": "confirm",
@@ -1032,9 +1127,11 @@ def tools_schema() -> list[dict]:
     if not settings.get("search.enabled", True):
         withheld.add("web_search")
     if not settings.get("fs.enabled", True):
-        # slice 32: real-filesystem access (the most powerful surface) off ->
-        # withhold all three verbs (a direct call also refuses via classify).
-        withheld.update({"list_directory", "delete_path", "create_shortcut"})
+        # slices 32-33: real-filesystem access (the most powerful surface) off ->
+        # withhold every real-FS verb (a direct call also refuses via classify).
+        withheld.update({"list_directory", "delete_path", "create_shortcut",
+                         "write_path", "read_path", "move_path", "rename_path",
+                         "copy_path"})
     return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]
 
 

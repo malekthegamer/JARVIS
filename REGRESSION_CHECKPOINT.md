@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-20 (after Slice 31 — clipboard)
-**Tip commit at capture:** see `git log -1` (Slice 31)
+**Checkpoint date:** 2026-07-20 (after Slice 33 — real-FS write/move/rename/copy)
+**Tip commit at capture:** see `git log -1` (Slice 33)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -27,7 +27,31 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (705 tests: 684 + 21 real-FS access)
+## 1. Regression signal — test suite (716 tests: 705 + 11 real-FS authoring)
+
+**Slice-33 full-suite run (2026-07-20):** **709 passed / 7 failed / 0 skipped**
+(262s, idle desktop). All 7 are live-brain tests — the RPM cluster now includes
+BOTH fsaccess live tests (slice 32's + slice 33's). Burst-probe healthy 5/5;
+both fsaccess-live re-verified GREEN together in isolation; the rest are
+standing live-model tests unrelated to slice 33 (fsaccess.py only). All 30
+deterministic fsaccess tests passed in the full run. New baseline **716**; a
+clean `716/0/0` still wants a fresh daily bucket (7 live-brain tests now).
+
+### Slice 33 — real-FS round 2: write / read / move / rename / copy anywhere
+- Authoring verbs on the SAME proven slice-32 core (fsaccess.py): `write_path`,
+  `read_path` (AUTO + untrusted-wrap), `move_path`, `rename_path`, `copy_path`.
+  Lower-risk than slice 32 — no new safety model/mechanism.
+- Every mutation reuses `classify_path_risk` on the RESOLVED path (traversal/
+  symlink-safe, already pinned) → BLOCKED catastrophic / CONFIRM verbatim path.
+  move/rename block a protected SOURCE too; copy gates the DEST only.
+- **New principle: overwrite/clobber recycles the prior version first**
+  (`_place()` → `_recycle` existing file, then move/copy/write) — recoverable,
+  delete parity. Existing-folder dest refused (no silent merge).
+- Reuses shutil + the slice-32 `_recycle`; `fs.enabled` withholds all 8 real-FS
+  verbs; `fs.max_write_kb` caps writes. No JARVIS undo (Recycle Bin is recovery).
+- Live-proven (real brain): wrote a note → read back (disk match) → renamed →
+  copied (source preserved).
+
 
 **Slice-32 full-suite run (2026-07-20):** **699 passed / 6 failed / 0 skipped**
 (255s, idle desktop). All 6 are live-brain tests — the RPM cluster grew because
@@ -707,7 +731,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 705 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 716 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

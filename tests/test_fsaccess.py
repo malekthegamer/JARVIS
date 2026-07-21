@@ -260,3 +260,147 @@ def test_live_shortcut_delete_and_refuse_system32(tmp_path):
             made_lnk.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+# ==================================================================== Slice 33:
+# authoring verbs on the real FS — write / read / move / rename / copy. Same
+# proven core (classify_path_risk); every overwrite/clobber recycles the prior
+# version first so it's recoverable.
+
+SYS_FILE = r"C:\Windows\System32\drivers\etc\hosts"
+
+
+def test_write_path_creates_and_confirms(tmp_path, monkeypatch):
+    written = {}
+    monkeypatch.setattr(fsaccess, "_write_text", lambda p, c: written.update(p=str(p), c=c))
+    dest = tmp_path / "note.txt"
+    r = fsaccess.write_path(str(dest), "hello world")
+    assert r["ok"] and written["p"] == str(dest.resolve()) and written["c"] == "hello world"
+    # classify: a protected target is BLOCKED, a normal one CONFIRMs
+    assert fsaccess.classify_write_path({"path": SYS_FILE})["tier"] == "blocked"
+    info = fsaccess.classify_write_path({"path": str(dest)})
+    assert info["tier"] == "confirm" and info["command"] == str(dest.resolve())
+
+
+def test_write_path_overwrite_recycles_prior_then_writes(tmp_path, monkeypatch):
+    dest = tmp_path / "note.txt"
+    dest.write_text("OLD", encoding="utf-8")
+    order = []
+    monkeypatch.setattr(fsaccess, "_recycle", lambda p: order.append(("recycle", str(p))))
+    monkeypatch.setattr(fsaccess, "_write_text", lambda p, c: order.append(("write", c)))
+    r = fsaccess.write_path(str(dest), "NEW")
+    assert r["ok"], r
+    assert order == [("recycle", str(dest.resolve())), ("write", "NEW")]  # recycle BEFORE write
+
+
+def test_write_path_oversize_refused(tmp_path, monkeypatch):
+    settings.set("fs.max_write_kb", 1, persist=False)
+    try:
+        monkeypatch.setattr(fsaccess, "_write_text",
+                            lambda p, c: (_ for _ in ()).throw(AssertionError("must not write")))
+        r = fsaccess.write_path(str(tmp_path / "big.txt"), "z" * 5000)
+        assert r["ok"] is False and "large" in r["message"].lower()
+    finally:
+        settings.set("fs.max_write_kb", 256, persist=False)
+
+
+def test_read_path_returns_wrapped_content(tmp_path):
+    f = tmp_path / "note.txt"
+    f.write_text("the cat sat", encoding="utf-8")
+    out = primitives._run_read_path({"path": str(f)})
+    assert out.startswith("OK") and "the cat sat" in out
+    assert "UNTRUSTED FILE CONTENT" in out
+    assert primitives._run_read_path({"path": str(tmp_path / "ghost.txt")}).startswith("FAILED")
+    assert primitives._run_read_path({"path": str(tmp_path)}).startswith("FAILED")   # a dir
+
+
+def test_move_path_confirms_and_moves(tmp_path, monkeypatch):
+    src = tmp_path / "a.txt"; src.write_text("x", encoding="utf-8")
+    dest = tmp_path / "b.txt"
+    moved = {}
+    monkeypatch.setattr(fsaccess, "_move", lambda s, d: moved.update(s=str(s), d=str(d)))
+    r = fsaccess.move_path(str(src), str(dest))
+    assert r["ok"] and moved["s"] == str(src.resolve()) and moved["d"] == str(dest.resolve())
+    info = fsaccess.classify_move_path({"source": str(src), "dest": str(dest)})
+    assert info["tier"] == "confirm"
+    assert str(src.resolve()) in info["command"] and str(dest.resolve()) in info["command"]
+
+
+def test_move_blocked_when_source_or_dest_protected(tmp_path):
+    ok_path = str(tmp_path / "x.txt")
+    assert fsaccess.classify_move_path({"source": SYS_FILE, "dest": ok_path})["tier"] == "blocked"
+    assert fsaccess.classify_move_path({"source": ok_path, "dest": SYS_FILE})["tier"] == "blocked"
+
+
+def test_move_into_existing_dir_vs_replace_existing_file(tmp_path, monkeypatch):
+    src = tmp_path / "a.txt"; src.write_text("x", encoding="utf-8")
+    into = tmp_path / "folder"; into.mkdir()
+    recycled, moved = [], {}
+    monkeypatch.setattr(fsaccess, "_recycle", lambda p: recycled.append(str(p)))
+    monkeypatch.setattr(fsaccess, "_move", lambda s, d: moved.update(d=str(d)))
+    # dest is a dir -> item goes INSIDE it, nothing recycled
+    fsaccess.move_path(str(src), str(into))
+    assert moved["d"].lower().endswith(os.path.join("folder", "a.txt").lower())
+    assert recycled == []
+    # dest is an existing file -> recycle it first
+    src2 = tmp_path / "c.txt"; src2.write_text("y", encoding="utf-8")
+    existing = tmp_path / "d.txt"; existing.write_text("old", encoding="utf-8")
+    fsaccess.move_path(str(src2), str(existing))
+    assert recycled == [str(existing.resolve())]
+
+
+def test_rename_path_same_dir_and_rejects_separator(tmp_path, monkeypatch):
+    src = tmp_path / "a.txt"; src.write_text("x", encoding="utf-8")
+    moved = {}
+    monkeypatch.setattr(fsaccess, "_move", lambda s, d: moved.update(d=str(d)))
+    r = fsaccess.rename_path(str(src), "b.txt")
+    assert r["ok"] and moved["d"] == str((tmp_path / "b.txt").resolve())
+    bad = fsaccess.rename_path(str(src), "sub/b.txt")
+    assert bad["ok"] is False and ("name" in bad["message"].lower())
+
+
+def test_copy_path_file_and_folder_and_blocked_dest(tmp_path, monkeypatch):
+    copied = []
+    monkeypatch.setattr(fsaccess, "_copy", lambda s, d: copied.append((str(s), str(d))))
+    f = tmp_path / "a.txt"; f.write_text("x", encoding="utf-8")
+    d = tmp_path / "sub"; d.mkdir()
+    assert fsaccess.copy_path(str(f), str(tmp_path / "a2.txt"))["ok"]
+    assert fsaccess.copy_path(str(d), str(tmp_path / "sub2"))["ok"]
+    assert len(copied) == 2
+    # dest protected -> blocked (source may be anywhere)
+    assert fsaccess.classify_copy_path({"source": str(f), "dest": SYS_FILE})["tier"] == "blocked"
+
+
+def test_new_fs_verbs_withheld_when_disabled():
+    from jarvis.brain import JarvisBrain
+    settings.set("fs.enabled", False, persist=False)
+    try:
+        names = [t["name"] for t in JarvisBrain().tools()]
+        for v in ("write_path", "read_path", "move_path", "rename_path", "copy_path"):
+            assert v not in names, f"{v} must be withheld when fs.enabled is off"
+    finally:
+        settings.set("fs.enabled", True, persist=False)
+    assert "write_path" in [t["name"] for t in JarvisBrain().tools()]
+
+
+@pytest.mark.skipif(not config.get_api_key("gemini"),
+                    reason="GEMINI_API_KEY not configured")
+def test_live_write_read_rename_copy_move(tmp_path):
+    """Real brain: write a note, read it back, rename, copy, move — verified on
+    disk (not model-claimed). Auto-approve the CONFIRMs."""
+    from jarvis.brain import JarvisBrain
+    unsub = _approver(True, [])
+    try:
+        note = tmp_path / "note.txt"
+        JarvisBrain().think(f"Write the text 'hello jarvis' into the file {note}.")
+        assert note.exists() and "hello jarvis" in note.read_text(encoding="utf-8")
+
+        renamed = tmp_path / "renamed.txt"
+        JarvisBrain().think(f"Rename the file {note} to renamed.txt.")
+        assert renamed.exists() and not note.exists()
+
+        copy_dest = tmp_path / "copy.txt"
+        JarvisBrain().think(f"Copy the file {renamed} to {copy_dest}.")
+        assert copy_dest.exists() and renamed.exists()   # copy keeps the source
+    finally:
+        unsub()

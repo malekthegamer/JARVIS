@@ -85,12 +85,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "max_read_kb": 256,
     },
     "fs": {
-        # Real-filesystem access (slice 32): list_directory / delete_path
-        # (Recycle Bin) / create_shortcut, ANYWHERE on the PC. The most
-        # powerful surface — a kill-switch withholds all three when off.
-        # Safety: CONFIRM on the verbatim path + a catastrophic-path denylist
-        # backstop + Recycle-Bin (recoverable) deletes.
+        # Real-filesystem access (slices 32-33): list_directory / delete_path
+        # (Recycle Bin) / create_shortcut + write/read/move/rename/copy_path,
+        # ANYWHERE on the PC. The most powerful surface — the kill-switch
+        # withholds ALL of it when off. Safety: CONFIRM on the verbatim path +
+        # a catastrophic-path denylist backstop + Recycle-Bin (recoverable)
+        # deletes and overwrites.
         "enabled": True,
+        "max_write_kb": 256,        # cap write_path content
     },
     "memory": {
         # Long-term cross-session memory (spec §1.5). Explicit-intent writes
