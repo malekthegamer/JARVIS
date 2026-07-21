@@ -17,7 +17,7 @@ prompt-injected page; search: `test_search_live.py` incl. a
 search→navigate→read chain; audit/dry-run: `test_dryrun.py` incl. a live
 dry-run chain proving no Notepad appeared).
 
-> Previous checkpoints: (slice 28) 644; (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
+> Previous checkpoints: (slice 32) 705; (slice 31) 684; (slice 30) 671; (slice 29) 652; (slice 28) 644; (slice 27) 632; (slice 26) 619; `6ec7dc7` (slice 25) 606; `4a95cc9` (slice 24) 597;
 > `867986f` (slice 23) 588; `90db8d4` (slice 22) 570; (slice 21, no new tests)
 > 550; (slice 20, harness only, not collected) 550; `5e3f0dc` (slice 19) 547;
 > `a67c4e5` (slice 18) 530; `7c469e8` (slice 17) 504; `9c7638f` (slice 16) 489;
@@ -51,6 +51,19 @@ clean `716/0/0` still wants a fresh daily bucket (7 live-brain tests now).
   verbs; `fs.max_write_kb` caps writes. No JARVIS undo (Recycle Bin is recovery).
 - Live-proven (real brain): wrote a note → read back (disk match) → renamed →
   copied (source preserved).
+
+### Manual full-stack live acceptance (slices 29-33, 2026-07-20, user-run)
+The user ran one hands-on session through the real HUD (not automated tests)
+covering all five slices together: workspace-file create-is-AUTO vs
+real-FS create-is-CONFIRM asymmetry (30 vs 33), real-PC write/read/rename/
+copy/move (33), browse + shortcut + delete-to-Recycle-Bin (32), the System32
+refusal (32), clipboard round-trip + audit redaction (31), and scroll + click
+kinds (29). **Result: everything passed** except **`click kind='double'` was
+visibly flaky** — real mouse/UIA timing, the standing live-UIA flake class
+(§1's flaky-test note), not a logic/tiering defect. User decision: leave it,
+low priority. This is the first *cross-slice* manual acceptance recorded here
+(each slice above already had its own individual live proof) — it confirms
+they compose correctly in one real session, not just individually.
 
 
 **Slice-32 full-suite run (2026-07-20):** **699 passed / 6 failed / 0 skipped**
@@ -724,6 +737,31 @@ turn the suite red; re-drive them live when their primitives change.
   test pins that boundary. Spotify Web API (the slice originally requested)
   was probed and is a policy dead-end without Premium (Feb 2026 dev-mode
   rules) — script #1 stays on its proven GUI path.
+- **Real-browser cross-host click gate (slice 27) residual:** a named-benign
+  control that navigates cross-host via JavaScript (no inspectable href) is
+  flagged AFTER the click, not pre-gated — request-interception was
+  considered and rejected as deadlock-risky. Anchor-based cross-host clicks
+  ARE pre-gated (the common case).
+- **Audit viewer (slice 28):** read-only, envelope-first — the list view
+  never decrypts payload; a reveal decrypts one record on demand. No search/
+  filter beyond tier/status/tool-substring; no export.
+- **Scroll + click kinds (slice 29):** scroll is KEYBOARD PAGING (PageUp/
+  PageDown) — synthetic mouse-wheel was proven dead on real Win11 WinUI apps
+  (Stage-0 probe). Vertical only; no horizontal-scroll analog exists via
+  keyboard. **`click kind='double'` confirmed flaky in real manual use
+  (2026-07-20)** — real mouse/UIA timing, not a tiering/logic defect (single-
+  click and right-click were solid in the same session); user call: low
+  priority, left as-is (see SESSION_HANDOFF.md §5/§7 for detail).
+- **Caged file authoring (slice 30) / clipboard (slice 31) / real-FS access
+  (slices 32-33) residuals:** covered individually above/below their own
+  sections; in short — file-authoring undo/quarantine is bounded (retention
+  20, same as delete); clipboard content is redacted from the audit log by
+  design (the first per-tool redaction) but is NOT undoable if it held a
+  non-text/empty prior value; real-FS deletes/overwrites recycle (bounded
+  retention, not JARVIS-undo — the Recycle Bin IS the recovery); the
+  catastrophic-path denylist is an explicitly-named BACKSTOP, not the
+  boundary — the CONFIRM-on-verbatim-resolved-path is the real protection.
+  A `make_folder` verb and PowerShell-as-a-second-shell remain undone.
 
 ---
 
