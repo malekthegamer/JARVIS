@@ -76,6 +76,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # are caged to data/agent_files/. Off -> withheld from the model.
         "enabled": True,
     },
+    "files": {
+        # Caged file authoring (slice 30): write_file/read_file, scoped to
+        # data/agent_files/ by the same _contained() cage as delete_file.
+        # Size caps only — no kill-switch (parity with delete/search, which
+        # have none; the cage + CONFIRM-on-overwrite + undo are the boundary).
+        "max_write_kb": 256,
+        "max_read_kb": 256,
+    },
     "memory": {
         # Long-term cross-session memory (spec §1.5). Explicit-intent writes
         # only; DPAPI-encrypted at rest; relevance-gated retrieval.

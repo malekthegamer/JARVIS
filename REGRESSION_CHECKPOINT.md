@@ -5,8 +5,8 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-20 (after Slice 29 — scroll + double/right click)
-**Tip commit at capture:** see `git log -1` (Slice 29)
+**Checkpoint date:** 2026-07-20 (after Slice 30 — caged file authoring)
+**Tip commit at capture:** see `git log -1` (Slice 30)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
 by a documented live run. Slices 13 (wake+tray), 14 (web automation), 15 (web
@@ -27,7 +27,38 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (652 tests: 644 + 8 scroll/click-kind)
+## 1. Regression signal — test suite (671 tests: 652 + 19 file authoring)
+
+**Slice-30 full-suite run (2026-07-20):** **665 passed / 6 failed / 0 skipped**
+(267s, idle desktop). All 6 are environmental — a heavier-than-usual live
+cluster because this session had already burned quota with the new live file
+test + burst-probes. Each re-verified GREEN in isolation after a healthy 5/5
+burst-probe: `test_files::test_live_write_then_read_note` (mine — RPM
+clustering), `test_confirm_primitives::test_close_window_closes_notepad` (the
+recurring unsaved-Notepad orphan — cleared strays, passed), and four standing
+live-model tests (`test_chain_live`, `test_dryrun`, `test_email_live`,
+`test_web_live` — RPM). **None touch slice-30 code** (files.py only); all 18
+new deterministic file tests passed in the full run. New baseline **671**; a
+single clean `671/0/0` still wants a fresh daily bucket.
+
+### Slice 30 — caged file authoring (write_file + read_file)
+- Closes the audit's #2 gap + a shipped falsehood (workspace README promised
+  "create/delete" but only delete+search existed; now create/read/delete are
+  real and the README is corrected — pinned by a "no shipped falsehood" test).
+- `write_file` — caged by the existing `_contained()`; **dynamic tier: AUTO to
+  create, CONFIRM to overwrite** (modal names the file); **both undoable** via
+  the slice-26 quarantine (overwrite stashes the prior bytes; undo restores
+  them over the new file via the new `restore_file(token, over=True)`; undoing
+  a create deletes it). Size-capped (`files.max_write_kb`).
+- `read_file` — AUTO, size-capped, output wrapped in the untrusted-content
+  boundary (a file may hold web content JARVIS saved).
+- Reuse, not new machinery: `_quarantine()` factored out of `delete_file`
+  (both call it, byte-identical); `restore_file` gained an additive `over=`
+  flag (default False keeps the delete-undo "won't clobber" safety,
+  test-pinned). No kill-switch (parity with delete/search).
+- Live-proven: real brain wrote a marker to a file and read it back, verified
+  from disk.
+
 
 **Slice-29 full-suite run (2026-07-20):** **648 passed / 4 failed / 0 skipped**
 (277s, idle desktop). The 4 broke into TWO REAL + two environmental:
@@ -624,7 +655,7 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 652 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect: 671 passed, 0 failed, 0 skipped (~4-8 min)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

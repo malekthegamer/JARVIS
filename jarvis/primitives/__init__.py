@@ -114,6 +114,39 @@ def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
+def _run_write_file(args: dict, gate_info: dict | None = None) -> str:
+    """Slice 30: write + push an undo entry. Overwrite -> restore the
+    quarantined old bytes (over=True); create -> delete the created file. The
+    undo_fn calls mechanism-level files.* (never this wrapper), so undo can't
+    recursively push (slice-26 doctrine)."""
+    name = str(args.get("name", ""))
+    r = files.write_file(name, args.get("content", ""))
+    if r["ok"]:
+        if r.get("undo_kind") == "overwrite" and r.get("undo_token"):
+            undo_stack.push(UndoEntry(
+                tool="write_file",
+                description=f"overwriting '{name}'",
+                undo_fn=lambda t=r["undo_token"]: files.restore_file(t, over=True)))
+        elif r.get("undo_kind") == "create":
+            undo_stack.push(UndoEntry(
+                tool="write_file",
+                description=f"creating '{name}'",
+                undo_fn=lambda n=name: files.delete_file(n)))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
+def _run_read_file(args: dict, gate_info: dict | None = None) -> str:
+    """Slice 30: read + wrap the content in the untrusted-data boundary — a
+    workspace file may hold web content JARVIS saved, so its bytes are DATA,
+    never instructions (same discipline as read_page/web_search)."""
+    name = str(args.get("name", ""))
+    r = files.read_file(name)
+    if not r["ok"]:
+        return "FAILED: " + r["message"]
+    wrapped = web._wrap_untrusted("FILE CONTENT", f"from {name}", r["content"])
+    return f"OK: {r['message']}\n{wrapped}"
+
+
 def _run_shell(args: dict, gate_info: dict | None = None) -> str:
     r = shell.run_shell(str(args.get("command", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
@@ -433,6 +466,44 @@ PRIMITIVES: dict[str, dict] = {
                     "within_days": {"type": "number",
                                     "description": "Only files modified within this many days (optional)"},
                 },
+            },
+        },
+    },
+    "write_file": {
+        "fn": _run_write_file,
+        "classify": files.classify_write_file,   # AUTO create / CONFIRM overwrite
+        "schema": {
+            "name": "write_file",
+            "description": ("Create or overwrite a TEXT file in the agent "
+                            "workspace (data/agent_files) — e.g. save a note, a "
+                            "to-do list, or a draft to attach later. Creating a "
+                            "new file is immediate; OVERWRITING an existing file "
+                            "asks the user to confirm first. Text only."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "File name inside the workspace (e.g. 'notes.txt')"},
+                    "content": {"type": "string",
+                                "description": "The full text to write"},
+                },
+                "required": ["name", "content"],
+            },
+        },
+    },
+    "read_file": {
+        "fn": _run_read_file,
+        "tier": "auto",
+        "schema": {
+            "name": "read_file",
+            "description": ("Read a text file from the agent workspace "
+                            "(data/agent_files) and return its contents. "
+                            "Read-only. Use to see what you (or the user) saved."),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string",
+                                        "description": "File name inside the workspace"}},
+                "required": ["name"],
             },
         },
     },

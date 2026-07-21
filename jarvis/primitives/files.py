@@ -50,10 +50,24 @@ _README = AGENT_FILES_DIR / "README.md"
 if not _README.exists():
     _README.write_text(
         "# JARVIS agent workspace\n\n"
-        "Files JARVIS may manage (create/delete on request) live here.\n"
+        "Files JARVIS may manage (create/read/delete on request) live here.\n"
         "Nothing outside this folder is reachable by the agent's file tools.\n",
         encoding="utf-8",
     )
+
+
+def _quarantine(target: Path) -> str:
+    """Move a caged file into the trash under a fresh token, purge old entries,
+    and return the token (so restore_file can bring it back). Shared by
+    delete_file (slice 26) and write_file's overwrite path (slice 30) — the one
+    place a workspace file is set aside rather than destroyed."""
+    rel = target.relative_to(AGENT_FILES_DIR.resolve())
+    token = f"{time.time_ns():019d}-{uuid.uuid4().hex[:8]}"
+    dest = _trash_root() / token / rel
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(target), str(dest))
+    _purge_old_trash()
+    return token
 
 
 def _contained(name: str) -> Path | None:
@@ -99,29 +113,29 @@ def delete_file(name: str) -> dict:
         if target.is_dir():
             return {"ok": False,
                     "message": f"'{name}' is a folder — I only delete files."}
-        rel = target.relative_to(AGENT_FILES_DIR.resolve())
-        token = f"{time.time_ns():019d}-{uuid.uuid4().hex[:8]}"
-        dest = _trash_root() / token / rel
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(target), str(dest))
-        _purge_old_trash()
+        token = _quarantine(target)
         return {"ok": True, "undo_token": token,
                 "message": f"Deleted '{name}' from my workspace."}
     except Exception as exc:
         return {"ok": False, "message": f"Couldn't delete '{name}': {exc}"}
 
 
-def restore_file(token: str) -> dict:
-    """Undo a quarantined deletion: move the file back to its original
-    workspace path. Fails closed — never overwrites a newer occupant, and
-    reports honestly when the quarantine entry was already purged (the
-    bounded-retention trade-off). Never raises."""
+def restore_file(token: str, over: bool = False) -> dict:
+    """Move a quarantined file back to its original workspace path. Reports
+    honestly when the entry was already purged (the bounded-retention
+    trade-off). Never raises.
+
+    `over=False` (default, the delete-undo path): REFUSES if something now sits
+    at the destination — undoing a delete must never clobber a newer file.
+    `over=True` (the slice-30 overwrite-undo path): the destination IS expected
+    to hold the post-overwrite content, so replace it with the quarantined
+    original (that's exactly what "undo the overwrite" means)."""
     try:
         qdir = _trash_root() / str(token or "")
         if not qdir.is_dir():
             return {"ok": False,
-                    "message": "that deleted file is no longer in quarantine "
-                               "(older deletions are purged) — I can't restore it."}
+                    "message": "that file is no longer in quarantine "
+                               "(older entries are purged) — I can't restore it."}
         srcs = [p for p in qdir.rglob("*") if p.is_file()]
         if not srcs:
             return {"ok": False,
@@ -130,9 +144,11 @@ def restore_file(token: str) -> dict:
         rel = src.relative_to(qdir)
         dest = AGENT_FILES_DIR / rel
         if dest.exists():
-            return {"ok": False,
-                    "message": f"a file already exists at '{rel.as_posix()}' — "
-                               f"I won't overwrite it to restore the old one."}
+            if not over:
+                return {"ok": False,
+                        "message": f"a file already exists at '{rel.as_posix()}' — "
+                                   f"I won't overwrite it to restore the old one."}
+            dest.unlink()                     # overwrite-undo: replace the newer content
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(src), str(dest))
         shutil.rmtree(qdir, ignore_errors=True)
@@ -207,3 +223,98 @@ def describe_delete(args: dict) -> str | None:
     approval, so the answer the user gives is about intent, not existence)."""
     name = str(args.get("name", "")).strip()
     return f"Delete file '{name}' from the agent workspace ({AGENT_FILES_DIR})"
+
+
+# ---------------------------------------------------------------- slice 30:
+# caged file authoring — write_file (create/overwrite) + read_file. Both go
+# through the SAME _contained() cage as delete_file; an overwrite quarantines
+# the prior content so it's undoable (slice-26 machinery).
+
+def _max_kb(key: str, default: int) -> int:
+    from jarvis.core.settings_store import settings
+    try:
+        return max(1, int(settings.get(key, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def write_file(name: str, content: str) -> dict:
+    """Create or overwrite a UTF-8 text file in the workspace. Caged by
+    _contained(). An OVERWRITE quarantines the prior content first (so undo can
+    restore it); a CREATE makes parent subdirs as needed. Content is capped at
+    files.max_write_kb. Returns {ok, message, undo_kind, undo_token?} — never
+    raises."""
+    name = str(name or "").strip()
+    content = "" if content is None else str(content)
+    try:
+        target = _contained(name)
+        if target is None:
+            return {"ok": False,
+                    "message": f"Refused: '{name}' is outside my workspace "
+                               f"({AGENT_FILES_DIR}). I only write files in there."}
+        if target.exists() and target.is_dir():
+            return {"ok": False,
+                    "message": f"'{name}' is a folder — I can't write over it."}
+        cap = _max_kb("files.max_write_kb", 256)
+        if len(content.encode("utf-8")) > cap * 1024:
+            return {"ok": False,
+                    "message": f"That content is too large to write "
+                               f"(> {cap} KB). Refused before writing anything."}
+        overwrite = target.exists()
+        undo_token = _quarantine(target) if overwrite else None
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        verb = "Overwrote" if overwrite else "Wrote"
+        return {"ok": True,
+                "undo_kind": "overwrite" if overwrite else "create",
+                "undo_token": undo_token,
+                "message": f"{verb} '{name}' ({len(content)} chars) in my workspace."}
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't write '{name}': {exc}"}
+
+
+def read_file(name: str) -> dict:
+    """Read a UTF-8 text file from the workspace (AUTO). Caged by _contained().
+    Capped at files.max_read_kb with an honest truncation note. Returns
+    {ok, message, content} — never raises."""
+    name = str(name or "").strip()
+    try:
+        target = _contained(name)
+        if target is None:
+            return {"ok": False, "content": "",
+                    "message": f"Refused: '{name}' is outside my workspace "
+                               f"({AGENT_FILES_DIR}). I only read files in there."}
+        if not target.exists():
+            return {"ok": False, "content": "",
+                    "message": f"No file named '{name}' in my workspace."}
+        if target.is_dir():
+            return {"ok": False, "content": "",
+                    "message": f"'{name}' is a folder — I only read files."}
+        cap = _max_kb("files.max_read_kb", 256) * 1024
+        raw = target.read_text(encoding="utf-8", errors="replace")
+        if len(raw) > cap:
+            return {"ok": True, "content": raw[:cap],
+                    "message": f"Read '{name}' (truncated to {cap} chars of "
+                               f"{len(raw)})."}
+        return {"ok": True, "content": raw,
+                "message": f"Read '{name}' ({len(raw)} chars)."}
+    except Exception as exc:
+        return {"ok": False, "content": "",
+                "message": f"Couldn't read '{name}': {exc}"}
+
+
+def classify_write_file(args: dict) -> dict:
+    """Dynamic tier (slice 30): AUTO to CREATE a new file, CONFIRM to OVERWRITE
+    an existing one (the modal names it). Fail-closed to confirm. Never raises."""
+    try:
+        name = str(args.get("name", "")).strip()
+        target = _contained(name)
+        if target is not None and target.exists() and target.is_file():
+            return {"tier": "confirm",
+                    "description": f"Overwrite file '{name}' in the agent "
+                                   f"workspace ({AGENT_FILES_DIR}) — its current "
+                                   f"contents will be replaced."}
+        return {"tier": "auto", "description": f"Write file '{name}'"}
+    except Exception:
+        return {"tier": "confirm",
+                "description": "Write a file (couldn't classify — confirming)."}
