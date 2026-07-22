@@ -18,7 +18,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 727 collected; slice-35 gate verified 698 deterministic / 0 failed (the ~29 live-model tests await a fresh Gemini bucket)** (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 727 collected; best full-suite run 720 passed / 7 failed / 0 skipped, all 7 live-brain and each re-verified green individually** (a clean single 727/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -249,10 +249,15 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
   slices 32-33. And `if not _README.exists()` meant it could never be corrected
   on an existing install (the on-disk copy was still pre-slice-30 text). Now
   content-driven self-heal + text that discloses the real-FS reach honestly.
-- **Gate (honest): 698 deterministic passed / 0 failed; the ~29 live-model
-  tests could NOT be run** — daily Gemini quota exhausted, burst-probe 1/5 with
-  429 on a bare API call. Re-run them on a fresh bucket. A self-inflicted
-  broadcaster leak was caught mid-gate and fixed (see REGRESSION_CHECKPOINT).
+- **Gate (completed on a fresh bucket): 720 passed / 7 failed / 0 skipped** —
+  all 7 live-brain, **each re-verified green individually** (run strictly one
+  at a time). The dry-run test was checked first because slice 35 moved that
+  code path; it passes. A `web_live` failure that could plausibly have been
+  caused by the new `web.enabled` enforcement was ruled out by inspecting
+  `data/settings.json` (`enabled: true`) and probing the brain directly, then
+  passed with the cross-host confirm firing correctly. Separately, the
+  deterministic core is 698/0. A self-inflicted broadcaster leak was caught
+  mid-gate and fixed (see REGRESSION_CHECKPOINT).
 
 ### Slice 34 — memory retrieval recall: measured, no safe lever, nothing tuned
 - **The slice-16 pattern repeated: the measurement overruled the plan, and the
@@ -597,7 +602,7 @@ The four-stage discipline runs automatically every session — **you do not need
 
 All four spec §1.6 scripts pass; real-browser navigate+read AND committal actions both shipped (slices 24-25); the real-filesystem surface (browse/delete/shortcut/write/read/move/rename/copy anywhere) shipped and was **manually live-verified end to end** in slices 32-33 (see the acceptance note in §2). Spec §1.2's core verb list is now essentially complete. Pick one and plan it. In rough priority:
 
-1. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is the single biggest drag on the test gate (rate-limited runs at nearly every recent checkpoint, now carrying 6-7 live-brain tests). Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent. Highest quality-of-life-per-effort item on the list.
+1. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is the single biggest drag on the test gate (rate-limited runs at nearly every recent checkpoint, now carrying ~29 live-brain tests). **Slice 35 settled a long-standing assumption: a fresh DAILY bucket is NOT sufficient.** A full suite run on a verified-healthy bucket (burst-probe 5/5) still produced 7 live failures — the suite's clustered calls exhaust the PER-MINUTE cap inside one run, and all 7 passed when run one at a time. So "capture a clean pass on a fresh daily bucket", repeated in checkpoints since slice 20, is not actually achievable on the free tier; only billing or a fallback chain fixes it. Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent. Highest quality-of-life-per-effort item on the list.
 2. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these visibly-disabled ("not ported yet"). Each needs a tool-calling adapter mapping the full primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
 3. **Double-click reliability** (low priority — user call, 2026-07-20) — `click kind='double'` is confirmed flaky in real manual use, real mouse/UIA timing (§5). Single-click and right-click are solid. Not urgent; revisit only if it becomes a real friction point.
 4. **Close the slice-35 audit's deferred findings** (all verified in code, all

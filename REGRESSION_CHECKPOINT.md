@@ -29,17 +29,34 @@ dry-run chain proving no Notepad appeared).
 
 ## 1. Regression signal — test suite (727 tests: 717 + 10 safety-integrity pins)
 
-**Slice-35 gate (2026-07-22) — PARTIAL, and honestly so.** **698 deterministic
-passed / 0 failed**, run in two parts because BOTH environmental blockers hit
-at once: 499 non-desktop, then 199 desktop-driving (`test_agent_loop`,
-`test_input`, `test_system`, `test_tabs`) after the user freed the desktop —
-the conftest fullscreen guard had refused the first attempt, working exactly as
-designed. **The ~29 live-MODEL tests were NOT run:** the free-tier Gemini daily
-bucket was exhausted by the slice-34 gate plus ~10 isolation re-runs, and a
-burst-probe returned **1/5 healthy (429 RESOURCE_EXHAUSTED on a bare "say OK"
-call)** — proof the failure is upstream of any code. They need a fresh bucket
-(resets 07:00 UTC). `test_agent_loop` — the file that caught slice 29's real
-regression and which exercises the restructured tier dispatch — passed.
+**Slice-35 gate — COMPLETED on a fresh bucket (2026-07-22).** **720 passed /
+7 failed / 0 skipped** (270s, full suite). **All 7 are live-brain and every one
+was re-verified GREEN individually** (each run strictly ALONE): clipboard 3.7s,
+dry-run 5.2s, email 6.4s, files 5.2s, both fsaccess 10.1s/8.7s, web cross-host
+9.9s. Two failed with the literal reply *"Gemini is rate-limiting us"* — the
+standing per-minute signature.
+
+**The dry-run test was checked FIRST and most carefully, not last**, because
+slice 35 moved that exact code path (the kill-switch check now sits before the
+dry-run branch). It passes alone → the change is clear.
+
+**A real hypothesis was raised and ruled out, not hand-waved:** `test_web_live`
+failed with `gated=[]` (no CONFIRM fired). Since slice 35 now *enforces*
+`web.enabled`, a persisted `web.enabled=false` would have produced exactly that
+symptom — so `data/settings.json` was checked directly (`enabled: true`), and
+the brain was probed independently (replied `READY`, i.e. not rate-limited)
+before re-running. It then passed, with the confirm firing correctly while
+still on the origin host: *"Click 'go elsewhere' … it leaves this site for a
+different one (localhost)"* @ `127.0.0.1` — pre-click gating intact.
+
+**Standing conclusion, now better evidenced: a fresh DAILY bucket is not
+sufficient.** The suite's ~29 clustered live-brain calls exhaust the free-tier
+PER-MINUTE cap within a single run, so a clean single `727/0/0` remains
+unreached — this is the strongest case yet for §7 item 1 (a paid/resilient
+brain). Earlier that same day the deterministic core was separately verified
+**698 passed / 0 failed** (499 non-desktop + 199 desktop-driving), including
+`test_agent_loop`, the file that caught slice 29's real regression and which
+exercises the restructured tier dispatch.
 
 **A real self-inflicted regression was caught and fixed during this gate, not
 dismissed:** `test_server::test_state_endpoint` failed on a leaked THINKING
