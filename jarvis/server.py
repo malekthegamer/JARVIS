@@ -25,6 +25,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
+from jarvis import config
 from jarvis.brain import jarvis_brain
 from jarvis.core import chain
 from jarvis.core.confirmations import confirmations
@@ -163,8 +164,43 @@ async def _lifespan(app: FastAPI):
 app = FastAPI(lifespan=_lifespan)
 
 
+# ---------- slice 36: the Origin guard (the HUD transport is UNAUTHENTICATED) ----------
+#
+# The server binds to 127.0.0.1, which stops the network — but NOT the browser.
+# WebSockets are exempt from the same-origin policy, so before this guard any
+# page the user visited could open ws://127.0.0.1:8000/ws, receive every
+# broadcast confirm_request (id included, see _pump -> _clients) and reply
+# {"type":"confirm_response","approved":true} — approving its OWN prompt and
+# defeating the CONFIRM gate, the one control standing in front of run_shell,
+# delete_path and send_email. Verified live before the fix.
+#
+# The rule: reject when Origin is PRESENT and foreign; permit when ABSENT.
+# Browsers always send Origin on a WS handshake and on cross-origin HTTP, so
+# this closes the entire browser attack surface. A local non-browser client
+# (pytest, the harnesses, curl) is already arbitrary local code execution, so
+# gating it would buy nothing and only break tooling. Test-pinned both ways.
+_ALLOWED_ORIGINS = frozenset({
+    f"http://{config.SERVER_HOST}:{config.SERVER_PORT}",
+    f"http://localhost:{config.SERVER_PORT}",
+})
+
+
+def _origin_ok(headers) -> bool:
+    """True if this request may drive the agent. Fails CLOSED on anything
+    unrecognized, matching the project's unknown -> refuse doctrine."""
+    if (headers.get("sec-fetch-site") or "").lower() == "cross-site":
+        return False                      # defence in depth; browsers set this
+    origin = headers.get("origin")
+    if origin is None:
+        return True                       # non-browser client (see above)
+    return origin in _ALLOWED_ORIGINS
+
+
 @app.middleware("http")
 async def no_cache(request, call_next):
+    if not _origin_ok(request.headers):
+        return JSONResponse({"error": "cross-origin request refused"},
+                            status_code=403)
     response = await call_next(request)
     response.headers["Cache-Control"] = "no-store, must-revalidate"
     return response
@@ -394,6 +430,11 @@ async def _run_chat(text: str, ws: WebSocket) -> None:
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    # Slice 36: refuse BEFORE accept() — a rejected peer must never enter
+    # _clients, so it never receives a confirm_request id to replay.
+    if not _origin_ok(ws.headers):
+        await ws.close(code=1008)      # 1008 = policy violation
+        return
     await ws.accept()
     _clients.add(ws)
     try:

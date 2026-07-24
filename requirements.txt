@@ -1,62 +1,54 @@
 # ============ JARVIS requirements ============
-# Core / brain providers
+# Windows 11 · Python 3.12. Derived mechanically from the imports in jarvis/
+# (AST scan → pip distribution names), not maintained by hand — so a fresh
+# install actually works. Re-derive after adding a dependency.
+
+# --- Core / brain ---
 python-dotenv>=1.0
-google-genai>=1.0          # Gemini (NOT the deprecated google-generativeai)
-openai>=1.50               # OpenAI + OpenRouter (OpenAI-compatible) + Whisper API
-anthropic>=0.40            # Claude
-requests>=2.31             # Ollama local HTTP API
+google-genai>=1.0          # Gemini brain (NOT the deprecated google-generativeai)
 
-# Voice
-SpeechRecognition>=3.10    # shared capture + Google Web Speech STT
-PyAudio>=0.2.14            # raw mic capture (prebuilt wheels for cp312)
-openwakeword>=0.6          # "hey jarvis" wake word (slice 13; onnxruntime, no key)
-faster-whisper>=1.0        # local Whisper (GPU float16 on Blackwell, CPU fallback)
-edge-tts>=6.1              # free neural TTS (default voice out)
-pyttsx3>=2.90              # offline fallback TTS
-elevenlabs>=1.0            # premium TTS (optional key)
-pygame>=2.5                # audio playback for edge-tts / elevenlabs bytes
-
-# Web dashboard + browser automation
+# --- Web server + HUD ---
 fastapi>=0.110
 uvicorn[standard]>=0.29
-playwright>=1.50            # browser automation (slice 14; then: playwright install chromium)
 
-# Skills — PC control & automation
+# --- Windows integration (REQUIRED — not optional) ---
+pywin32>=306               # DPAPI encryption, Recycle Bin, shortcuts, win32gui
+pywinauto>=0.6             # UI Automation tree (perception)
+comtypes>=1.2              # COM plumbing for pycaw
+pycaw>=20230407            # system volume / mute
+
+# --- Input synthesis + screen ---
 pyautogui>=0.9.54
-pynput>=1.7
+pydirectinput>=1.0         # works in fullscreen games
+mss>=9.0                   # fast screenshots
+Pillow>=10.0
+numpy>=2.0
 psutil>=5.9
 screen_brightness_control>=0.22
-schedule>=1.2
-
-# Skills — research & productivity
-ddgs>=9.0                  # DuckDuckGo search (successor of duckduckgo-search)
-pypdf>=4.0
-beautifulsoup4>=4.12       # page text extraction
-
-# Skills — vision & clipboard
-pytesseract>=0.3.10        # requires Tesseract binary installed separately
-Pillow>=10.0
 pyperclip>=1.8
-mss>=9.0                   # fast screenshots
 
-# Skills — media & finance
-yfinance>=0.2.40
-feedparser>=6.0
+# --- Voice ---
+SpeechRecognition>=3.10    # capture + Google Web Speech STT
+PyAudio>=0.2.14            # raw mic capture (prebuilt wheels for cp312)
+openwakeword>=0.6          # "hey jarvis" wake word — local, no key
+edge-tts>=6.1              # free neural TTS (default voice out)
+pyttsx3>=2.90              # offline fallback TTS
+pygame>=2.5                # audio playback
+faster-whisper>=1.0        # optional local Whisper STT (large download)
+elevenlabs>=1.0            # optional premium TTS (needs a key)
 
-# Memory — semantic retrieval (slice 19; local MiniLM via ONNX, no torch)
+# --- Web automation + search ---
+playwright>=1.50           # then run once: playwright install chromium
+ddgs>=9.0                  # keyless DuckDuckGo search
+
+# --- Email (send_email) ---
+google-api-python-client>=2.100
+google-auth-oauthlib>=1.2
+
+# --- Memory: local semantic retrieval (no torch, no network, no key) ---
 # One-time model download: python -m jarvis.core.embedder --setup
-onnxruntime>=1.24          # was transitive via openwakeword; now a direct dep
-tokenizers>=0.20           # HF tokenizer for the embedding model
-numpy>=2.0                 # pooling math (also used by screen/vision/wake)
+onnxruntime>=1.24
+tokenizers>=0.20
 
-# Desktop wrapper (Phase 9)
-pywebview>=5.0
+# --- Tray ---
 pystray>=0.19
-
-# Optional (not installed by default; enable when configured):
-#   playwright        — browser automation (then: playwright install chromium)
-#   google-api-python-client google-auth-oauthlib — Gmail / Calendar
-#   discord.py        — Discord messaging
-#   opencv-python     — webcam detection
-pywinauto  # UI Automation tree (perception) + input synthesis for later slices
-pydirectinput  # input synthesis (click/type/press), works in fullscreen (spec 1.5)

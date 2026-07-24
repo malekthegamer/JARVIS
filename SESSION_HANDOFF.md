@@ -18,7 +18,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 727 collected; best full-suite run 720 passed / 7 failed / 0 skipped, all 7 live-brain and each re-verified green individually** (a clean single 727/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 735 collected; best full-suite run 728 passed / 7 failed / 0 skipped, all 7 live-brain/live-UIA and each re-verified green individually** (a clean single 735/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -221,6 +221,49 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 36 — release readiness: closed an auth bypass, then published
+- **Found by a pre-publish audit, and it is the most serious defect found in
+  this project so far.** The HUD transport was **unauthenticated**. The server
+  binds to 127.0.0.1, which stops the network — but NOT the browser, because
+  **WebSockets are exempt from the same-origin policy.**
+- **The exploit (verified live BEFORE the fix, then kept as a test):** any page
+  the user visited while JARVIS ran could open `ws://127.0.0.1:8000/ws`. A
+  handshake carrying `Origin: https://evil.example.com` was ACCEPTED and
+  immediately received state. Because `_pump` broadcasts to every socket in
+  `_clients`, the attacker page also received every `confirm_request`
+  **including its `id`**, and could reply `{"type":"confirm_response",
+  "approved":true}` — **approving its own prompt.** That defeats the CONFIRM
+  gate, the one control standing in front of `run_shell`, `delete_path` and
+  `send_email`. The test proved `approved: True` against the unfixed server.
+  Especially acute because JARVIS deliberately reads untrusted web pages.
+- **Fix:** `_origin_ok()` + `_ALLOWED_ORIGINS` (derived from `config.SERVER_HOST/
+  PORT`, never a second hardcoded port). The WS refuses **before `accept()`**,
+  so a rejected peer never enters `_clients` and never sees an id; the existing
+  HTTP middleware gained the same check (CSRF on `POST /api/settings`,
+  `/api/listen`). **Rule: reject a PRESENT-and-foreign Origin, permit an ABSENT
+  one** — browsers always send it, so the browser surface is fully closed,
+  while local tooling (pytest/harnesses/curl) keeps working; a local
+  non-browser process already has code execution. Both directions test-pinned.
+  Defence in depth: `Sec-Fetch-Site: cross-site` rejected too.
+- **Honest scope note:** the HTTP side was the *lesser* half. Absent CORS
+  headers a browser cannot READ a cross-origin response, so `/api/audit`
+  payloads were never exfiltratable; the real HTTP risk was CSRF side-effects.
+  The WebSocket was the severe one.
+- **Also fixed (all blocked publishing):** `requirements.txt` could not produce
+  a working install — **`pywin32` (all DPAPI encryption), `pycaw` (volume),
+  `comtypes`, and both Gmail libraries were missing**; the list is now derived
+  by an AST import scan, with 11 legacy-only deps pruned. The **README was
+  entirely false** — every command it documented (`main.py`, `server.py`,
+  `tray.py`, `tools/list_mics.py`) does not exist; rewritten truthfully with a
+  prominent safety section, and pinned by
+  `test_project_readme_documents_only_commands_that_exist`. Added `LICENSE`
+  (MIT), removed `legacy/` from the tree (62 files; still local, and it remains
+  in git history — accepted, it holds no secrets), and replaced
+  `test_memory_live.py`'s hardcoded `cwd=r"e:\J.A.R.V.I.S"` so the suite runs
+  on someone else's machine.
+- **Pre-publish secret audit: clean.** 124 commits scanned — no key patterns,
+  `.env` never committed, `data/` never committed.
+
 ### Slice 35 — safety integrity: the kill switches are now a real boundary
 - **Found by auditing `jarvis/` for gaps the docs DIDN'T name.** Three defects
   in the safety layer itself, all verified in code before planning.
@@ -420,7 +463,7 @@ e:\J.A.R.V.I.S\
                               audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
                               read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 727 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 735 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -511,7 +554,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 727 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 735 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -551,6 +594,14 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   a DND change re-opens Settings briefly (the original action's same cost);
   tabs/media-keys/email/shell are categorically irreversible and test-pinned
   as never-undoable. Redo does not exist (undoing an undo is out of scope).
+- **Transport auth (slice 36):** the HUD has **no user authentication** — the
+  boundary is `Origin` validation plus the 127.0.0.1 bind, nothing more. That
+  closes the browser attack surface (browsers always send `Origin`), but any
+  **local process** can still drive the agent over the WS: a request with no
+  `Origin` header is permitted by design, since a local non-browser process
+  already has code execution on the machine. If JARVIS is ever exposed beyond
+  localhost, or run on a shared/multi-user box, this needs a real auth token —
+  it is a deliberate single-trusted-user design, not an oversight.
 - **Open findings from the slice-35 safety audit (verified in code, NOT yet
   fixed — each deferred deliberately, not overlooked):**
   - **`browse_key("Enter")` is AUTO** while the desktop equivalent is
@@ -631,6 +682,6 @@ Deliberate, documented deferrals (not silent gaps — each has a one-line reason
 ## 8. First moves in the new session
 
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **727** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **735** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status (all passing) and the most recent gate run's honest failure breakdown.
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode. If the new slice depends on an unverified mechanism, probe it first (see §6).

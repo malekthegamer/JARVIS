@@ -27,7 +27,39 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (727 tests: 717 + 10 safety-integrity pins)
+## 1. Regression signal — test suite (735 tests: 727 + 8 release-readiness pins)
+
+### Slice 36 — release readiness: closed an auth bypass, then published
+- **The most serious defect found in this project.** The HUD transport was
+  UNAUTHENTICATED and **WebSockets are exempt from the same-origin policy**, so
+  the 127.0.0.1 bind stopped the network but not the browser. Any page the user
+  visited could open `ws://127.0.0.1:8000/ws`, receive every broadcast
+  `confirm_request` **including its id**, and reply `approved:true` —
+  **approving its own prompt and defeating the CONFIRM gate**, the one control
+  in front of `run_shell` / `delete_path` / `send_email`.
+- **Red-checked, not asserted:** the exploit test returned `approved: True`
+  against the unfixed server, and a live probe showed
+  `Origin: https://evil.example.com` ACCEPTED. After the fix the same probe
+  returns **403** while the real HUD still connects (verified in real Chromium:
+  green "online", telemetry live, zero console errors).
+- **Fix:** `_origin_ok()`/`_ALLOWED_ORIGINS` derived from `config.SERVER_HOST/
+  PORT`; WS refuses **before `accept()`** (a rejected peer never enters
+  `_clients`); the existing HTTP middleware got the same check. Rule: reject a
+  PRESENT-and-foreign Origin, permit an ABSENT one (browsers always send it →
+  browser surface closed; local tooling unaffected). Both pinned.
+- **Honest scope:** the HTTP half was lesser — absent CORS headers a browser
+  cannot read a cross-origin response, so audit payloads were never
+  exfiltratable; the real HTTP risk was CSRF side-effects on POST.
+- **Publish blockers also fixed:** `requirements.txt` was missing **pywin32
+  (all encryption), pycaw (volume), comtypes and both Gmail libs** — now
+  derived by AST import scan, 11 legacy deps pruned; the README documented
+  **four commands that do not exist** — rewritten and pinned by a test; added
+  MIT `LICENSE`; dropped `legacy/` (62 files) from the tree; removed the
+  hardcoded `e:\J.A.R.V.I.S` path that broke the suite on other machines.
+- Pre-publish secret audit clean: 124 commits, no keys, `.env`/`data/` never
+  committed.
+
+
 
 **Slice-35 gate — COMPLETED on a fresh bucket (2026-07-22).** **720 passed /
 7 failed / 0 skipped** (270s, full suite). **All 7 are live-brain and every one

@@ -30,3 +30,6 @@ Thumbs.db
 # OAuth tokens
 token.json
 credentials.json
+
+# Dead salvage-source app — kept locally, not published (slice 36)
+legacy/

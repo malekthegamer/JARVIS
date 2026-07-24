@@ -179,6 +179,27 @@ def test_readme_promises_only_verbs_that_exist():
                 f"README promises '{verb}' but {tool} isn't a registered tool"
 
 
+def test_project_readme_documents_only_commands_that_exist():
+    """Slice 36: the shipped README documented `python main.py`,
+    `python server.py`, `python tray.py` and `python tools/list_mics.py` — NONE
+    of which exist (the real entry points are run.py and `python -m
+    jarvis.tray`). A friend following it failed on step one. This pin is the
+    mechanical check that would have caught it."""
+    import re
+    from jarvis import config
+    root = config.BASE_DIR
+    text = (root / "README.md").read_text(encoding="utf-8")
+
+    for script in re.findall(r"python\s+([\w./\\-]+\.py)", text):
+        assert (root / script).exists(), f"README documents missing script: {script}"
+    # Only repo modules are checkable here; `-m pytest` & friends are installed
+    # packages, not paths in this tree.
+    for mod in re.findall(r"python\s+-m\s+(jarvis[\w.]*)", text):
+        pkg = root.joinpath(*mod.split("."))
+        assert pkg.with_suffix(".py").exists() or (pkg / "__init__.py").exists(), \
+            f"README documents missing module: -m {mod}"
+
+
 def test_workspace_readme_makes_no_false_containment_claim():
     """Slice 35: the README shipped 'Nothing outside this folder is reachable
     by the agent's file tools.' That became FALSE at slices 32-33, when

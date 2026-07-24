@@ -9,6 +9,8 @@ import textwrap
 
 import pytest
 
+from jarvis import config
+
 
 def test_memory_persists_across_process_restart(tmp_path):
     store = tmp_path / "restart" / "memories.bin"
@@ -21,7 +23,7 @@ def test_memory_persists_across_process_restart(tmp_path):
         print("WROTE")
     """)
     r1 = subprocess.run([sys.executable, "-c", writer],
-                        capture_output=True, text=True, cwd=r"e:\J.A.R.V.I.S")
+                        capture_output=True, text=True, cwd=str(config.BASE_DIR))
     assert "WROTE" in r1.stdout, r1.stderr
 
     reader = textwrap.dedent(f"""
@@ -31,7 +33,7 @@ def test_memory_persists_across_process_restart(tmp_path):
         print("FOUND" if any("flowerpot" in t for t in texts) else "MISSING")
     """)
     r2 = subprocess.run([sys.executable, "-c", reader],
-                        capture_output=True, text=True, cwd=r"e:\J.A.R.V.I.S")
+                        capture_output=True, text=True, cwd=str(config.BASE_DIR))
     assert "FOUND" in r2.stdout, (r2.stdout, r2.stderr)
 
     # and it is encrypted at rest — the plaintext never touches disk
