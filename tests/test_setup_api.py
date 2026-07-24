@@ -43,6 +43,21 @@ def test_setup_state_never_leaks_the_key(client, monkeypatch):
     assert MARKER[:12] not in raw
 
 
+def test_hud_settings_audit_links_open_in_a_separate_tab():
+    """v1.0.2: the ⚙/🗎 links were plain same-tab navigations, so opening
+    Settings or Audit navigated AWAY from the HUD and wiped its in-page
+    conversation transcript on return. They must carry a target so the HUD tab
+    is never left."""
+    from jarvis import config
+    html = (config.BASE_DIR / "jarvis" / "static" / "index.html").read_text(encoding="utf-8")
+    import re
+    for href in ("/settings", "/audit"):
+        m = re.search(r'<a\b[^>]*href="%s"[^>]*>' % re.escape(href), html)
+        assert m, f"no <a href={href}> in the HUD header"
+        assert "target=" in m.group(0), \
+            f"{href} link must open in a separate tab (target=), not navigate the HUD away"
+
+
 def test_setup_state_get_allowed_but_not_cors_readable(client):
     """v1.0.0 hotfix: this is a safe GET, so the server allows it (the guard is
     for the WebSocket + mutating methods). The cross-origin READ is blocked by

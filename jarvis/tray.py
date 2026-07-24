@@ -109,8 +109,13 @@ def _wait_for_server(timeout: float = 15.0) -> bool:
 def main() -> None:
     threading.Thread(target=_run_server, name="jarvis-server", daemon=True).start()
     if not _wait_for_server():
-        print("Server didn't start in time.")
-        return
+        # Raise, don't return: run_guarded() turns this into a visible dialog +
+        # log. A silent return under pythonw is exactly the "shortcut does
+        # nothing" failure.
+        raise RuntimeError(
+            "the JARVIS server did not come up within 15s "
+            "(is something already using port "
+            f"{config.SERVER_PORT}, or did startup crash?)")
     print(f"JARVIS tray running. HUD: {HUD_URL}")
 
     icon = build_icon()
@@ -132,6 +137,35 @@ def main() -> None:
         unsub()
         from jarvis import server
         server.stop_wake()
+
+
+def run_guarded(main_fn=main) -> None:
+    """Entry point for the double-click Desktop shortcut (via tray_start.pyw).
+
+    The shortcut runs pythonw.exe, which has NO console — so any unhandled
+    exception makes the shortcut fail SILENTLY (the "it just doesn't work"
+    report). This writes the traceback to data/tray_error.log and shows a
+    Windows dialog, so a failed launch is always diagnosable. Returns normally
+    on success; re-raises after logging so `python -m` callers still see it."""
+    try:
+        main_fn()
+    except BaseException:  # noqa: BLE001 — a launcher must surface EVERYTHING
+        import traceback
+        log_path = None
+        try:
+            log_path = config.DATA_DIR / "tray_error.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text(traceback.format_exc(), encoding="utf-8")
+        except Exception:
+            log_path = None
+        try:
+            import ctypes
+            where = f"\n\nDetails written to:\n{log_path}" if log_path else ""
+            ctypes.windll.user32.MessageBoxW(  # type: ignore[attr-defined]
+                0, "JARVIS could not start." + where, "JARVIS", 0x10)
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == "__main__":

@@ -6,6 +6,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from jarvis.tray import main  # noqa: E402
+from jarvis.tray import run_guarded  # noqa: E402
 
-main()
+# run_guarded (not main) so a startup crash under pythonw.exe — which has no
+# console — is written to data/tray_error.log and shown in a dialog instead of
+# failing silently.
+run_guarded()

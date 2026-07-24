@@ -27,7 +27,28 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (750 tests: 746 + 4 safe-GET hotfix pins)
+## 1. Regression signal — test suite (753 tests: 750 + 3 v1.0.2 fix pins)
+
+### v1.0.2 — two user-reported bugs
+- **Opening Settings/Audit wiped the conversation.** The ⚙/🗎 icons were plain
+  same-tab `<a href>` links, so clicking one navigated the browser AWAY from the
+  HUD; the transcript lives only in that page, so returning reloaded a blank
+  HUD. Fixed: both links now carry `target="jarvisAux"` (a shared name = one
+  reused side tab), so the HUD is never left. **Proven in a real browser** — a
+  seeded transcript marker survived the gear click, HUD stayed on `/`, a second
+  tab opened for settings. Pinned by a test.
+- **The Desktop shortcut failed silently.** It runs `pythonw.exe`, which has no
+  console, so any startup crash vanished ("it just doesn't work"). Two fixes:
+  `main()` now RAISES instead of silently returning when the server doesn't come
+  up, and a new `run_guarded()` (what `tray_start.pyw` now calls) writes the
+  traceback to `data/tray_error.log` and shows a dialog. A silent launch failure
+  is now always diagnosable. Pinned by two tests (logs-on-crash, passes-through-
+  on-success). NOTE: this makes the failure *visible*; the user's specific cause
+  is still to be read from their tray_error.log.
+- Gate: 525 non-desktop deterministic passed / 0 failed (static HTML + tray
+  launcher changes; no agent/desktop/model surface touched).
+
+
 
 ### v1.0.1 hotfix — the Origin guard blocked the HUD's own page load
 - **Reported by the user minutes after v1.0.0: opening the HUD showed

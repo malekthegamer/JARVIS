@@ -13,8 +13,13 @@
     <span class="conn" id="conn" title="Connection">
       <span class="conn-dot"></span><span id="conn-text">connecting</span>
     </span>
-    <a class="settings-gear" href="/audit" title="Audit log" aria-label="Audit log">🗎</a>
-    <a class="settings-gear" href="/settings" title="Settings" aria-label="Settings">⚙</a>
+    <!-- Open in a separate tab (shared name = one reused tab, not many) so the
+         HUD is never navigated away: its conversation transcript lives only in
+         this page, and a full navigation to /settings would wipe it on return. -->
+    <a class="settings-gear" href="/audit" target="jarvisAux" rel="noopener"
+       title="Audit log" aria-label="Audit log">🗎</a>
+    <a class="settings-gear" href="/settings" target="jarvisAux" rel="noopener"
+       title="Settings" aria-label="Settings">⚙</a>
   </header>
 
   <main class="hud-center">

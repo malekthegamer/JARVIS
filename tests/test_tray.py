@@ -11,6 +11,38 @@ from jarvis import tray
 from jarvis.state import AgentState
 
 
+def test_run_guarded_logs_a_crash_instead_of_failing_silently(monkeypatch, tmp_path):
+    """The shortcut runs pythonw.exe (no console), so a startup crash used to
+    vanish — the 'shortcut does nothing' bug. run_guarded must write the
+    traceback to data/tray_error.log AND re-raise (so console callers see it)."""
+    from jarvis import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+
+    def _boom():
+        raise RuntimeError("SENTINEL boom")
+
+    # Suppress the Windows dialog so the test doesn't block on CI/headless.
+    import ctypes
+    monkeypatch.setattr(ctypes, "windll", None, raising=False)
+
+    import pytest
+    with pytest.raises(RuntimeError, match="SENTINEL boom"):
+        tray.run_guarded(_boom)
+
+    log = tmp_path / "tray_error.log"
+    assert log.exists(), "a silent-launch crash must be written to a log"
+    assert "SENTINEL boom" in log.read_text(encoding="utf-8")
+
+
+def test_run_guarded_passes_through_on_success(monkeypatch, tmp_path):
+    from jarvis import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    ran = []
+    tray.run_guarded(lambda: ran.append(True))
+    assert ran == [True]
+    assert not (tmp_path / "tray_error.log").exists()
+
+
 def test_make_icon_image_returns_image():
     img = tray._make_icon_image()
     assert img.size == (64, 64)
