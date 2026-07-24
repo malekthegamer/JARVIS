@@ -12,6 +12,7 @@ additional launcher.
 """
 from __future__ import annotations
 
+import os
 import threading
 import time
 import webbrowser
@@ -87,7 +88,27 @@ def build_icon():
 
 # ---------------------------------------------------------------- server ---
 
+def _ensure_std_streams() -> None:
+    """Give the process real stdout/stderr when launched by pythonw.exe.
+
+    THE Desktop-shortcut bug (v1.0.4). pythonw.exe runs with no console, so
+    sys.stdout and sys.stderr are None. uvicorn's log formatter does
+    `sys.stdout.isatty()` while configuring logging, which raises
+    AttributeError INSIDE the server thread — the server dies before binding
+    the port, and the tray reports the misleading "server did not come up
+    within 15s (is something already using port 8000?)". The port was free the
+    whole time.
+
+    Any `print()` in the imported modules would fail the same way, so this is
+    repaired process-wide, not just for uvicorn."""
+    import sys
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
+
+
 def _run_server() -> None:
+    _ensure_std_streams()          # MUST precede uvicorn's logging config
     import uvicorn
     uvicorn.run("jarvis.server:app", host=config.SERVER_HOST,
                 port=config.SERVER_PORT, log_level="warning")
@@ -147,6 +168,7 @@ def run_guarded(main_fn=main) -> None:
     report). This writes the traceback to data/tray_error.log and shows a
     Windows dialog, so a failed launch is always diagnosable. Returns normally
     on success; re-raises after logging so `python -m` callers still see it."""
+    _ensure_std_streams()   # before ANY print(): pythonw has no stdout at all
     try:
         main_fn()
     except BaseException:  # noqa: BLE001 — a launcher must surface EVERYTHING

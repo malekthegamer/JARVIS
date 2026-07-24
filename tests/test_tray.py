@@ -11,6 +11,39 @@ from jarvis import tray
 from jarvis.state import AgentState
 
 
+def test_ensure_std_streams_repairs_none_stdout(monkeypatch):
+    """v1.0.4 — THE shortcut bug. pythonw.exe (what the Desktop shortcut runs)
+    gives a process with sys.stdout/stderr set to None. uvicorn's log formatter
+    does `sys.stdout.isatty()`, which raises AttributeError inside the server
+    thread, so the server never binds and the tray reports "did not come up".
+    Proven by running the real path under pythonw before this fix."""
+    monkeypatch.setattr("sys.stdout", None)
+    monkeypatch.setattr("sys.stderr", None)
+    tray._ensure_std_streams()
+    import sys
+    assert sys.stdout is not None and sys.stderr is not None
+    # Must be usable the way uvicorn uses them, not merely non-None. The
+    # isatty() call is the exact line that crashed (uvicorn/logging.py:42);
+    # its VALUE doesn't matter (on Windows NUL reports True), only that it
+    # returns instead of raising AttributeError.
+    assert isinstance(sys.stdout.isatty(), bool)
+    assert isinstance(sys.stderr.isatty(), bool)
+    sys.stdout.write("probe")          # must not raise
+    sys.stdout.flush()
+
+
+def test_ensure_std_streams_leaves_real_streams_alone(monkeypatch):
+    """A console run must keep its real stdout — the repair is only for the
+    pythonw case, never a silent replacement of working streams."""
+    import io
+    import sys
+    real = io.StringIO()
+    monkeypatch.setattr("sys.stdout", real)
+    monkeypatch.setattr("sys.stderr", real)
+    tray._ensure_std_streams()
+    assert sys.stdout is real and sys.stderr is real
+
+
 def test_run_guarded_logs_a_crash_instead_of_failing_silently(monkeypatch, tmp_path):
     """The shortcut runs pythonw.exe (no console), so a startup crash used to
     vanish — the 'shortcut does nothing' bug. run_guarded must write the

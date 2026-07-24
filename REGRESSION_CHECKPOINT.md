@@ -27,7 +27,33 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (754 tests: 753 + 1 wake-model pin)
+## 1. Regression signal — test suite (756 tests: 754 + 2 pythonw-stream pins)
+
+### v1.0.4 — THE Desktop shortcut bug, root-caused at last
+- **Symptom:** the shortcut showed "JARVIS could not start"; `tray_error.log`
+  said *"the JARVIS server did not come up within 15s (is something already
+  using port 8000…)"*. **That message was misleading — port 8000 was FREE.**
+- **Root cause (proven, not guessed):** `pythonw.exe` — what the shortcut runs —
+  gives a process with **`sys.stdout` and `sys.stderr` set to `None`**. uvicorn's
+  log formatter calls `sys.stdout.isatty()` (uvicorn/logging.py:42) while
+  configuring logging → `AttributeError` → `ValueError: Unable to configure
+  formatter 'default'` **inside the daemon server thread**, which swallowed it.
+  The server died before binding; the tray only saw "didn't come up."
+- **How it was caught:** the v1.0.2 crash log narrowed it to the server thread;
+  then a probe script run under real `pythonw.exe` captured the thread's
+  traceback to a file (the only way to see it — no console exists).
+  `python.exe` works fine, which is exactly why every earlier check missed it.
+- **Fix:** `_ensure_std_streams()` points `sys.stdout`/`stderr` at `os.devnull`
+  when they are `None`, called at the top of `_run_server()` (before uvicorn
+  configures logging) and in `run_guarded()` (before any `print()`). Real
+  streams are never replaced — pinned by a test.
+- **Verified the way that matters:** launched via the literal
+  `pythonw.exe tray_start.pyw` — port 8000 BOUND, no crash log, `/api/state`
+  returned `{"state":"idle"}`, and the HUD served with the orb. Before the fix
+  the identical command produced a crash log every time.
+- Gate: 528 non-desktop deterministic passed / 0 failed (+2 pins).
+
+
 
 ### v1.0.3 — wake word couldn't be enabled on a fresh install
 - **User-reported:** `python tray_start.pyw` printed `[wake] could not start:
