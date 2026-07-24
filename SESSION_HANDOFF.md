@@ -18,7 +18,22 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
 - **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
 
-**Tests: 735 collected; best full-suite run 728 passed / 7 failed / 0 skipped, all 7 live-brain/live-UIA and each re-verified green individually** (a clean single 735/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+> ## 🚀 SHIPPED — this is now a PUBLIC product, not just a local build
+>
+> **https://github.com/malekthegamer/JARVIS** — public, MIT, latest release
+> **v1.0.4**. Real users (the owner's friends) install from it. That changes the
+> job: a bug now reaches other people's machines, and **the README/release notes
+> are user-facing promises that must stay true.**
+>
+> Install path for a newcomer: download → double-click **`install.bat`** →
+> double-click the Desktop shortcut → paste a Gemini key into the HUD's
+> first-run panel. `legacy/` is NOT published (gitignored); the build docs are.
+>
+> **Post-release, FIVE bugs were found by the owner actually running it** — all
+> one class: *verified in the dev environment, broken in the user's.* See the
+> "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
+
+**Tests: 756 collected; best full-suite run 748 passed / 6 failed / 0 skipped, all 6 live-brain/live-UIA and each re-verified green individually** (a clean single 756/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -220,6 +235,38 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### v1.0.1 – v1.0.4 — the post-release bug run (READ THIS BEFORE SHIPPING)
+Publishing exposed **five** bugs in a row that the 754-test gate had passed.
+Every one shares a root cause: **verified in the dev environment, broken in the
+user's.** The tests weren't wrong; they ran where the bug couldn't occur.
+
+| # | Bug | Why every check missed it |
+|---|---|---|
+| CRLF | `install.bat` had LF-only endings → `cmd.exe`: *"install.bat is not recognized"* | Caught pre-release only because I *ran* a real install. Now pinned + `.gitattributes` |
+| v1.0.1 | Origin guard refused `GET /` → HUD showed `{"error":"cross-origin request refused"}` | `TestClient`/Playwright navigate cleanly (`Sec-Fetch-Site: none`); a real browser arriving **via a redirect** sends `cross-site` |
+| v1.0.2 | Opening Settings/Audit **wiped the conversation** | The ⚙/🗎 were same-tab `<a href>`; no test opened them. Now `target="jarvisAux"` |
+| v1.0.3 | Wake word couldn't be enabled | `openwakeword` ships **without** its `.onnx` models; dev machine had them from months earlier |
+| v1.0.4 | **The Desktop shortcut wouldn't start at all** | `pythonw.exe` (no console) → `sys.stdout is None` → uvicorn's `sys.stdout.isatty()` raises **inside the daemon server thread**, swallowed. Everything dev-side uses `python.exe`, which has a real stdout |
+
+**The transferable lessons:**
+- **Green tests ≠ works for users.** The suite runs in the dev environment, on a
+  machine with accumulated state. Ask "what does the *user's* environment have
+  that mine doesn't — and vice versa?"
+- **Verify through the real entry point.** `python run.py` working proved
+  nothing about `pythonw.exe tray_start.pyw`. v1.0.4 was only ever reproducible
+  by launching the literal shortcut command.
+- **A daemon thread swallows tracebacks.** When something "just doesn't start,"
+  capture the thread's exception **to a file** — with `pythonw` there is no
+  console to print to. That single technique found v1.0.4 in minutes.
+- **My own error messages can lie.** v1.0.4's log blamed port 8000; the port was
+  free. Don't trust a diagnostic you wrote unless it was *verified*.
+- **The crash-logging investment paid off**: `run_guarded()` →
+  `data/tray_error.log` + a dialog (v1.0.2) is what made v1.0.3 and v1.0.4
+  diagnosable at all. Keep it.
+- **Diagnostic for the next launcher bug:**
+  `.venv\Scripts\python.exe tray_start.pyw` (console version of the shortcut),
+  then read `data/tray_error.log`.
 
 ### Slice 37 — one-time installer + first-run key wizard
 - **Goal: make JARVIS runnable by a friend, not just by its author.** Setup was
@@ -504,7 +551,7 @@ e:\J.A.R.V.I.S\
                               audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
                               read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 735 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 756 tests. pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -595,7 +642,7 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 735 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite: 756 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -692,8 +739,19 @@ The four-stage discipline runs automatically every session — **you do not need
 
 ## 7. Suggested next slices (not yet built)
 
-All four spec §1.6 scripts pass; real-browser navigate+read AND committal actions both shipped (slices 24-25); the real-filesystem surface (browse/delete/shortcut/write/read/move/rename/copy anywhere) shipped and was **manually live-verified end to end** in slices 32-33 (see the acceptance note in §2). Spec §1.2's core verb list is now essentially complete. Pick one and plan it. In rough priority:
+All four spec §1.6 scripts pass; real-browser navigate+read AND committal actions both shipped (slices 24-25); the real-filesystem surface (browse/delete/shortcut/write/read/move/rename/copy anywhere) shipped and was **manually live-verified end to end** in slices 32-33 (see the acceptance note in §2). Spec §1.2's core verb list is now essentially complete. **The project is also
+SHIPPED (public repo, real users, v1.0.4)** — so "does a friend's install work"
+is now a first-class concern alongside new features. Pick one and plan it. In
+rough priority:
 
+0. **`browse_key("Enter")` is UN-GATED — the one open *safety* hole.** JARVIS
+   can submit a web form with no confirmation, while clicking that same form's
+   Submit button IS gated (`input.py`'s `_CONFIRM_COMBOS` treats bare Enter as
+   submit; `web.classify_web_key` does not). Same class as the gap slice 27
+   closed. Left open deliberately — fixing it makes web submits start
+   prompting, a user-facing behaviour change the owner should agree to first —
+   but it is the highest-value *correctness* item on this list and it now ships
+   to other people. Ask the owner, then close it.
 1. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is the single biggest drag on the test gate (rate-limited runs at nearly every recent checkpoint, now carrying ~29 live-brain tests). **Slice 35 settled a long-standing assumption: a fresh DAILY bucket is NOT sufficient.** A full suite run on a verified-healthy bucket (burst-probe 5/5) still produced 7 live failures — the suite's clustered calls exhaust the PER-MINUTE cap inside one run, and all 7 passed when run one at a time. So "capture a clean pass on a fresh daily bucket", repeated in checkpoints since slice 20, is not actually achievable on the free tier; only billing or a fallback chain fixes it. Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent. Highest quality-of-life-per-effort item on the list.
 2. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these visibly-disabled ("not ported yet"). Each needs a tool-calling adapter mapping the full primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
 3. **Double-click reliability** (low priority — user call, 2026-07-20) — `click kind='double'` is confirmed flaky in real manual use, real mouse/UIA timing (§5). Single-click and right-click are solid. Not urgent; revisit only if it becomes a real friction point.
@@ -722,7 +780,13 @@ Deliberate, documented deferrals (not silent gaps — each has a one-line reason
 
 ## 8. First moves in the new session
 
+0. **Know that this is SHIPPED** (see the banner at the top): public repo,
+   real users, latest release **v1.0.4**. A regression now reaches other
+   people. Before any change to install/launch/HUD-serving paths, re-read the
+   "v1.0.1–v1.0.4" section above — that failure class recurred five times.
+   When work is release-worthy: commit → `git push` → `gh release create vX.Y.Z
+   --latest --notes ...` (gh is authenticated as `malekthegamer`).
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **735** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **756** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status (all passing) and the most recent gate run's honest failure breakdown.
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode. If the new slice depends on an unverified mechanism, probe it first (see §6).

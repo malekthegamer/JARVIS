@@ -155,7 +155,7 @@ Everything optional degrades to a clear message. Nothing crashes if it's absent.
 python -m pytest tests/ -q
 ```
 
-754 tests. Heads-up before running the full suite: it drives a **real desktop**
+756 tests. Heads-up before running the full suite: it drives a **real desktop**
 (launching and closing Notepad and Chrome — keep the desktop idle for ~8 min),
 briefly toggles Do Not Disturb, and the live tests need a `GEMINI_API_KEY`.
 The live email test sends mail to whatever `TEST_SELF_EMAIL` is set to.
