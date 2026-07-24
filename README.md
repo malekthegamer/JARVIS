@@ -135,12 +135,16 @@ Everything optional degrades to a clear message. Nothing crashes if it's absent.
 ## Security notes
 
 - The server binds to **127.0.0.1 only** and is never exposed to the network.
-- The HUD transport checks the `Origin` header on both HTTP and the WebSocket,
-  so a random website you visit cannot connect to it and drive the agent.
-  Requests with **no** `Origin` are allowed on purpose — browsers always send
-  it, so the browser attack surface is closed, while local tooling (tests,
-  harnesses, curl) keeps working. A local non-browser process already has code
-  execution, so gating it would buy nothing.
+- The **WebSocket and every state-changing request** are guarded by an
+  `Origin` check, so a random website you visit cannot connect to the HUD and
+  drive the agent (run commands, change settings, act). Ordinary **page loads
+  (GET) are allowed** — a malicious site still cannot *read* any response,
+  because the browser's same-origin policy blocks that (the server sends no
+  `Access-Control-Allow-Origin`). Requests with **no** `Origin` are allowed on
+  purpose — browsers always send it, so the browser attack surface is closed,
+  while local tooling (tests, harnesses, curl) keeps working; a local
+  non-browser process already has code execution, so gating it would buy
+  nothing.
 - Long-term memory, the audit log, and the Gmail token are encrypted at rest
   with **Windows DPAPI** — bound to your Windows user account.
 - `.env`, `data/` and the browser profile are git-ignored and never committed.
@@ -151,7 +155,7 @@ Everything optional degrades to a clear message. Nothing crashes if it's absent.
 python -m pytest tests/ -q
 ```
 
-735 tests. Heads-up before running the full suite: it drives a **real desktop**
+754 tests. Heads-up before running the full suite: it drives a **real desktop**
 (launching and closing Notepad and Chrome — keep the desktop idle for ~8 min),
 briefly toggles Do Not Disturb, and the live tests need a `GEMINI_API_KEY`.
 The live email test sends mail to whatever `TEST_SELF_EMAIL` is set to.

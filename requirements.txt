@@ -9,6 +9,7 @@ google-genai>=1.0          # Gemini brain (NOT the deprecated google-generativea
 
 # --- Web server + HUD ---
 fastapi>=0.110
+starlette>=0.37          # imported directly (server.py); ships with fastapi but pin it
 uvicorn[standard]>=0.29
 
 # --- Windows integration (REQUIRED — not optional) ---
