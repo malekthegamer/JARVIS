@@ -142,3 +142,41 @@ def test_sec_fetch_site_cross_site_rejected(client):
     r = client.post("/api/settings", json={"settings": {}},
                     headers={"sec-fetch-site": "cross-site"})
     assert r.status_code == 403, r.status_code
+
+
+# ---------- safe GETs must NOT be blocked (the v1.0.0 hotfix) ----------
+
+def test_cross_site_page_load_is_allowed(client):
+    """REGRESSION (v1.0.0): the guard blocked GET / when Sec-Fetch-Site was
+    'cross-site' — which a real browser sends when you reach 127.0.0.1:8000 via
+    a redirect (typing 'localhost:8000', which many browsers first treat as a
+    search). That broke the HUD with {"error":"cross-origin request refused"}.
+    Loading the page is harmless; a malicious site cannot READ the response
+    cross-origin (same-origin policy), so a safe GET must load."""
+    r = client.get("/", headers={"sec-fetch-site": "cross-site"})
+    assert r.status_code == 200, r.status_code
+    assert "<!doctype html>" in r.text.lower()
+
+
+def test_cross_origin_get_page_load_is_allowed(client):
+    """Same, expressed via a foreign Origin header on a GET navigation."""
+    r = client.get("/", headers={"origin": EVIL, "sec-fetch-site": "cross-site"})
+    assert r.status_code == 200, r.status_code
+
+
+def test_get_api_allowed_but_not_cors_readable(client):
+    """A GET API endpoint is allowed at the server (the guard is for mutating
+    methods + the WebSocket). Cross-origin READ protection comes from CORS: the
+    response must carry NO Access-Control-Allow-Origin, so a foreign page's
+    fetch() cannot read the body. That header's ABSENCE is the real control."""
+    r = client.get("/api/setup_state", headers={"origin": EVIL})
+    assert r.status_code == 200, r.status_code
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers}
+
+
+def test_post_still_guarded_after_get_carveout(client):
+    """The carve-out must not weaken the mutating surface: a cross-site POST is
+    still refused (this is what the slice-36 exploit needed and no longer has)."""
+    assert client.post("/api/settings", json={"settings": {}},
+                       headers={"sec-fetch-site": "cross-site"}).status_code == 403
+    assert client.post("/api/listen", headers={"origin": EVIL}).status_code == 403

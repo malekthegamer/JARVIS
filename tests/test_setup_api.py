@@ -43,8 +43,12 @@ def test_setup_state_never_leaks_the_key(client, monkeypatch):
     assert MARKER[:12] not in raw
 
 
-def test_setup_state_respects_origin_guard(client):
-    """Slice 36's guard must cover every new endpoint automatically."""
+def test_setup_state_get_allowed_but_not_cors_readable(client):
+    """v1.0.0 hotfix: this is a safe GET, so the server allows it (the guard is
+    for the WebSocket + mutating methods). The cross-origin READ is blocked by
+    the browser instead — the response carries no Access-Control-Allow-Origin,
+    so a foreign page's fetch() can't see the body. Booleans only regardless."""
     r = client.get("/api/setup_state",
                    headers={"origin": "https://evil.example.com"})
-    assert r.status_code == 403
+    assert r.status_code == 200
+    assert "access-control-allow-origin" not in {k.lower() for k in r.headers}

@@ -196,9 +196,20 @@ def _origin_ok(headers) -> bool:
     return origin in _ALLOWED_ORIGINS
 
 
+# Safe methods never change state, so they don't need the CSRF/Origin guard —
+# and guarding them was a real v1.0.0 bug: a cross-site GET (e.g. reaching the
+# HUD via a redirect, which stamps Sec-Fetch-Site: cross-site on an ordinary
+# page load) was refused, breaking the HUD entirely. A cross-origin page still
+# cannot READ any response — the same-origin policy blocks that because we send
+# no Access-Control-Allow-Origin — so serving a harmless GET is correct. The
+# guard stays on state-changing methods here, and on the WebSocket (which
+# bypasses CORS) in ws_endpoint.
+_SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+
 @app.middleware("http")
-async def no_cache(request, call_next):
-    if not _origin_ok(request.headers):
+async def guard_and_no_cache(request, call_next):
+    if request.method not in _SAFE_METHODS and not _origin_ok(request.headers):
         return JSONResponse({"error": "cross-origin request refused"},
                             status_code=403)
     response = await call_next(request)

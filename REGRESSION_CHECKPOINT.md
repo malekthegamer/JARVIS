@@ -27,7 +27,33 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (746 tests: 735 + 11 installer/setup pins)
+## 1. Regression signal — test suite (750 tests: 746 + 4 safe-GET hotfix pins)
+
+### v1.0.1 hotfix — the Origin guard blocked the HUD's own page load
+- **Reported by the user minutes after v1.0.0: opening the HUD showed
+  `{"error":"cross-origin request refused"}` instead of the page.** Reproduced,
+  root-caused, fixed, verified — not guessed.
+- **Root cause (a slice-36 regression):** the guard rejected EVERY cross-origin
+  request, including a harmless `GET /`. A real browser stamps
+  `Sec-Fetch-Site: cross-site` on an ordinary page load when you reach
+  127.0.0.1:8000 via a redirect — e.g. typing "localhost:8000", which many
+  browsers first treat as a search, then navigate from the results page. My
+  tests missed it because `TestClient` and Playwright navigate cleanly
+  (`Sec-Fetch-Site: none`), never via a redirect.
+- **Fix:** the CSRF/Origin guard now applies to state-changing methods
+  (POST/PUT/PATCH/DELETE) and the WebSocket only; safe methods (GET/HEAD/
+  OPTIONS) pass. A cross-origin page still cannot READ any response — the
+  same-origin policy blocks that because we send no Access-Control-Allow-Origin
+  (test-pinned) — so serving a harmless GET is correct and standard CSRF design.
+- **Did NOT re-open slice 36:** the WebSocket guard and the POST guard are
+  unchanged; the exploit test and both CSRF tests still pass. Live re-probe:
+  `GET / cross-site` → 200, `POST /api/settings` + `/api/listen` from evil.com →
+  403, and the HUD loaded fully in real Firefox through the cross-site path
+  (green "online" = WebSocket connected, telemetry live, zero console errors).
+- Gate: 522 non-desktop deterministic passed / 0 failed (the change is
+  HTTP-middleware only; desktop/live suites don't exercise it).
+
+
 
 ### Slice 37 — one-time installer + first-run key wizard
 - **Setup went from four manual steps to: download → double-click
