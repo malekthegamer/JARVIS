@@ -82,11 +82,19 @@ echo  [4/6] Downloading Chromium for web automation...
 "%VPY%" -m playwright install chromium
 if errorlevel 1 goto :failed
 
-REM ---------------------------------------------------------------- model
+REM ---------------------------------------------------------------- models
 echo(
-echo  [5/6] Downloading the local memory model (about 90 MB)...
+echo  [5/6] Downloading the local models (memory + wake word)...
 "%VPY%" -m jarvis.core.embedder --setup
 if errorlevel 1 goto :failed
+REM openwakeword ships WITHOUT its .onnx model files; without this the
+REM "hey jarvis" wake-word toggle silently fails to turn on. Non-fatal:
+REM wake word is optional, so a failure here doesn't sink the whole install.
+"%VPY%" -c "import openwakeword.utils as u; u.download_models(['hey_jarvis'])"
+if errorlevel 1 (
+    echo        Wake-word model download failed - everything else still works;
+    echo        wake word will be unavailable until you re-run install.bat.
+)
 
 REM ---------------------------------------------------------------- shortcut
 echo(

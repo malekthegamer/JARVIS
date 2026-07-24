@@ -70,6 +70,15 @@ def test_gitattributes_pins_bat_eol():
     assert "*.bat text eol=crlf" in ga.read_text(encoding="utf-8")
 
 
+def test_install_bat_downloads_wake_word_model():
+    """openwakeword ships WITHOUT its .onnx models; `pip install` alone leaves
+    the 'hey jarvis' wake-word toggle silently unable to turn on (v1.0.3 bug).
+    The installer must fetch them."""
+    text = _text()
+    assert "openwakeword" in text and "download_models" in text, \
+        "install.bat must download the openwakeword models"
+
+
 def test_install_bat_registers_pywin32_com():
     """pywin32's COM registration is NOT automatic inside a venv, and win32com
     powers DPAPI encryption, the Recycle Bin and shortcuts. Missing this makes

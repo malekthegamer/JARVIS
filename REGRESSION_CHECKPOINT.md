@@ -27,7 +27,30 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (753 tests: 750 + 3 v1.0.2 fix pins)
+## 1. Regression signal — test suite (754 tests: 753 + 1 wake-model pin)
+
+### v1.0.3 — wake word couldn't be enabled on a fresh install
+- **User-reported:** `python tray_start.pyw` printed `[wake] could not start:
+  NO_SUCHFILE ... hey_jarvis_v0.1.onnx failed. File doesn't exist`, and the tray
+  "Wake-word listening" toggle wouldn't stay on.
+- **Root cause:** `openwakeword` ships WITHOUT its `.onnx` model files, and
+  neither `install.bat` nor the manual setup downloaded them — it worked on the
+  author's machine only because dev had fetched them months earlier. Both
+  symptoms are the same missing files: `toggle_wake()` calls `start_wake()`,
+  the model load raises, `wake_running()` stays False, so the checkmark never
+  sticks (it reads as "can't be enabled").
+- **Fix:** install.bat step 5 now also runs
+  `openwakeword.utils.download_models(['hey_jarvis'])` (non-fatal — wake word is
+  optional, so a failed download doesn't sink the install); README manual setup
+  updated; pinned by `test_install_bat_downloads_wake_word_model`. **Proven:**
+  the exact call was run to a temp dir — it fetched melspectrogram + embedding +
+  VAD + hey_jarvis (7 files) and the model loaded from them.
+- The tray now DOES launch (the earlier "shortcut does nothing" was the port
+  clash with a running run.py, per the v1.0.2 diagnostics).
+- Gate: static installer/README change + 1 new pin; targeted files green (46),
+  deterministic core was 525/0 earlier this session.
+
+
 
 ### v1.0.2 — two user-reported bugs
 - **Opening Settings/Audit wiped the conversation.** The ⚙/🗎 icons were plain

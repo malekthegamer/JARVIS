@@ -69,6 +69,7 @@ If you'd rather not run a script:
 pip install -r requirements.txt
 playwright install chromium              # browser automation
 python -m jarvis.core.embedder --setup   # local memory model (~90 MB)
+python -c "import openwakeword.utils as u; u.download_models(['hey_jarvis'])"  # "hey jarvis" wake word (optional)
 copy .env.example .env                   # then paste your Gemini key into .env
 ```
 
