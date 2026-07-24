@@ -66,6 +66,32 @@
     </div>
   </div>
 
+  <!-- Slice 37: first-run setup. Shown only when no brain key is configured,
+       so a new install explains itself instead of failing silently. -->
+  <div class="setup-backdrop hidden" id="setup-backdrop">
+    <div class="setup-modal" role="dialog" aria-modal="true"
+         aria-labelledby="setup-title">
+      <p class="setup-title" id="setup-title">ONE LAST STEP</p>
+      <p class="setup-desc">
+        JARVIS needs a free Google Gemini API key to think. It is free, takes
+        about a minute, and stays on this machine — it is written to your local
+        <code>.env</code> file and never leaves it.
+      </p>
+      <ol class="setup-steps">
+        <li>Open <a href="https://aistudio.google.com/apikey" target="_blank"
+                    rel="noopener noreferrer">aistudio.google.com/apikey</a></li>
+        <li>Click <strong>Create API key</strong> and copy it</li>
+        <li>Paste it below</li>
+      </ol>
+      <input id="setup-key" type="password" autocomplete="off" spellcheck="false"
+             placeholder="Paste your Gemini API key here" aria-label="Gemini API key">
+      <p class="setup-error hidden" id="setup-error"></p>
+      <div class="setup-buttons">
+        <button type="button" id="setup-save">Save &amp; start</button>
+      </div>
+    </div>
+  </div>
+
   <form class="chat" id="chat-form">
     <input id="chat-input" type="text" autocomplete="off" spellcheck="false"
            placeholder="Or type a message…" aria-label="Message JARVIS">

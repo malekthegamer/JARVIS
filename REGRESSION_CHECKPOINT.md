@@ -27,7 +27,47 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (735 tests: 727 + 8 release-readiness pins)
+## 1. Regression signal — test suite (746 tests: 735 + 11 installer/setup pins)
+
+### Slice 37 — one-time installer + first-run key wizard
+- **Setup went from four manual steps to: download → double-click
+  `install.bat` → double-click a Desktop shortcut**, with the Gemini key
+  collected in the HUD instead of a text editor.
+- **A single `.exe` was costed and rejected on measurements, not vibes:** the
+  scratch install came out at **1,004 MB** (packages 364 MB + Chromium 426 MB +
+  model 91 MB), it would have to drop local Whisper, and an unsigned binary
+  that synthesizes input + runs shell commands is an AV/SmartScreen worst case.
+- **REAL BUG FOUND BY RUNNING IT, not reading it:** `install.bat` shipped with
+  **LF-only line endings** (0 CRLF / 140 LF). `cmd.exe` mishandles that — a
+  fresh clone fails with "'install.bat' is not recognized". Fixed, pinned by
+  `test_install_bat_has_crlf_line_endings`, and `.gitattributes`
+  (`*.bat text eol=crlf`) stops git ever handing a friend an LF copy. Also
+  fixed: a successful install that declined the launch prompt exited with
+  `choice`'s errorlevel 2, i.e. looked like a failure.
+- **Distinguished from a false alarm:** a separate "not recognized" error was
+  traced to Git Bash setting `NoDefaultCurrentDirectoryInExePath` (bare
+  `install.bat` fails, `.\install.bat` works) — a harness artifact, NOT a
+  product defect. Reported as such rather than "fixed" by guesswork.
+- **Verified end to end on a real install** (scratch copy, path containing a
+  space): all 6 steps ran, then the INSTALLED copy was functionally probed —
+  `pywin32 COM OK`, **DPAPI encrypt/decrypt roundtrip True**, embedder
+  available, **40 primitives registered**, full stack imports. Not "files
+  exist" — it actually works. The Desktop shortcut resolved to the venv's
+  `pythonw.exe` + `tray_start.pyw` + correct workdir.
+- `pywin32_postinstall -install` is an explicit step: COM is NOT auto-registered
+  in a venv, and `win32com` powers DPAPI/Recycle-Bin/shortcuts. `playwright
+  install chromium` is pinned chromium-only (a bare install pulls firefox +
+  webkit — 494 MB measured waste).
+- **`GET /api/setup_state` returns booleans only** — a seeded key marker is
+  test-pinned as absent, and it inherits the slice-36 Origin guard (pinned).
+  Saving reuses the existing `POST /api/settings` path: detection added, no new
+  way to write secrets.
+- **Vision check passed** — and earned its keep: 5 DOM asserts were green while
+  the screenshot showed the numbered steps rendered at `--text-dim`, nearly
+  unreadable, on the single most important screen a new user sees. Raised to
+  full contrast and re-shot. The DOM could not have caught that.
+
+
 
 ### Slice 36 — release readiness: closed an auth bypass, then published
 - **The most serious defect found in this project.** The HUD transport was

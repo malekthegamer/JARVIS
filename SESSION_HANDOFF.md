@@ -221,6 +221,47 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 37 — one-time installer + first-run key wizard
+- **Goal: make JARVIS runnable by a friend, not just by its author.** Setup was
+  four manual steps (`pip install`, `playwright install chromium`, the embedder
+  model, hand-editing `.env`). Now: download → **double-click `install.bat`** →
+  double-click a Desktop shortcut, with the API key collected **in the HUD**.
+- **A true single `.exe` was costed and rejected** (measured, not guessed):
+  ~364 MB of packages + ~426 MB Chromium + 91 MB model ≈ **900 MB-1 GB**, would
+  have to drop local Whisper, and an unsigned binary that synthesizes input and
+  runs shell commands is an antivirus/SmartScreen worst case (code-signing cert
+  ~$100-400/yr). Tier 1+2 gets ~90% of the benefit for ~15% of the effort.
+- **`install.bat`:** finds Python (or installs 3.12 via winget — probe-confirmed
+  present, v1.29.280) → `.venv` (system Python untouched; the shortcut targets
+  `.venv\Scripts\pythonw.exe` **directly**, so nothing ever needs "activating")
+  → pip install → **`pywin32_postinstall -install`** (COM is NOT auto-registered
+  in a venv, and `win32com` powers DPAPI/Recycle-Bin/shortcuts — skipping it
+  breaks JARVIS later in ways that look unrelated) → `playwright install
+  chromium` **only** (a bare `playwright install` also pulls firefox+webkit —
+  measured 494 MB of waste, now test-pinned) → embedder model → Desktop
+  shortcut via PowerShell. Every step aborts loudly with the real error.
+- **`fsaccess.py` was deliberately NOT touched:** `_create_lnk` sets no
+  `Arguments` and forces `WorkingDirectory` to the target's parent, so it can't
+  build this shortcut — and widening a CONFIRM-gated security primitive to
+  serve an installer is the wrong trade. The installer makes its own shortcut.
+- **First-run wizard:** new `GET /api/setup_state` returns **booleans only**
+  (`brain_key`, `model_ready`) — a seeded key marker is test-pinned as absent
+  from the response, the same posture as the audit viewer. The HUD shows a
+  cyan setup panel when no key is set; saving reuses the **existing**
+  `POST /api/settings` path (already writes `.env` + hot-reloads), so this adds
+  *detection* only, never a new way to write secrets. Rides the slice-36 Origin
+  guard automatically (pinned).
+- **A REAL shipping bug was found by running the installer rather than reading
+  it: `install.bat` had LF-only line endings** (0 CRLF / 140 LF), which
+  `cmd.exe` mishandles — a fresh clone would have failed with "'install.bat' is
+  not recognized". Fixed, plus **`.gitattributes` (`*.bat text eol=crlf`)** so
+  git can never hand a friend an LF copy, plus two tests pinning both. No code
+  review would have caught this.
+- **Vision check passed** (`harness_setup_visual.py`): 5 DOM asserts + the
+  screenshot inspected claim-by-claim. The image caught what the DOM could not
+  — the numbered steps rendered at `--text-dim`, near-unreadable, on the single
+  most important screen a new user sees. Raised to full contrast and re-shot.
+
 ### Slice 36 — release readiness: closed an auth bypass, then published
 - **Found by a pre-publish audit, and it is the most serious defect found in
   this project so far.** The HUD transport was **unauthenticated**. The server

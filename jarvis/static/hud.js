@@ -324,9 +324,65 @@
       flashHint("One moment — still working on the last one.");
   }
 
+  // ---------- slice 37: first-run setup ----------
+  // A fresh install has no API key. Without this the HUD looks fine and every
+  // message fails, which reads as "it's broken" rather than "it needs a key".
+  const setupBackdrop = document.getElementById("setup-backdrop");
+  const setupKey = document.getElementById("setup-key");
+  const setupSave = document.getElementById("setup-save");
+  const setupError = document.getElementById("setup-error");
+
+  function showSetupError(message) {
+    setupError.textContent = message;
+    setupError.classList.remove("hidden");
+  }
+
+  async function checkSetup() {
+    try {
+      const r = await fetch("/api/setup_state");
+      if (!r.ok) return;
+      const state = await r.json();
+      setupBackdrop.classList.toggle("hidden", state.brain_key === true);
+      if (state.brain_key !== true) setupKey.focus();
+    } catch { /* offline/never-block: the HUD still works without this */ }
+  }
+
+  async function saveSetupKey() {
+    const key = setupKey.value.trim();
+    if (!key) { showSetupError("Paste the key first."); return; }
+    setupSave.disabled = true;
+    setupError.classList.add("hidden");
+    try {
+      const r = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keys: { gemini: key } }),
+      });
+      if (!r.ok) { showSetupError(`Could not save (HTTP ${r.status}).`); return; }
+      const after = await (await fetch("/api/setup_state")).json();
+      if (after.brain_key === true) {
+        setupBackdrop.classList.add("hidden");
+        setupKey.value = "";
+      } else {
+        showSetupError("That key was not accepted. Check you copied all of it.");
+      }
+    } catch (err) {
+      showSetupError("Could not reach JARVIS to save the key.");
+    } finally {
+      setupSave.disabled = false;
+    }
+  }
+
+  setupSave.addEventListener("click", saveSetupKey);
+  setupKey.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); saveSetupKey(); }
+  });
+  checkSetup();
+
   // Test hooks: let verification tooling render any state deterministically.
   window.__hudSetState = setState;
   window.__hudEvent = handleEvent;
+  window.__hudCheckSetup = checkSetup;
 
   document.getElementById("orb-button").addEventListener("click", pushToTalk);
   document.addEventListener("keydown", (e) => {

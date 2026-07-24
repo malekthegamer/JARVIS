@@ -320,6 +320,26 @@ def get_settings() -> JSONResponse:
     })
 
 
+@app.get("/api/setup_state")
+def get_setup_state() -> JSONResponse:
+    """Slice 37: does this install still need first-run setup?
+
+    BOOLEANS ONLY — the key itself must never cross the wire, even to
+    localhost (same posture as the audit viewer, which never decrypts a
+    payload just to list records). The HUD uses this to decide whether to
+    show the setup panel instead of a silently-dead assistant."""
+    from jarvis import config
+    try:
+        from jarvis.core import embedder
+        model_ready = bool(embedder.available())
+    except Exception:
+        model_ready = False
+    return JSONResponse({
+        "brain_key": bool(config.get_api_key("gemini")),
+        "model_ready": model_ready,
+    })
+
+
 @app.post("/api/settings")
 async def post_settings(payload: dict) -> JSONResponse:
     from jarvis import config

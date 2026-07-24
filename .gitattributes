@@ -1,0 +1,10 @@
+# Windows batch files MUST check out with CRLF. cmd.exe mishandles LF-only
+# .bat files — a fresh clone on a machine with core.autocrlf=false would get an
+# installer that fails with "'install.bat' is not recognized" (found the hard
+# way in slice 37, by actually running it rather than trusting it).
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Everything else: normalise in the repo, let git decide on checkout.
+* text=auto

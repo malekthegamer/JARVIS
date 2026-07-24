@@ -446,3 +446,110 @@ body[data-state="confirming"] .state-label { color: var(--amber); }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; }
 }
+
+/* ---------- slice 37: first-run setup panel ---------- */
+/* Mirrors the confirm modal's shape, but in accent cyan — this is guidance,
+   not a warning, and must not read as an alarm. */
+.setup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(5, 7, 10, 0.72);
+  backdrop-filter: blur(5px);
+}
+
+.setup-backdrop.hidden { display: none; }
+
+.setup-modal {
+  width: min(520px, 90vw);
+  padding: 28px 30px 24px;
+  background: rgba(6, 14, 20, 0.92);
+  border: 1px solid var(--accent);
+  border-radius: 14px;
+  box-shadow: 0 0 34px rgba(59, 232, 255, 0.22),
+              inset 0 0 26px rgba(59, 232, 255, 0.05);
+}
+
+.setup-title {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  letter-spacing: 0.28em;
+  color: var(--accent);
+}
+
+.setup-desc {
+  margin: 0 0 14px;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.setup-desc code {
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(59, 232, 255, 0.10);
+  font-family: var(--mono, monospace);
+  font-size: 0.86em;
+}
+
+.setup-steps {
+  margin: 0 0 18px;
+  padding-left: 20px;
+  font-size: 0.9rem;
+  line-height: 1.8;
+  /* Deliberately NOT --text-dim: the screenshot check showed steps 2-3 sitting
+     at barely-readable contrast, and these are the most important words on a
+     first-run screen. Dim styling is for chrome, not instructions. */
+  color: var(--text);
+}
+
+.setup-steps a { color: var(--accent); }
+
+#setup-key {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid rgba(59, 232, 255, 0.35);
+  border-radius: 8px;
+  background: rgba(5, 7, 10, 0.75);
+  color: var(--text);
+  font-family: var(--mono, monospace);
+  font-size: 0.9rem;
+}
+
+#setup-key:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(59, 232, 255, 0.16);
+}
+
+.setup-error {
+  margin: 10px 0 0;
+  font-size: 0.85rem;
+  color: var(--amber);
+}
+
+.setup-error.hidden { display: none; }
+
+.setup-buttons {
+  margin-top: 18px;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.setup-buttons button {
+  padding: 9px 20px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(59, 232, 255, 0.12);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.86rem;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.setup-buttons button:hover { background: rgba(59, 232, 255, 0.22); }
+.setup-buttons button:disabled { opacity: 0.5; cursor: default; }

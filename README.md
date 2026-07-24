@@ -45,16 +45,30 @@ you, that is a completely reasonable conclusion.
 - **Python 3.12**
 - A free **Gemini API key** → https://aistudio.google.com/apikey
 
-## Setup
+## Setup — the easy way
+
+1. Download this repo (green **Code → Download ZIP**, then unzip — or
+   `git clone https://github.com/malekthegamer/JARVIS.git`)
+2. **Double-click `install.bat`**
+3. Double-click the **J.A.R.V.I.S** shortcut it puts on your Desktop
+
+The installer builds a local `.venv` (your system Python is left alone),
+installs everything, downloads Chromium and a small speech model (~500 MB
+total), and creates the shortcut. It is safe to re-run — it skips whatever is
+already done, and stops loudly rather than leaving a half-install.
+
+On first launch JARVIS asks for a **free Gemini API key** in the HUD itself —
+paste it in and you're running. Get one at
+[aistudio.google.com/apikey](https://aistudio.google.com/apikey).
+
+## Setup — by hand
+
+If you'd rather not run a script:
 
 ```powershell
-git clone https://github.com/malekthegamer/JARVIS.git
-cd JARVIS
 pip install -r requirements.txt
-
 playwright install chromium              # browser automation
-python -m jarvis.core.embedder --setup   # one-time local embedding model (~90 MB)
-
+python -m jarvis.core.embedder --setup   # local memory model (~90 MB)
 copy .env.example .env                   # then paste your Gemini key into .env
 ```
 
