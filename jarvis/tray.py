@@ -107,14 +107,47 @@ def _ensure_std_streams() -> None:
             setattr(sys, name, open(os.devnull, "w", encoding="utf-8"))
 
 
+# The server thread's traceback, if it died. v1.0.4 taught that a daemon
+# thread swallows tracebacks — and _ensure_std_streams() points stderr at
+# os.devnull, so under pythonw there was literally nowhere for it to go. The
+# launcher then ASKED "did startup crash?" because it could not know. Now it
+# can.
+_server_error: str | None = None
+
+
 def _run_server() -> None:
+    global _server_error
     _ensure_std_streams()          # MUST precede uvicorn's logging config
-    import uvicorn
-    uvicorn.run("jarvis.server:app", host=config.SERVER_HOST,
-                port=config.SERVER_PORT, log_level="warning")
+    try:
+        import uvicorn
+        uvicorn.run("jarvis.server:app", host=config.SERVER_HOST,
+                    port=config.SERVER_PORT, log_level="warning")
+    except BaseException:          # noqa: BLE001 — a swallowed crash is the bug
+        import traceback
+        _server_error = traceback.format_exc()
+        try:
+            path = config.DATA_DIR / "server_error.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(_server_error, encoding="utf-8")
+        except Exception:
+            pass                   # logging the crash must never mask it
 
 
-def _wait_for_server(timeout: float = 15.0) -> bool:
+def _wait_for_server(timeout: float = 120.0, thread=None) -> bool:
+    """Wait for the server to answer /api/state.
+
+    v1.0.6 — THE "JARVIS could not start" on every boot. This used to allow a
+    fixed 15s, which was a GUESS at cold-start cost and simply wrong: measured
+    on one idle machine, minutes apart, the same launch took **17.6s cold** and
+    **3.3s warm**. Every boot is cold by definition and competes with every
+    other startup app, so autostart failed EVERY time while a later
+    double-click always worked — and the failure killed the process, so JARVIS
+    never came up at all.
+
+    So don't time it, watch it: keep waiting while the server thread is ALIVE,
+    and bail the moment it DIES. A slow start is not a failure; a dead thread
+    is, and it needs no waiting at all. The remaining timeout is only a
+    backstop against a wedged thread."""
     import urllib.request
     url = f"http://{config.SERVER_HOST}:{config.SERVER_PORT}/api/state"
     deadline = time.time() + timeout
@@ -123,20 +156,62 @@ def _wait_for_server(timeout: float = 15.0) -> bool:
             urllib.request.urlopen(url, timeout=1)
             return True
         except Exception:
-            time.sleep(0.3)
+            pass
+        if thread is not None and not thread.is_alive():
+            return False           # it will never answer — don't sit out the clock
+        time.sleep(0.3)
     return False
 
 
+def _port_holder() -> str | None:
+    """'name (pid N)' of whatever is listening on our port, or None."""
+    try:
+        import psutil
+        for conn in psutil.net_connections(kind="inet"):
+            if (conn.status == psutil.CONN_LISTEN and conn.laddr
+                    and conn.laddr.port == config.SERVER_PORT):
+                if not conn.pid:
+                    return "another process"
+                try:
+                    return f"{psutil.Process(conn.pid).name()} (pid {conn.pid})"
+                except Exception:
+                    return f"pid {conn.pid}"
+    except Exception:
+        return None                # needs privileges on some systems — don't guess
+    return None
+
+
+def _startup_failure_reason() -> str:
+    """Say what actually happened. The old message asked the USER to guess
+    ("is something already using port 8000, or did startup crash?") — and in
+    v1.0.4 that guess was wrong and cost real debugging time."""
+    if _server_error:
+        return ("the server thread crashed during startup:\n\n"
+                f"{_server_error}\n"
+                f"(also saved to {config.DATA_DIR / 'server_error.log'})")
+    holder = _port_holder()
+    if holder:
+        return (f"port {config.SERVER_PORT} is already in use by {holder}. "
+                f"Close it, or change the port in settings.")
+    return (f"the server is still starting and had not answered after "
+            f"{int(_STARTUP_TIMEOUT_S)}s — unusually slow, but nothing looks "
+            f"broken (the server thread is alive and port "
+            f"{config.SERVER_PORT} is free).")
+
+
+_STARTUP_TIMEOUT_S = 120.0
+
+
 def main() -> None:
-    threading.Thread(target=_run_server, name="jarvis-server", daemon=True).start()
-    if not _wait_for_server():
+    server_thread = threading.Thread(target=_run_server, name="jarvis-server",
+                                     daemon=True)
+    server_thread.start()
+    if not _wait_for_server(timeout=_STARTUP_TIMEOUT_S, thread=server_thread):
         # Raise, don't return: run_guarded() turns this into a visible dialog +
         # log. A silent return under pythonw is exactly the "shortcut does
         # nothing" failure.
-        raise RuntimeError(
-            "the JARVIS server did not come up within 15s "
-            "(is something already using port "
-            f"{config.SERVER_PORT}, or did startup crash?)")
+        raise RuntimeError("JARVIS's server did not start — "
+                           + _startup_failure_reason())
     print(f"JARVIS tray running. HUD: {HUD_URL}")
 
     icon = build_icon()

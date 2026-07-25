@@ -295,8 +295,18 @@ user's.** The tests weren't wrong; they ran where the bug couldn't occur.
 | v1.0.2 | Opening Settings/Audit **wiped the conversation** | The ⚙/🗎 were same-tab `<a href>`; no test opened them. Now `target="jarvisAux"` |
 | v1.0.3 | Wake word couldn't be enabled | `openwakeword` ships **without** its `.onnx` models; dev machine had them from months earlier |
 | v1.0.4 | **The Desktop shortcut wouldn't start at all** | `pythonw.exe` (no console) → `sys.stdout is None` → uvicorn's `sys.stdout.isatty()` raises **inside the daemon server thread**, swallowed. Everything dev-side uses `python.exe`, which has a real stdout |
+| v1.0.5 | **All voice silently dead on a fresh install** | `install.bat` fell back to `py -3` = the NEWEST Python. 3.13 removed `audioop`/`aifc`; pip installs fine there, so setup printed "Done." and voice died at first use. Dev had 3.12 |
+| v1.0.6 | **"JARVIS could not start" after EVERY reboot** | The launcher allowed the server a **guessed** 15s. Measured 17.6s cold vs 3.3s warm — every boot is cold, every double-click is warm. Dev only ever double-clicked |
 
 **The transferable lessons:**
+- **A timeout constant is a GUESS about someone else's machine.** v1.0.6's 15s
+  was invisible in dev because dev is always warm. If a deadline guards work
+  whose cost you don't control, watch *liveness* (is the worker alive?) instead
+  of guessing a duration — a slow start is not a failure.
+- **When a message asks the user a question ("did startup crash?"), that is a
+  bug report about your own diagnostics.** It means the code could have known
+  and didn't bother to find out. Both v1.0.4 and v1.0.6 were prolonged by the
+  same sentence.
 - **Green tests ≠ works for users.** The suite runs in the dev environment, on a
   machine with accumulated state. Ask "what does the *user's* environment have
   that mine doesn't — and vice versa?"

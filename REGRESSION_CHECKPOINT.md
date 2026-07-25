@@ -29,6 +29,56 @@ dry-run chain proving no Notepad appeared).
 
 ## 1. Regression signal — test suite (756 tests: 754 + 2 pythonw-stream pins)
 
+### v1.0.6 — "JARVIS could not start" on EVERY boot: a guessed constant
+- **Symptom:** the user got the `JARVIS could not start` dialog after every
+  single restart. `tray_error.log` said *"the JARVIS server did not come up
+  within 15s (is something already using port 8000, or did startup crash?)"* —
+  **the same message that lied in v1.0.4.**
+- **Root cause (MEASURED, not guessed):** `main()` gave the server a fixed
+  **15s** to answer. That constant was a guess at cold-start cost, and it is
+  simply too small. On one idle machine, same command, minutes apart:
+
+  | launch | time to answer `/api/state` | vs 15s |
+  |---|---|---|
+  | first (cold imports) | **17.6s** | ❌ |
+  | second (warm) | **3.3s** | ✅ |
+
+  Every boot is cold **by definition**, and competes with every other startup
+  app — so autostart failed deterministically at boot and worked on every later
+  double-click. `main()` then RAISED, killing the process, so JARVIS never came
+  up at all: the dialog was not a warning, it was the whole outcome.
+- **Correlation that pinned it:** last boot 17:43:08, `tray_error.log` written
+  17:44:13 (65s after boot), nothing listening on 8000, and **no python process
+  alive** — the launcher had died and never recovered.
+- **Two hypotheses were measured and DISCARDED before the real one:**
+  `start_wake()` blocking the lifespan (measured **1.5s** — not it) and urllib
+  routing localhost through a proxy (no proxy configured — not it).
+- **Fix — stop timing, start observing.** `_wait_for_server(thread=…)` now
+  waits while the server thread is **alive** and returns the moment it **dies**.
+  A slow start is not a failure; a dead thread is, and needs no waiting. The
+  120s timeout is only a backstop against a wedged thread.
+- **The v1.0.4 lesson, finally implemented.** `_run_server()` had no
+  `try/except`, and `_ensure_std_streams()` points stderr at `os.devnull` — so
+  a server-thread traceback went **nowhere**, which is precisely why the old
+  message had to ASK "did startup crash?". It now captures the traceback to
+  `data/server_error.log` and reports it. `_startup_failure_reason()` states
+  facts: the real traceback, or the **named process** holding the port
+  (via psutil), or an honest "still starting, nothing looks broken".
+- **Second bug found in the same investigation:** `autostart._command()` built
+  the Run key from `sys.executable`, so enabling autostart from a global-Python
+  run pinned startup to **global Python** while the Desktop shortcut used
+  `.venv` — the same app in two environments. Now prefers `.venv`, which
+  install.bat guarantees is 3.12 with the right packages. (Left alone, a future
+  global upgrade to 3.13 would have silently killed all voice — see v1.0.5.)
+- **Verified through the REAL entry point,** not unit tests: `__pycache__`
+  cleared to force a cold-ish start, launched via the literal Run-key command
+  (`.venv\Scripts\pythonw.exe tray_start.pyw`). Server answered after
+  **16.9s — past the old 15s deadline** — and produced **no tray_error.log, no
+  server_error.log, tray alive**. The exact conditions that used to fail now
+  start clean.
+- Gate: non-desktop deterministic **567 passed / 7 failed**, all 7 live-brain
+  (free-tier quota); `test_tray` 15/15, `test_installer` 13/13.
+
 ### Slice 38 — the CONFIRM modal shows WHAT, not just WHERE
 - **Closed the one open safety hole (§7 item 0) and the blind-approval half of
   two existing gates.** `browse_key("Enter")` submitted forms on the owner's

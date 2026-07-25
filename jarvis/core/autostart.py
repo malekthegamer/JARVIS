@@ -20,8 +20,21 @@ _VALUE_NAME = "JARVIS"
 
 
 def _command() -> str:
-    pythonw = Path(sys.executable).with_name("pythonw.exe")
-    exe = str(pythonw if pythonw.exists() else sys.executable)
+    """The Run-key command. Prefers the repo's OWN .venv interpreter.
+
+    v1.0.6: this used to build from sys.executable, so enabling autostart from
+    a global-Python run pinned startup to GLOBAL Python while the Desktop
+    shortcut used .venv — the same app launching in two different environments.
+    install.bat guarantees .venv has the right packages AND the right Python
+    (3.12; see test_installer — 3.13 removed audioop and silently kills all
+    voice), and guarantees nothing at all about whatever `python` happens to be
+    on PATH later."""
+    venv_pythonw = config.BASE_DIR / ".venv" / "Scripts" / "pythonw.exe"
+    if venv_pythonw.exists():
+        exe = str(venv_pythonw)
+    else:
+        pythonw = Path(sys.executable).with_name("pythonw.exe")
+        exe = str(pythonw if pythonw.exists() else sys.executable)
     return f'"{exe}" "{config.BASE_DIR / "tray_start.pyw"}"'
 
 
