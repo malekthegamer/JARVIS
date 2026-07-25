@@ -236,6 +236,47 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 39 — JARVIS's Chrome becomes the user's DAILY browser
+- **The complaint, and it was fair:** real-browser mode drove a dedicated,
+  **empty** profile while the owner browsed in their everyday one — "it kinda
+  kills its purpose". The problem was never the folder name; it was that the
+  profile had none of their logins, bookmarks or sessions.
+- **Driving the literal `Default` profile is NOT achievable — verified, and it
+  is not ours to fix.** Chrome **150.0.7871.182** on this machine, with
+  **App-Bound Encryption active** (`app_bound_encrypted_key` present in Local
+  State). Three independent blocks: (1) remote debugging is a **launch flag**,
+  so it can never be turned on for an already-running Chrome; (2) Chrome 136+
+  **refuses `--remote-debugging-port` when the user-data-dir is the default
+  one** — Google's deliberate anti-session-stealing hardening; (3) ABE is why
+  copying a profile doesn't carry logins. **Do not re-plan this without new
+  evidence that Chrome's policy changed.**
+- **The answer instead:** sign JARVIS's profile into **Chrome Sync** and make it
+  the browser the user actually uses. Same passwords/bookmarks/history/
+  extensions — so it genuinely *is* their browser. Owner chose this over the
+  extension bridge (kept in `IDEAS.md` §6 as the purist option).
+- **Stage-0 probes settled the design** (and one of them made the slice
+  necessary): attaching over CDP to a running Chrome took **0.32s** and
+  `browser.close()` **detaches without closing it** (verified still alive) — so
+  quitting JARVIS can safely leave the browser up. And a **second launch on the
+  same `--user-data-dir` gets NO debug port**, exiting rc=0 and forwarding to
+  the first instance — so "spawn anyway" is provably wrong; attaching is
+  required, not an optimisation.
+- **The dangerous thing this exposed:** `_reap_stale_profile_chrome()`
+  **terminated** any Chrome holding that profile dir. Safe for a throwaway;
+  catastrophic once it's the user's browser full of open tabs. Replaced by
+  `_profile_chrome_pid()`, which only **reports** — and `_launch_real` now
+  refuses with the pid and the exact recovery ("quit it, relaunch from the
+  JARVIS browser shortcut") rather than killing anything. **`self._proc` is set
+  only for a Chrome we started**, which is what makes teardown safe.
+- **Tray gained "Open my browser"** (`web.launch_daily_browser()`, idempotent —
+  it never spawns a second instance). Clicking the ordinary Chrome icon opens
+  the Default profile, which JARVIS can never drive; this is the way to start
+  the browser it can.
+- **HUD badge (vision-checked):** an amber `YOUR BROWSER · ACTING` /
+  `· READING` pill in the header, distinguishing the two stacked opt-ins.
+  Closes §7 item 5's HUD-indicator residual, which mattered much more once this
+  is the everyday browser. 4 DOM asserts + the screenshot inspected.
+
 ### Slice 38 — close the CONFIRM payload gap (the modal showed WHERE, not WHAT)
 - **The gap, stated plainly:** JARVIS's whole safety promise is that a CONFIRM
   shows the *literal* thing it will do — and that held only where a verb
@@ -741,6 +782,22 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   a DND change re-opens Settings briefly (the original action's same cost);
   tabs/media-keys/email/shell are categorically irreversible and test-pinned
   as never-undoable. Redo does not exist (undoing an undo is out of scope).
+- **Daily-browser debug port (slice 39):** once JARVIS's Chrome is the user's
+  everyday browser, it runs with `--remote-debugging-port` open on 127.0.0.1.
+  **Any local process can then drive that browser** — read its pages, act as the
+  signed-in user. This is the same trust boundary as the transport-auth note
+  below (a local non-browser process already has code execution), and it is the
+  deliberate price of the feature, but it is a genuine widening: before, only a
+  logged-out throwaway profile was exposed; now it is the user's real sessions.
+  Disclosed in the README, not buried. Also note JARVIS **cannot** attach to a
+  profile Chrome started without the flag — it refuses and names the pid rather
+  than killing the user's tabs.
+- **Chrome could harden further (slice 39):** the whole approach rests on
+  `--remote-debugging-port` still being allowed on a NON-default user-data-dir.
+  That is exactly the permission Chrome 136 revoked for the default dir. If a
+  future Chrome extends the block, real-browser mode dies and the extension
+  bridge (`IDEAS.md` §6) becomes the only route. Recorded as a known future
+  risk, not as permanence.
 - **Transport auth (slice 36):** the HUD has **no user authentication** — the
   boundary is `Origin` validation plus the 127.0.0.1 bind, nothing more. That
   closes the browser attack surface (browsers always send `Origin`), but any

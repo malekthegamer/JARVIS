@@ -16,6 +16,11 @@
     <!-- Open in a separate tab (shared name = one reused tab, not many) so the
          HUD is never navigated away: its conversation transcript lives only in
          this page, and a full navigation to /settings would wipe it on return. -->
+    <!-- Slice 39: when JARVIS is driving the user's REAL logged-in browser,
+         that must be visible at a glance — not buried in the settings page. -->
+    <span class="realbrowser hidden" id="realbrowser" title="">
+      <span class="realbrowser-dot"></span><span id="realbrowser-text"></span>
+    </span>
     <a class="settings-gear" href="/audit" target="jarvisAux" rel="noopener"
        title="Audit log" aria-label="Audit log">🗎</a>
     <a class="settings-gear" href="/settings" target="jarvisAux" rel="noopener"

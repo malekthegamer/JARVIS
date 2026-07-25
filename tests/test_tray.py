@@ -201,6 +201,25 @@ def test_build_menu_without_display():
     assert any("HUD" in l for l in labels)
     assert any("Wake" in l for l in labels)
     assert any("Quit" in l for l in labels)
+    # slice 39: the user needs a one-click way to start the browser JARVIS can
+    # actually drive — the ordinary Chrome icon opens the Default profile,
+    # which Chrome 136+ will not expose over the debug protocol.
+    assert any("browser" in l.lower() for l in labels), labels
+
+
+def test_open_my_browser_delegates_and_never_raises(monkeypatch):
+    from jarvis.primitives import web
+    called = []
+    monkeypatch.setattr(web, "launch_daily_browser",
+                        lambda: called.append(True) or {"ok": True, "message": "x"})
+    tray.open_my_browser()
+    assert called == [True]
+
+    def _boom():
+        raise RuntimeError("chrome exploded")
+
+    monkeypatch.setattr(web, "launch_daily_browser", _boom)
+    tray.open_my_browser()   # must swallow: a tray click must never kill the loop
 
 
 def test_toggle_wake_invokes_start_stop_and_persists(monkeypatch):

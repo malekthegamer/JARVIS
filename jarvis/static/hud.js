@@ -400,5 +400,30 @@
     input.value = "";
   });
 
+  // --- slice 39: show when JARVIS is driving the user's REAL browser -------
+  // Two stacked opt-ins, and the difference matters: "reading" can only look,
+  // "acting" can click and type on accounts the user is signed into.
+  async function checkRealBrowser() {
+    const badge = document.getElementById("realbrowser");
+    const text = document.getElementById("realbrowser-text");
+    if (!badge || !text) return;
+    try {
+      const r = await fetch("/api/settings");
+      if (!r.ok) return;
+      const s = await r.json();
+      const web = (s && s.web) || {};
+      const real = web.profile_mode === "real";
+      badge.classList.toggle("hidden", !real);
+      if (!real) return;
+      const acting = web.allow_actions === true;
+      text.textContent = acting ? "your browser · acting" : "your browser · reading";
+      badge.title = acting
+        ? "JARVIS is driving your signed-in Chrome and may click and type on it. Committal actions still ask first."
+        : "JARVIS can open and read pages in your signed-in Chrome, but cannot click or type.";
+    } catch { /* never block the HUD on this */ }
+  }
+  window.__hudCheckRealBrowser = checkRealBrowser;
+  checkRealBrowser();
+
   connect();
 })();

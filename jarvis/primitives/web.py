@@ -84,12 +84,18 @@ def _chrome_binary() -> str | None:
     return None
 
 
-def _reap_stale_profile_chrome() -> None:
-    """Terminate any lingering Chrome that holds JARVIS's DEDICATED profile dir
-    (matched strictly by `--user-data-dir=<dedicated>` in its cmdline) before a
-    fresh real-mode launch — a stale one holds the profile/debug port and makes
-    the launch fail (seen live). NEVER touches the user's everyday Chrome. Best
-    effort; never raises."""
+def _profile_chrome_pid() -> int | None:
+    """The pid of a Chrome holding JARVIS's profile dir (matched strictly by
+    `--user-data-dir=<dedicated>` in its cmdline), or None.
+
+    SLICE 39 — this replaced `_reap_stale_profile_chrome()`, which TERMINATED
+    whatever it found. That was safe while the profile was a throwaway. It is
+    not safe now: the profile is meant to BE the user's everyday browser
+    (signed into Chrome Sync), so killing it destroys their open tabs. We
+    report; the caller tells the user how to recover. The everyday-Chrome
+    exclusion is unchanged — only our own `--user-data-dir` ever matches.
+
+    Best effort; never raises (psutil can need privileges)."""
     try:
         import psutil
         dd = str(_dedicated_dir())
@@ -101,11 +107,12 @@ def _reap_stale_profile_chrome() -> None:
                     continue
                 cmd = " ".join(info.get("cmdline") or []).lower()
                 if needle in cmd:
-                    p.kill()
+                    return p.pid
             except Exception:
                 continue
     except Exception:
-        pass
+        return None
+    return None
 
 
 def _debug_port_ready(port: int, deadline: float) -> bool:
@@ -118,6 +125,43 @@ def _debug_port_ready(port: int, deadline: float) -> bool:
         except Exception:
             time.sleep(0.3)
     return False
+
+
+def launch_daily_browser() -> dict:
+    """Start JARVIS's Chrome profile WITH the debug port, for the user to browse in.
+
+    Slice 39. This profile is meant to be the everyday browser: sign it into
+    Chrome Sync once and it carries the user's real bookmarks, passwords and
+    sessions. It must be started this way — clicking the normal Chrome icon
+    opens the *default* profile, which Chrome 136+ refuses to expose over the
+    debug protocol at all, so JARVIS could never drive it.
+
+    Idempotent: if the debug port already answers, the browser is up and we
+    leave it strictly alone (Stage-0 probe B: a second launch on the same
+    user-data-dir gets no debug port and just exits, forwarding to the first).
+    """
+    port = int(settings.get("web.cdp_port", 9222))
+    if _debug_port_ready(port, time.time() + 1):
+        return {"ok": True, "message": "Your browser is already open."}
+    exe = _chrome_binary()
+    if not exe:
+        return {"ok": False,
+                "message": "I couldn't find chrome.exe — is Chrome installed?"}
+    holder = _profile_chrome_pid()
+    if holder is not None:
+        return {"ok": False,
+                "message": (f"That browser (pid {holder}) is already open "
+                            f"without the debug port. Quit it and click this "
+                            f"again so JARVIS can connect to it.")}
+    dd = _dedicated_dir()
+    dd.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.Popen([
+            exe, f"--remote-debugging-port={port}", f"--user-data-dir={dd}",
+            "--no-first-run", "--no-default-browser-check"])
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't start Chrome: {exc}"}
+    return {"ok": True, "message": "Opening your browser."}
 
 
 def _timeout_ms() -> int:
@@ -150,26 +194,52 @@ class BrowserSession:
         return context, context.new_page()
 
     def _launch_real(self, pw):
-        """Launch the user's real Chrome on a DEDICATED user-data-dir with the
-        debug port, then attach via CDP. Their everyday Chrome is untouched."""
-        exe = _chrome_binary()
-        if not exe:
-            raise BrowserUnavailable(
-                "Real-browser mode needs Google Chrome installed — I couldn't "
-                "find chrome.exe.")
+        """ATTACH to the user's JARVIS Chrome if it is already open with the
+        debug port; only launch one when nothing is there.
+
+        SLICE 39. This profile is meant to BE the everyday browser (signed into
+        Chrome Sync), so "already running" is the normal case, not an error.
+        Stage-0 probes settled it:
+          * attaching over CDP took 0.32s, and `browser.close()` DETACHES
+            without closing Chrome (verified still alive afterwards);
+          * a SECOND launch on the same `--user-data-dir` gets NO debug port
+            and exits rc=0, forwarding to the first instance.
+        So spawning unconditionally cannot work here — and the old
+        kill-then-relaunch would have closed the user's browser and lost their
+        tabs. `self._proc` is set ONLY for a Chrome we started, which is what
+        makes `_teardown_real()` safe."""
         port = int(settings.get("web.cdp_port", 9222))
-        dd = _dedicated_dir()
-        dd.mkdir(parents=True, exist_ok=True)
-        _reap_stale_profile_chrome()  # a lingering JARVIS Chrome holds the profile/port
-        self._proc = subprocess.Popen([
-            exe, f"--remote-debugging-port={port}", f"--user-data-dir={dd}",
-            "--no-first-run", "--no-default-browser-check",
-            "--restore-last-session=false"])
-        if not _debug_port_ready(port, time.time() + 20):
-            self._teardown_real()
-            raise BrowserUnavailable(
-                "Couldn't open the real-browser debug connection — Chrome may "
-                "have failed to start. Try again.")
+        if _debug_port_ready(port, time.time() + 1):
+            # Already running (usually the user's own browser). NOT ours to
+            # own: _proc stays None so teardown can never terminate it.
+            self._proc = None
+        else:
+            exe = _chrome_binary()
+            if not exe:
+                raise BrowserUnavailable(
+                    "Real-browser mode needs Google Chrome installed — I "
+                    "couldn't find chrome.exe.")
+            holder = _profile_chrome_pid()
+            if holder is not None:
+                # Open on our profile but WITHOUT the debug port. We cannot
+                # attach, and we will not close it — those may be the user's
+                # tabs. Name the pid and the exact recovery.
+                raise BrowserUnavailable(
+                    f"Your JARVIS Chrome (pid {holder}) is open without the "
+                    f"debug port, so I can't connect to it — and I won't close "
+                    f"it and lose your tabs. Quit that Chrome, relaunch it from "
+                    f"the JARVIS browser shortcut, then ask me again.")
+            dd = _dedicated_dir()
+            dd.mkdir(parents=True, exist_ok=True)
+            self._proc = subprocess.Popen([
+                exe, f"--remote-debugging-port={port}", f"--user-data-dir={dd}",
+                "--no-first-run", "--no-default-browser-check",
+                "--restore-last-session=false"])
+            if not _debug_port_ready(port, time.time() + 20):
+                self._teardown_real()
+                raise BrowserUnavailable(
+                    "Couldn't open the real-browser debug connection — Chrome "
+                    "may have failed to start. Try again.")
         browser = pw.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
         context = browser.contexts[0] if browser.contexts else browser.new_context()
         page = context.pages[0] if context.pages else context.new_page()

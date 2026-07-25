@@ -289,7 +289,14 @@ class _FakeProc:
 
 
 def _real_seams(monkeypatch, *, port_ready=True, chrome=True):
-    """Wire fake chrome-launch + CDP so _launch_real runs without a browser."""
+    """Wire fake chrome-launch + CDP so _launch_real runs without a browser.
+
+    SLICE 39: _launch_real now probes the debug port BEFORE deciding whether to
+    spawn (a live port means the user's browser is already open — attach, never
+    launch a second one). So a blanket port_ready=True would put every one of
+    these tests on the ATTACH path and stop exercising the launch they exist to
+    cover. The seam now models "nothing running yet": dead on the pre-check,
+    alive after our own launch."""
     rec = {"popen_args": None, "cdp_url": None, "proc": _FakeProc()}
     monkeypatch.setattr(web, "_chrome_binary",
                         lambda: r"C:\fake\chrome.exe" if chrome else None)
@@ -297,8 +304,14 @@ def _real_seams(monkeypatch, *, port_ready=True, chrome=True):
         rec["popen_args"] = args
         return rec["proc"]
     monkeypatch.setattr(web.subprocess, "Popen", fake_popen)
-    monkeypatch.setattr(web, "_debug_port_ready",
-                        lambda port, deadline: port_ready)
+    probes = {"n": 0}
+
+    def fake_ready(port, deadline):
+        probes["n"] += 1
+        return port_ready and probes["n"] > 1   # dead pre-check -> spawn path
+
+    monkeypatch.setattr(web, "_debug_port_ready", fake_ready)
+    monkeypatch.setattr(web, "_profile_chrome_pid", lambda: None)
     ctx = _FakeContext([_FakePage()])
     class _PW:
         class chromium:
@@ -747,12 +760,17 @@ def test_js_navigation_flagged_in_click_result(servers):
     assert "localhost" in r["message"], r
 
 
-# ------------------------------------------- S3: stale-Chrome reaper
+# ------------------------------------------- S3 -> slice 39: identify, never kill
 
-def test_reaper_kills_only_dedicated_profile_chrome(monkeypatch):
-    """Before launching real-mode Chrome, a lingering JARVIS-profile Chrome
-    (its --user-data-dir points at data/browser_profile) is terminated — but
-    the user's everyday Chrome is NEVER touched."""
+def test_profile_chrome_pid_identifies_without_killing(monkeypatch):
+    """BEHAVIOUR REVERSED IN SLICE 39 (deliberate, not a regression).
+
+    This used to be _reap_stale_profile_chrome(), which TERMINATED any Chrome
+    holding data/browser_profile. That was safe while the profile was a
+    throwaway. It is not safe now: that profile is meant to be the user's
+    everyday browser (signed into Chrome Sync), so killing it destroys their
+    open tabs. The replacement only REPORTS the pid; the caller tells the user
+    how to recover. The everyday-Chrome exclusion is unchanged."""
     dd = str(web._dedicated_dir())
     killed = []
 
@@ -760,6 +778,7 @@ def test_reaper_kills_only_dedicated_profile_chrome(monkeypatch):
         def __init__(self, pid, cmdline):
             self.pid = pid; self._cmd = cmdline; self.info = {"name": "chrome.exe", "cmdline": cmdline}
         def kill(self): killed.append(self.pid)
+        def terminate(self): killed.append(self.pid)
 
     jarvis_proc = _P(111, ["chrome.exe", f"--user-data-dir={dd}", "--remote-debugging-port=9222"])
     user_proc = _P(222, ["chrome.exe", r"--user-data-dir=C:\Users\me\AppData\Local\Google\Chrome\User Data"])
@@ -767,5 +786,202 @@ def test_reaper_kills_only_dedicated_profile_chrome(monkeypatch):
     import psutil
     monkeypatch.setattr(psutil, "process_iter",
                         lambda attrs=None: [jarvis_proc, user_proc, other])
-    web._reap_stale_profile_chrome()
-    assert killed == [111], f"must kill ONLY the dedicated-profile Chrome, killed={killed}"
+
+    assert web._profile_chrome_pid() == 111, "must identify the JARVIS-profile Chrome"
+    assert killed == [], "must NOT kill anything — that is the user's browser now"
+
+
+def test_profile_chrome_pid_ignores_the_everyday_chrome(monkeypatch):
+    """The everyday profile must never be reported as ours."""
+    killed = []
+
+    class _P:
+        def __init__(self, pid, cmdline):
+            self.pid = pid; self.info = {"name": "chrome.exe", "cmdline": cmdline}
+        def kill(self): killed.append(self.pid)
+
+    user_proc = _P(222, ["chrome.exe", r"--user-data-dir=C:\Users\me\AppData\Local\Google\Chrome\User Data"])
+    import psutil
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: [user_proc])
+    assert web._profile_chrome_pid() is None
+    assert killed == []
+
+
+# ---------- slice 39: JARVIS's Chrome becomes the user's DAILY browser ----------
+#
+# The dedicated profile is meant to be signed into Chrome Sync and used as the
+# everyday browser, so "already running" is the NORMAL case, not the exception.
+#
+# Stage-0 probes (2026-07-25) settled the design:
+#   A. connect_over_cdp attached to a running Chrome in 0.32s, and
+#      browser.close() DETACHED without closing it (verified still alive).
+#   B. a SECOND launch on the same --user-data-dir gets NO debug port and exits
+#      rc=0, forwarding to the first instance. So "spawn anyway" cannot work —
+#      attaching is required, not an optimisation.
+
+class _FakeCtx:
+    def __init__(self):
+        self.pages = ["page-object"]
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.contexts = [_FakeCtx()]
+
+
+class _FakePW:
+    """Stands in for playwright's sync API object."""
+    def __init__(self):
+        self.chromium = self
+        self.connected: list[str] = []
+
+    def connect_over_cdp(self, url):
+        self.connected.append(url)
+        return _FakeBrowser()
+
+
+def _session_with(monkeypatch, *, port_up: bool):
+    """A fresh BrowserSession with Chrome interaction stubbed out."""
+    sess = web.BrowserSession()
+    spawned: list = []
+    monkeypatch.setattr(web, "_chrome_binary", lambda: r"C:\fake\chrome.exe")
+    monkeypatch.setattr(web, "_debug_port_ready",
+                        lambda port, deadline: port_up)
+
+    def _fake_popen(*a, **k):
+        spawned.append(a)
+        raise AssertionError("Popen must not be called in this scenario")
+
+    monkeypatch.setattr(web.subprocess, "Popen", _fake_popen)
+    return sess, spawned
+
+
+def test_launch_real_attaches_when_debug_port_already_answers(monkeypatch):
+    sess, _spawned = _session_with(monkeypatch, port_up=True)
+    pw = _FakePW()
+    ctx, page = sess._launch_real(pw)
+    assert pw.connected, "should have attached over CDP"
+    assert ctx is not None and page == "page-object"
+
+
+def test_launch_real_does_not_spawn_when_attaching(monkeypatch):
+    """Popen is rigged to raise — reaching it at all is the failure."""
+    sess, spawned = _session_with(monkeypatch, port_up=True)
+    sess._launch_real(_FakePW())
+    assert spawned == [], "must not launch a second Chrome"
+    assert sess._proc is None, \
+        "attached browsers are NOT ours to own — _proc must stay None so " \
+        "teardown can never terminate the user's browser"
+
+
+def test_launch_real_still_spawns_when_nothing_is_running(monkeypatch):
+    """The first-run path must keep working."""
+    sess = web.BrowserSession()
+    monkeypatch.setattr(web, "_chrome_binary", lambda: r"C:\fake\chrome.exe")
+    monkeypatch.setattr(web, "_profile_chrome_pid", lambda: None)
+    calls = {"ready": 0}
+
+    def _ready(port, deadline):
+        calls["ready"] += 1
+        return calls["ready"] > 1      # dead on the pre-check, up after launch
+
+    monkeypatch.setattr(web, "_debug_port_ready", _ready)
+
+    class _P:
+        pid = 4321
+
+        def terminate(self): pass
+
+    spawned = []
+    monkeypatch.setattr(web.subprocess, "Popen",
+                        lambda *a, **k: (spawned.append(a), _P())[1])
+    pw = _FakePW()
+    sess._launch_real(pw)
+    assert spawned, "with nothing running it must launch Chrome"
+    assert sess._proc is not None, "a Chrome WE launched is ours to close"
+    assert pw.connected
+
+
+def test_teardown_never_terminates_a_browser_we_did_not_spawn(monkeypatch):
+    """THE data-loss guard. If JARVIS attached to the user's running browser,
+    quitting JARVIS must leave it open with its tabs. Stage-0 Probe A verified
+    the CDP side (browser.close() detaches without closing Chrome); this pins
+    the process side."""
+    sess = web.BrowserSession()
+    sess._proc = None                      # attached, not spawned
+    sess._teardown_real()                  # must be a no-op, must not raise
+
+
+def test_teardown_terminates_only_a_chrome_we_launched():
+    sess = web.BrowserSession()
+    ended = []
+
+    class _P:
+        pid = 999
+        def terminate(self): ended.append("terminate")
+        def wait(self, timeout=None): return 0
+        def kill(self): ended.append("kill")
+
+    sess._proc = _P()
+    sess._teardown_real()
+    assert ended == ["terminate"], "a Chrome we spawned is ours to close"
+    assert sess._proc is None
+
+
+def test_launch_real_refuses_instead_of_killing_a_live_profile_chrome(monkeypatch):
+    """Chrome open on JARVIS's profile but WITHOUT the debug port: we cannot
+    attach, and we must not kill it. Refuse, and say exactly how to recover."""
+    sess = web.BrowserSession()
+    monkeypatch.setattr(web, "_chrome_binary", lambda: r"C:\fake\chrome.exe")
+    monkeypatch.setattr(web, "_debug_port_ready", lambda port, deadline: False)
+    monkeypatch.setattr(web, "_profile_chrome_pid", lambda: 4242)
+
+    def _no_spawn(*a, **k):
+        raise AssertionError("must not spawn a second Chrome on that profile")
+
+    monkeypatch.setattr(web.subprocess, "Popen", _no_spawn)
+
+    with pytest.raises(web.BrowserUnavailable) as exc:
+        sess._launch_real(_FakePW())
+    msg = str(exc.value).lower()
+    assert "4242" in msg, "name the process so the user can find it"
+    assert "shortcut" in msg or "relaunch" in msg, f"must name the fix: {msg}"
+    assert sess._proc is None
+
+
+# ---------- slice 39 stage 3: launching the daily browser ----------
+
+def test_launch_daily_browser_starts_chrome_with_the_debug_port(monkeypatch):
+    """The user needs a way to start THEIR browser such that JARVIS can attach.
+    Clicking the normal Chrome icon gives the everyday profile with no debug
+    port — which JARVIS can never drive (Chrome 136+)."""
+    monkeypatch.setattr(web, "_chrome_binary", lambda: r"C:\fake\chrome.exe")
+    monkeypatch.setattr(web, "_debug_port_ready", lambda port, deadline: False)
+    monkeypatch.setattr(web, "_profile_chrome_pid", lambda: None)
+    spawned = {}
+
+    class _P:
+        pid = 77
+
+    monkeypatch.setattr(web.subprocess, "Popen",
+                        lambda args, *a, **k: (spawned.update(args=args), _P())[1])
+    res = web.launch_daily_browser()
+    assert res["ok"], res
+    args = spawned["args"]
+    port = int(settings.get("web.cdp_port", 9222))
+    assert f"--remote-debugging-port={port}" in args, args
+    assert any(a == f"--user-data-dir={web._dedicated_dir()}" for a in args), args
+
+
+def test_launch_daily_browser_is_idempotent_when_already_running(monkeypatch):
+    """Clicking it twice must NOT spawn a second Chrome (probe B: the second
+    launch gets no debug port anyway) and must never disturb the running one."""
+    monkeypatch.setattr(web, "_debug_port_ready", lambda port, deadline: True)
+
+    def _no_spawn(*a, **k):
+        raise AssertionError("must not spawn when it is already running")
+
+    monkeypatch.setattr(web.subprocess, "Popen", _no_spawn)
+    res = web.launch_daily_browser()
+    assert res["ok"], res
+    assert "already" in res["message"].lower(), res

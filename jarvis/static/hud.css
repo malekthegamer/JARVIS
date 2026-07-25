@@ -553,3 +553,35 @@ body[data-state="confirming"] .state-label { color: var(--amber); }
 
 .setup-buttons button:hover { background: rgba(59, 232, 255, 0.22); }
 .setup-buttons button:disabled { opacity: 0.5; cursor: default; }
+
+/* --- slice 39: real-browser mode indicator ------------------------------ */
+/* JARVIS driving the user's own signed-in Chrome is the highest-consequence
+   state the app has. It gets amber (the CONFIRM colour) rather than the calm
+   cyan, and it says which of the two opt-ins is live. */
+.realbrowser {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-left: auto;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--warn, #FFB020);
+  border-radius: 999px;
+  color: var(--warn, #FFB020);
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.realbrowser.hidden { display: none; }
+.realbrowser-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn, #FFB020);
+  box-shadow: 0 0 8px var(--warn, #FFB020);
+  animation: realbrowser-pulse 2.4s ease-in-out infinite;
+}
+@keyframes realbrowser-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}

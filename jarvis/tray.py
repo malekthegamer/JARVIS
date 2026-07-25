@@ -69,11 +69,26 @@ def _wake_checked(item) -> bool:
     return server.wake_running()
 
 
+def open_my_browser() -> None:
+    """Start the Chrome profile JARVIS can actually drive (slice 39).
+
+    Clicking the ordinary Chrome icon opens the DEFAULT profile, which Chrome
+    136+ refuses to expose over the debug protocol — JARVIS could never attach
+    to it. Starting it from here means the browser you use all day is the same
+    one JARVIS drives. Never raises into the tray loop."""
+    try:
+        from jarvis.primitives import web
+        web.launch_daily_browser()
+    except Exception:
+        pass
+
+
 def build_menu():
     import pystray
     from pystray import MenuItem as Item
     return pystray.Menu(
         Item("Open HUD", open_hud, default=True),
+        Item("Open my browser", lambda icon, item: open_my_browser()),
         Item("Wake-word listening", lambda icon, item: toggle_wake(),
              checked=_wake_checked),
         Item("Quit", lambda icon, item: icon.stop()),
