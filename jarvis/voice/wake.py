@@ -198,6 +198,8 @@ class _MicSource:
         if self._resample_from is None:
             raw = self._stream.read(FRAME, exception_on_overflow=False)
         else:
+            from jarvis.voice.capture import require_audio_stdlib
+            require_audio_stdlib()
             import audioop
             src = self._stream.read(self._in_frames, exception_on_overflow=False)
             raw, self._resample_state = audioop.ratecv(

@@ -15,9 +15,47 @@ Hard-won lessons encoded here (do not undo):
 """
 from __future__ import annotations
 
+import sys
 import threading
 
 from jarvis.core.settings_store import settings
+
+# --- the Python 3.12 contract -------------------------------------------------
+# Python 3.13 REMOVED the stdlib `audioop` and `aifc` modules (PEP 594).
+# SpeechRecognition imports both unguarded at module level, and wake.py uses
+# audioop.ratecv to resample the mic — so on 3.13+ every voice path dies with a
+# bare "No module named 'audioop'", naming a stdlib module the user has never
+# heard of and giving no hint that the interpreter is the problem. pip installs
+# cleanly there (PyAudio ships a cp313 wheel), so nothing earlier complains.
+# install.bat pins 3.12; this is the belt-and-braces for a hand-made venv.
+_AUDIO_STDLIB = ("audioop", "aifc")
+_audio_stdlib_ok: bool | None = None
+
+
+def unsupported_python_message(missing: str) -> str:
+    return (
+        f"Voice needs Python 3.12 — this interpreter is Python "
+        f"{sys.version_info.major}.{sys.version_info.minor}, where the standard "
+        f"library '{missing}' module no longer exists (removed in Python 3.13, "
+        f"PEP 594). SpeechRecognition and the wake-word resampler both require "
+        f"it, so microphone input cannot work here. Re-run install.bat — it "
+        f"installs and pins Python 3.12."
+    )
+
+
+def require_audio_stdlib() -> None:
+    """Raise a diagnosable error instead of a raw ModuleNotFoundError.
+
+    Result is cached: this sits on the per-frame wake-word path, so it must be
+    free after the first call."""
+    global _audio_stdlib_ok
+    if _audio_stdlib_ok:
+        return
+    import importlib.util
+    for mod in _AUDIO_STDLIB:
+        if importlib.util.find_spec(mod) is None:
+            raise RuntimeError(unsupported_python_message(mod))
+    _audio_stdlib_ok = True
 
 REAL_MIC_HINTS = ("microphone", "realtek", "headset")
 VIRTUAL_HINTS = (
@@ -39,6 +77,7 @@ def is_probably_real_mic(name: str) -> bool:
 
 
 def list_input_devices() -> list[tuple[int, str]]:
+    require_audio_stdlib()
     import speech_recognition as sr  # lazy
     return list(enumerate(sr.Microphone.list_microphone_names()))
 
@@ -89,6 +128,7 @@ def find_real_mic() -> tuple[int | None, str]:
 def listen_once(timeout: float = 8.0, phrase_time_limit: float = 15.0):
     """Capture one utterance. Returns sr.AudioData or None (timeout / device issue)."""
     global _recognizer, _calibrated_index
+    require_audio_stdlib()
     import speech_recognition as sr  # lazy
 
     with _lock:

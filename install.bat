@@ -17,36 +17,47 @@ pause
 
 REM ---------------------------------------------------------------- Python
 echo(
-echo  [1/6] Looking for Python 3...
+echo  [1/6] Looking for Python 3.12...
+REM JARVIS needs Python 3.12 SPECIFICALLY. Python 3.13 REMOVED the standard
+REM library `audioop` and `aifc` modules (PEP 594). SpeechRecognition imports
+REM both at module level, and jarvis\voice\wake.py imports audioop to resample
+REM the mic. pip installs cleanly on 3.13 (PyAudio ships a cp313 wheel), so
+REM choosing the wrong interpreter here does NOT fail the install - it prints
+REM "Done." and then silently kills EVERY voice feature at first use, on a
+REM voice-driven agent. A bare `py -3` selects the NEWEST interpreter, which is
+REM exactly the wrong one; that was the bug this gate exists to prevent.
 set "PY="
 py -3.12 --version >nul 2>&1 && set "PY=py -3.12"
-if not defined PY ( py -3 --version >nul 2>&1 && set "PY=py -3" )
-if not defined PY ( python --version >nul 2>&1 && set "PY=python" )
+if defined PY goto :pyok
+python -c "import sys; sys.exit(0 if sys.version_info[:2]==(3,12) else 1)" >nul 2>&1 && set "PY=python"
+if defined PY goto :pyok
 
-if not defined PY (
-    echo        Python not found. Trying to install it with winget...
-    winget --version >nul 2>&1
-    if errorlevel 1 (
-        echo(
-        echo  ERROR: Python 3 is not installed and winget is unavailable.
-        echo         Install Python 3.12 from https://www.python.org/downloads/
-        echo         Tick "Add python.exe to PATH" during setup, then re-run this.
-        echo(
-        pause
-        exit /b 1
-    )
-    winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
-    py -3.12 --version >nul 2>&1 && set "PY=py -3.12"
-    if not defined PY ( python --version >nul 2>&1 && set "PY=python" )
-    if not defined PY (
-        echo(
-        echo  ERROR: Python was installed but this window cannot see it yet.
-        echo         Close this window, open a NEW one, and run install.bat again.
-        echo(
-        pause
-        exit /b 1
-    )
-)
+echo        Python 3.12 not found ^(3.13 and newer will NOT work^).
+echo        Trying to install Python 3.12 with winget...
+winget --version >nul 2>&1
+if errorlevel 1 goto :nopython
+winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements
+py -3.12 --version >nul 2>&1 && set "PY=py -3.12"
+if defined PY goto :pyok
+echo(
+echo  ERROR: Python 3.12 was installed but this window cannot see it yet.
+echo         Close this window, open a NEW one, and run install.bat again.
+echo(
+pause
+exit /b 1
+
+:nopython
+echo(
+echo  ERROR: Python 3.12 is not installed and winget is unavailable.
+echo         Install Python 3.12 from https://www.python.org/downloads/
+echo         Tick "Add python.exe to PATH" during setup, then re-run this.
+echo         NOTE: JARVIS needs 3.12 - Python 3.13 and newer are NOT supported
+echo         (they removed the audioop module that all voice input needs).
+echo(
+pause
+exit /b 1
+
+:pyok
 for /f "delims=" %%v in ('%PY% --version 2^>^&1') do echo        Using %%v
 
 REM ---------------------------------------------------------------- venv

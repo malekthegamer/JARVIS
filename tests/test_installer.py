@@ -84,3 +84,58 @@ def test_install_bat_registers_pywin32_com():
     powers DPAPI encryption, the Recycle Bin and shortcuts. Missing this makes
     JARVIS fail at runtime in ways that look unrelated."""
     assert "pywin32_postinstall" in _text()
+
+
+# ---------- the Python 3.12 contract (install-time AND run-time) ----------
+#
+# Python 3.13 REMOVED the stdlib `audioop` and `aifc` modules (PEP 594).
+# SpeechRecognition imports both unguarded at module top level, and
+# voice/wake.py imports audioop directly for mic resampling. pip installs
+# cleanly on 3.13 (PyAudio ships a cp313 wheel), so the installer would print
+# "Done." and EVERY voice path would then fail at first use — on a
+# voice-driven agent. Anyone who installed Python recently has 3.13+, and the
+# old `py -3` fallback selected the NEWEST interpreter.
+
+def test_install_bat_requires_python_312_not_any_python3():
+    """The killer detail: a bare `py -3` fallback picks the newest Python."""
+    text = _text()
+    assert "py -3.12" in text, "must look for 3.12 explicitly"
+    assert not re.search(r"py -3\s+--version", text), \
+        "a bare `py -3` fallback selects the NEWEST Python (3.13+), where all voice breaks"
+    assert "version_info" in text, \
+        "a bare `python` fallback must be version-checked, not trusted"
+
+
+def test_install_bat_installs_312_when_missing():
+    """winget must pin 3.12 — not Python.Python.3, which resolves to latest."""
+    text = _text()
+    assert "Python.Python.3.12" in text
+    assert not re.search(r"Python\.Python\.3(?!\.12)", text)
+
+
+def test_install_bat_records_why_312_is_required():
+    """A future maintainer must not 'helpfully' relax this back to any 3.x."""
+    low = _text().lower()
+    assert "audioop" in low and "3.13" in low, \
+        "the script must state WHY 3.12 is pinned, or it will get relaxed"
+
+
+def test_voice_guard_explains_unsupported_python_instead_of_module_not_found():
+    """Belt-and-braces for anyone who bypasses install.bat: a raw
+    `ModuleNotFoundError: No module named 'audioop'` is undiagnosable. The
+    guard must name the real cause and the fix."""
+    from jarvis.voice import capture
+    msg = capture.unsupported_python_message("audioop")
+    assert "audioop" in msg
+    assert "3.12" in msg and "3.13" in msg
+    assert "install.bat" in msg.lower()
+
+
+def test_voice_guard_passes_through_on_supported_python():
+    """On 3.12 the guard must be a no-op — it must never block a working
+    install (it runs on the per-frame wake-word path)."""
+    import sys
+
+    from jarvis.voice import capture
+    if sys.version_info[:2] == (3, 12):
+        capture.require_audio_stdlib()   # must not raise

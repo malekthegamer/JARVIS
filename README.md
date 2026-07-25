@@ -42,7 +42,11 @@ you, that is a completely reasonable conclusion.
 
 - **Windows 11** (hard requirement — DPAPI encryption, UI Automation, Recycle
   Bin, and the win32 window layer are all Windows-specific)
-- **Python 3.12**
+- **Python 3.12** — specifically. **Python 3.13 and newer will not work:** they
+  removed the standard-library `audioop`/`aifc` modules, which every voice
+  feature depends on. Everything still *installs* on 3.13, then microphone
+  input fails at first use, so the version matters more than it looks.
+  `install.bat` checks this for you and installs 3.12 if it's missing.
 - A free **Gemini API key** → https://aistudio.google.com/apikey
 
 ## Setup — the easy way
