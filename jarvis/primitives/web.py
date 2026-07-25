@@ -32,7 +32,10 @@ from urllib.parse import urlparse
 
 from jarvis import config
 from jarvis.core.settings_store import settings
-from jarvis.primitives.input import _click_tier  # reuse the committal classifier
+from jarvis.primitives.input import (  # reuse the committal classifier + box cap
+    _click_tier,
+    _for_confirm_box,
+)
 
 
 class BrowserUnavailable(RuntimeError):
@@ -323,6 +326,28 @@ class BrowserSession:
             return {"ok": True, "message": f"Pressed {pw_key}.{moved}"}
         return self._do(_press)
 
+    def focused_field(self) -> dict:
+        """What the page's focused field currently holds (slice 38) — so the
+        Enter-to-submit CONFIRM can show WHAT is being submitted, not just
+        where. Runs on the owner thread via _do(), the same position
+        classify_web_click already calls find_clickable from.
+
+        `document.body` as activeElement means nothing is focused (a blurred
+        page reports body with a whitespace value — verified in the stage-0
+        probe), so that reads as found=False rather than a payload of ' '.
+        Raises like any other session call; the classifier fails CLOSED."""
+        def _fv(page):
+            return page.evaluate("""() => {
+                const el = document.activeElement;
+                if (!el || el === document.body) return {found: false};
+                const v = (el.value !== undefined && el.value !== null)
+                          ? String(el.value) : String(el.innerText || '');
+                return {found: true,
+                        isPassword: el.type === 'password',
+                        value: v};
+            }""")
+        return self._do(_fv)
+
     def read(self) -> dict:
         def _read(page):
             text = page.evaluate(
@@ -575,12 +600,47 @@ def classify_web_fill(args: dict) -> dict:
             "description": f"Fill '{str(args.get('field',''))}'"}
 
 
+_COMMITTAL_WEB_KEYS = {"enter"}
+
+
+def _submit_payload() -> str:
+    """The focused field's contents for the confirm box. FAILS CLOSED to an
+    honest message — never to silence, and never to the raw value of a
+    password field."""
+    try:
+        info = session.focused_field()
+    except Exception:
+        info = None
+    if not info or not info.get("found"):
+        return "(JARVIS could not read the focused field)"
+    if info.get("isPassword"):
+        return "(password field — contents hidden)"
+    value = str(info.get("value") or "")
+    if not value.strip():
+        return "(the focused field is empty)"
+    return _for_confirm_box(value)
+
+
 def classify_web_key(args: dict) -> dict:
-    """Navigation/interaction keys (Enter/Tab/Escape/arrows) — AUTO. BLOCKED in
-    real mode until acting is allowed."""
+    """Navigation keys (Tab/Escape/arrows) — AUTO. **Enter SUBMITS**, so in
+    real-browser mode it CONFIRMs and shows what is being submitted (slice 38).
+
+    Before this, browse_fill(...) + browse_key("Enter") posted a form on the
+    user's real account with no gate at all, while browse_click("Submit") on
+    that same form WAS gated — press_key's docstring already said "not for
+    committal submits" and nothing enforced it.
+
+    Isolated mode stays AUTO by owner decision: that browser starts logged out,
+    so a stray submit commits nothing of the user's, and gating it would add
+    prompt fatigue (its own safety problem) for no gain."""
     if _actions_blocked():
         return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
-    return {"tier": "auto", "description": f"Press {str(args.get('key',''))}"}
+    raw = str(args.get("key", "") or "").strip().lower()
+    if raw not in _COMMITTAL_WEB_KEYS or not _real_mode_setting():
+        return {"tier": "auto", "description": f"Press {str(args.get('key',''))}"}
+    return {"tier": "confirm",
+            "description": f"Press Enter to submit{_site_host()}",
+            "command": _submit_payload()}
 
 
 def classify_web_click(args: dict) -> dict:

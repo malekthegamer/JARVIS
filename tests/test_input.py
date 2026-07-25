@@ -402,6 +402,153 @@ def test_enter_and_ctrl_enter_gate_chat_submit():
     assert jinput.classify_press({"combo": "ctrl+enter", "window": "Slack"})["tier"] == "confirm"
 
 
+# ---------- slice 38 stage 1: the type CONFIRM shows WHAT, not just WHERE ----------
+#
+# The gate's promise is that it shows the literal thing about to happen.
+# `Type into 'Windows PowerShell'` names the window and hides the payload, so a
+# terminal-bound type is approved blind. The payload is right there in args, so
+# the classifier can hand it to the modal's verbatim box (confirmations.request's
+# `command`, already rendered monospace since slice 9).
+
+def _pin_window(monkeypatch, title):
+    """classify_type/classify_press resolve a window; pin it so these stay
+    deterministic and never touch a real one."""
+    monkeypatch.setattr(jinput, "_target_window", lambda w=None: (None, title))
+
+
+def test_classify_type_carries_verbatim_text_in_command():
+    info = jinput.classify_type({"text": "rm -rf /tmp/data", "window": "Notepad"})
+    assert info["command"] == "rm -rf /tmp/data"
+
+
+def test_classify_type_into_terminal_confirms_and_shows_text(monkeypatch):
+    _pin_window(monkeypatch, "Windows PowerShell")
+    info = jinput.classify_type({"text": "format C: /q", "window": "pwsh"})
+    assert info["tier"] == "confirm"
+    assert info["command"] == "format C: /q"
+
+
+def test_classify_type_description_unchanged(monkeypatch):
+    """Regression pin: `command` is ADDITIVE. The description must stay
+    byte-identical so existing confirms and their tests don't shift."""
+    _pin_window(monkeypatch, "Windows PowerShell")
+    assert (jinput.classify_type({"text": "x", "window": "pwsh"})["description"]
+            == "Type into 'Windows PowerShell'")
+    _pin_window(monkeypatch, None)
+    assert (jinput.classify_type({"text": "x"})["description"]
+            == "Type into the focused window")
+
+
+def test_classify_type_command_matches_what_will_actually_be_typed(monkeypatch):
+    """ADDED to the plan's named set (stage 1).
+
+    type_text STRIPS newlines before sending (it never submits — that's a
+    separate confirm-gated press_keys). If the modal echoed the raw argument it
+    would show text that differs from what lands in the window — a paraphrase,
+    which is exactly what the gate exists to prevent. Both sides must share one
+    sanitizer."""
+    _pin_window(monkeypatch, "Windows PowerShell")
+    shown = jinput.classify_type({"text": "line one\nline two", "window": "pwsh"})["command"]
+    assert "\n" not in shown
+    assert shown == "line one line two"
+    assert shown == jinput._sanitize_typed("line one\nline two")
+
+
+def test_classify_type_command_truncates_huge_payload(monkeypatch):
+    """Hostile: a 600-char payload must not blow out the modal."""
+    _pin_window(monkeypatch, "Windows PowerShell")
+    shown = jinput.classify_type({"text": "A" * 600, "window": "pwsh"})["command"]
+    assert len(shown) <= jinput._MAX_CONFIRM_PAYLOAD + 32   # + the elision marker
+    assert shown.startswith("A" * 100)
+    assert "truncated" in shown.lower()
+
+
+# ---------- slice 38 stage 3: the submit CONFIRM shows the payload ----------
+#
+# `Press enter (submit) in 'Windows PowerShell'` names the keystroke and hides
+# the command it submits. The payload isn't in press_keys' args — it was typed
+# by an earlier AUTO step — so type_text records what it sent and the submit
+# confirm reads it back.
+#
+# Stage 0 Probe B ruled OUT reading the field live: UIA *does* return text from
+# a real edit control, but it returned text that did NOT match what had just
+# been typed. A modal filled from that would show the WRONG text to approve —
+# worse than showing none. What JARVIS itself typed is always accurate about
+# JARVIS's own action.
+
+@pytest.fixture(autouse=True)
+def _clear_typed_record():
+    """Bounded hint cache — never let it leak between tests (plan risk 8)."""
+    jinput._last_typed.clear()
+    yield
+    jinput._last_typed.clear()
+
+
+def test_classify_press_enter_shows_last_typed_text(monkeypatch):
+    _pin_window(monkeypatch, "Windows PowerShell")
+    jinput._record_typed("Windows PowerShell", "del /s /q C:\\Users\\malek")
+    info = jinput.classify_press({"combo": "enter", "window": "pwsh"})
+    assert info["tier"] == "confirm"
+    assert "del /s /q C:\\Users\\malek" in info["command"]
+
+
+def test_type_text_records_what_it_typed(monkeypatch):
+    """The record must come from the real type_text success path, not just the
+    helper — otherwise the two could drift silently."""
+    _pin_window(monkeypatch, "Notepad")
+    monkeypatch.setattr(jinput, "_acquire_focus", lambda w, e: True)
+    monkeypatch.setattr(jinput, "_refocus_foreground", lambda e: True)
+    monkeypatch.setattr(jinput, "_do_type", lambda chunk: None)
+    assert jinput.type_text("shutdown /s /t 0", window_hint="Notepad")["ok"]
+    got = jinput._recall_typed("Notepad")
+    assert got is not None and got[0] == "shutdown /s /t 0"
+
+
+def test_last_typed_expires_after_ttl():
+    """Stale payload is WORSE than none — it would show the user text that is
+    no longer what gets submitted. Ages the stored stamp directly rather than
+    patching time.time (which the recall path itself calls)."""
+    jinput._record_typed("Notepad", "old text")
+    assert jinput._recall_typed("Notepad") is not None
+    text, when = jinput._last_typed["notepad"]
+    jinput._last_typed["notepad"] = (text, when - jinput._LAST_TYPED_TTL_S - 1)
+    assert jinput._recall_typed("Notepad") is None
+
+
+def test_classify_press_reports_when_nothing_was_typed(monkeypatch):
+    _pin_window(monkeypatch, "Windows PowerShell")
+    info = jinput.classify_press({"combo": "enter", "window": "pwsh"})
+    assert info["tier"] == "confirm"
+    assert "has not typed" in info["command"].lower(), info["command"]
+
+
+def test_last_typed_is_window_scoped(monkeypatch):
+    """Text typed into A must never be shown as the payload for a submit in B."""
+    jinput._record_typed("Notepad", "harmless note")
+    _pin_window(monkeypatch, "Windows PowerShell")
+    info = jinput.classify_press({"combo": "enter", "window": "pwsh"})
+    assert "harmless note" not in info["command"]
+
+
+def test_non_submit_combos_carry_no_payload(monkeypatch):
+    """Scope: only SUBMIT combos get the box. alt+f4 / ctrl+w / delete don't
+    commit typed text, so attaching it would be misleading."""
+    _pin_window(monkeypatch, "Windows PowerShell")
+    jinput._record_typed("Windows PowerShell", "some text")
+    for combo in ("alt+f4", "ctrl+w", "delete"):
+        info = jinput.classify_press({"combo": combo, "window": "pwsh"})
+        assert info["tier"] == "confirm"
+        assert "command" not in info, f"{combo} should carry no payload"
+
+
+def test_classify_press_description_unchanged(monkeypatch):
+    """Regression pin: `command` is ADDITIVE — the description must not shift."""
+    _pin_window(monkeypatch, "Windows PowerShell")
+    jinput._record_typed("Windows PowerShell", "x")
+    assert (jinput.classify_press({"combo": "enter", "window": "pwsh"})["description"]
+            == "Press enter (submit) in 'Windows PowerShell'")
+
+
 # ---------- slice 5: vision fallback wiring (mocked vision) ----------
 
 from jarvis.primitives import vision as jvision

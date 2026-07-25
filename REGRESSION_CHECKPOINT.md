@@ -29,6 +29,47 @@ dry-run chain proving no Notepad appeared).
 
 ## 1. Regression signal — test suite (756 tests: 754 + 2 pythonw-stream pins)
 
+### Slice 38 — the CONFIRM modal shows WHAT, not just WHERE
+- **Closed the one open safety hole (§7 item 0) and the blind-approval half of
+  two existing gates.** `browse_key("Enter")` submitted forms on the owner's
+  real logged-in accounts with **no gate at all**; `press_keys("enter")` and
+  `type_text`-into-a-terminal did gate, but showed only the keystroke and the
+  window — the command being submitted was invisible.
+- **Reach was live, not hypothetical:** `data/settings.json` had
+  `profile_mode: "real"` and `allow_actions: true` at the time of the fix.
+- **Design was decided by a Stage-0 probe, and it inverted the plan's premise.**
+  The plan assumed a confirm-time UIA read of the focused desktop field was
+  *unavailable*. It is available — but on a real Notepad edit control it
+  returned text that **did not match what had just been typed**. Showing that
+  would have put the WRONG command in front of the user to approve. The desktop
+  side therefore shows **what JARVIS itself typed** (per-window record, 120s
+  TTL, bounded to 8, in-memory). **Do not swap this for a live read without
+  re-running that probe** (`scratchpad/probe_b.py` pattern).
+- **Web side reads for real:** `session.focused_field()` runs `page.evaluate`
+  on the owner thread via `_do()` — the same position `classify_web_click`
+  already calls `find_clickable` from. Proven end-to-end deterministically
+  against the local fixture (`test_focused_field_reads_the_real_typed_value`),
+  so it needs no live gate and no real Chrome.
+- **Fail-closed pins:** a read that raises or finds nothing still CONFIRMs
+  (`test_classify_web_key_read_failure_still_confirms`); `document.body` as
+  activeElement reads as "no field", not a payload of `' '`; password fields
+  are redacted (`test_classify_web_key_password_field_is_redacted`); payloads
+  cap at 500 chars stating the true length.
+- **Additive by construction:** both descriptions are pinned byte-identical
+  (`test_classify_type_description_unchanged`,
+  `test_classify_press_description_unchanged`), and isolated-mode browser
+  behaviour is unchanged — `test_browse_key_enter_submits_search` passes
+  untouched.
+- **One sanitizer, two callers:** `_sanitize_typed()` is shared by `type_text`
+  and `classify_type`, so the box can never drift from what actually gets
+  typed (`test_classify_type_command_matches_what_will_actually_be_typed`).
+- **Vision check passed** (`tests/harness_commit_modal.py`, 11 DOM asserts):
+  all three modals screenshotted and **inspected image-by-image** — terminal
+  type showing `del /s /q C:\Users\malek\Documents\*`; the submit modal
+  rendering `JARVIS typed this 0s ago:` above the command as two real lines;
+  and the real-mode web submit reading `Press Enter to submit on
+  bank.example.com` over `transfer $5000 to account 9912`.
+
 ### v1.0.4 — THE Desktop shortcut bug, root-caused at last
 - **Symptom:** the shortcut showed "JARVIS could not start"; `tray_error.log`
   said *"the JARVIS server did not come up within 15s (is something already

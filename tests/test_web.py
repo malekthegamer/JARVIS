@@ -474,6 +474,120 @@ def test_isolated_mode_actions_unchanged(monkeypatch):
     assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "auto"
 
 
+# ---------- slice 38 stage 2: browse_key Enter IS a submit, so gate it ----------
+#
+# The hole: browse_fill(...) + browse_key("Enter") submitted a form with NO
+# gate, while browse_click("Submit") on that same form WAS gated. press_key's
+# own docstring said "not for committal submits" — nothing enforced it.
+# Owner decision: gate in REAL mode only (the sandbox starts logged out, so a
+# stray submit there is harmless), and show the focused field's contents so the
+# submit isn't approved blind.
+
+def test_classify_web_key_enter_confirms_in_real_mode(monkeypatch):
+    _real_actions(True)
+    try:
+        web.session.current_url = "https://mail.google.com/mail/u/0"
+        monkeypatch.setattr(web.session, "focused_field",
+                            lambda: {"found": True, "isPassword": False,
+                                     "value": "sam@example.com"})
+        info = web.classify_web_key({"key": "enter"})
+        assert info["tier"] == "confirm"
+        assert "mail.google.com" in info["description"], info["description"]
+    finally:
+        web.session.current_url = None
+        _reset_mode()
+
+
+def test_classify_web_key_enter_stays_auto_in_isolated_mode(monkeypatch):
+    """The sandbox browser starts logged out — a stray submit there commits
+    nothing of the user's, so it keeps the smooth path (owner call, slice 38).
+    This also keeps test_browse_key_enter_submits_search passing untouched."""
+    monkeypatch.setattr(web.session, "focused_field",
+                        lambda: {"found": True, "isPassword": False, "value": "x"})
+    assert web.classify_web_key({"key": "enter"})["tier"] == "auto"
+
+
+@pytest.mark.parametrize("key", ["tab", "escape", "arrowdown", "pageup", "home"])
+def test_classify_web_key_navigation_keys_stay_auto(key):
+    """Moving around is not committing. Over-gating causes prompt fatigue,
+    which is its own safety problem."""
+    _real_actions(True)
+    try:
+        assert web.classify_web_key({"key": key})["tier"] == "auto"
+    finally:
+        _reset_mode()
+
+
+def test_classify_web_key_shows_focused_field_value(monkeypatch):
+    _real_actions(True)
+    try:
+        monkeypatch.setattr(web.session, "focused_field",
+                            lambda: {"found": True, "isPassword": False,
+                                     "value": "transfer $5000 to account 9912"})
+        info = web.classify_web_key({"key": "enter"})
+        assert info["command"] == "transfer $5000 to account 9912"
+    finally:
+        _reset_mode()
+
+
+def test_classify_web_key_read_failure_still_confirms(monkeypatch):
+    """FAIL CLOSED. A read that raises, or finds no focused field, must never
+    downgrade the tier — it confirms and says the field could not be read.
+    (Probe A: after a blur, activeElement is BODY — that is 'no field', not a
+    payload of one space.)"""
+    _real_actions(True)
+    try:
+        def _boom():
+            raise RuntimeError("browser went away")
+        monkeypatch.setattr(web.session, "focused_field", _boom)
+        info = web.classify_web_key({"key": "enter"})
+        assert info["tier"] == "confirm"
+        assert "could not read" in info["command"].lower(), info["command"]
+
+        monkeypatch.setattr(web.session, "focused_field", lambda: {"found": False})
+        assert web.classify_web_key({"key": "enter"})["tier"] == "confirm"
+    finally:
+        _reset_mode()
+
+
+def test_classify_web_key_password_field_is_redacted(monkeypatch):
+    """ADDED to the plan's named set. Probe A found isPassword is detectable,
+    so a password must never be pasted into the HUD's confirm box."""
+    _real_actions(True)
+    try:
+        monkeypatch.setattr(web.session, "focused_field",
+                            lambda: {"found": True, "isPassword": True,
+                                     "value": "hunter2"})
+        cmd = web.classify_web_key({"key": "enter"})["command"]
+        assert "hunter2" not in cmd
+        assert "password" in cmd.lower(), cmd
+    finally:
+        _reset_mode()
+
+
+def test_focused_field_reads_the_real_typed_value(servers):
+    """PLAN DEVIATION (named): the plan put this in test_web_live.py, but
+    test_web.py already drives a real headless Chromium against local fixtures
+    — so the read can be proven end-to-end deterministically, with no live
+    gate and no real-Chrome dependency. Strictly better coverage."""
+    pa, _pb = servers
+    assert web.navigate(f"http://127.0.0.1:{pa}/search")["ok"]
+    assert web.fill_field("Search", "transfer $5000")["ok"]
+    got = web.session.focused_field()
+    assert got["found"] is True
+    assert got["value"] == "transfer $5000"
+    assert got["isPassword"] is False
+
+
+def test_focused_field_reports_not_found_when_nothing_focused(servers):
+    """document.body as activeElement must read as 'no field' (Probe A)."""
+    pa, _pb = servers
+    assert web.navigate(f"http://127.0.0.1:{pa}/search")["ok"]
+    web.session._do(lambda page: page.evaluate(
+        "() => document.activeElement && document.activeElement.blur()"))
+    assert web.session.focused_field()["found"] is False
+
+
 # ------------------------------------------- S2: primitive hardening
 
 def test_browse_key_enter_submits_search(servers):

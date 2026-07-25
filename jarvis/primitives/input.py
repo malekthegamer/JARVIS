@@ -100,6 +100,11 @@ _COMBO_LABELS = {"ctrl+s": "save", "enter": "submit", "ctrl+enter": "submit",
                  "alt+f4": "close the window", "ctrl+w": "close the tab",
                  "delete": "delete"}
 
+# Slice 38: how much payload the CONFIRM modal's monospace box will carry.
+# Capped so a huge paste can't blow out the layout; the elision states the
+# real length so the cap is never mistaken for the whole payload.
+_MAX_CONFIRM_PAYLOAD = 500
+
 
 # ============================ resolution ============================
 
@@ -350,13 +355,79 @@ def _escape_send_keys(text: str) -> str:
     return re.sub(r"([{}()\[\]+^%~])", r"{\1}", text)
 
 
+def _sanitize_typed(text) -> str:
+    """The string type_text will ACTUALLY send: newlines collapse to spaces,
+    because typing never submits (that's a separate confirm-gated press_keys).
+
+    Slice 38: classify_type shows this same string in the confirm box, so the
+    two can't drift. Echoing the raw argument instead would put text in the
+    modal that differs from what lands in the window — a paraphrase, which is
+    the one thing the gate exists to prevent."""
+    s = str(text if text is not None else "")
+    return s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+
+def _for_confirm_box(text: str) -> str:
+    """Length-cap a payload for the modal's monospace box (slice 38)."""
+    s = str(text or "")
+    if len(s) <= _MAX_CONFIRM_PAYLOAD:
+        return s
+    return f"{s[:_MAX_CONFIRM_PAYLOAD]}… [truncated, {len(s)} chars total]"
+
+
+# --- what JARVIS last typed, per window (slice 38) ---------------------------
+#
+# press_keys' args don't carry the payload — an earlier AUTO type_text put it
+# there — so a submit CONFIRM had nothing to show but the keystroke. This
+# records what JARVIS itself sent, which is definitionally accurate about
+# JARVIS's own action.
+#
+# Stage-0 Probe B ruled out reading the field live at confirm time: UIA DOES
+# return text from a real edit control, but returned text that did not match
+# what had just been typed — a modal filled from that would show the WRONG
+# text to approve, which is worse than showing none.
+#
+# In-memory and process-scoped, same posture as the undo stack: a restart
+# forgets, and that is disclosed rather than hidden.
+_LAST_TYPED_TTL_S = 120.0
+_LAST_TYPED_MAX = 8
+_last_typed: dict[str, tuple[str, float]] = {}
+
+
+def _record_typed(title: str | None, text: str) -> None:
+    """Remember what was typed where. Bounded — this is a display hint, not
+    state anything depends on, so overflow clears rather than evicting."""
+    key = (title or "").strip().lower()
+    if not key or not text:
+        return
+    if len(_last_typed) >= _LAST_TYPED_MAX and key not in _last_typed:
+        _last_typed.clear()
+    _last_typed[key] = (text, time.time())
+
+
+def _recall_typed(title: str | None) -> tuple[str, float] | None:
+    """(text, age_seconds) for this window, or None if nothing/too old.
+    Expiry matters: showing a payload from ten minutes ago would actively
+    mislead the person approving."""
+    key = (title or "").strip().lower()
+    entry = _last_typed.get(key) if key else None
+    if entry is None:
+        return None
+    text, when = entry
+    age = time.time() - when
+    if age > _LAST_TYPED_TTL_S:
+        _last_typed.pop(key, None)
+        return None
+    return text, age
+
+
 def type_text(text: str, window_hint: str | None = None) -> dict:
     """AUTO. Types into the focused window. NEVER sends Enter — newlines are
     stripped (submitting is a separate confirm-gated press_keys). Chunked,
     re-checking focus between chunks so a focus-steal aborts mid-word."""
-    text = str(text if text is not None else "")
-    had_newline = "\n" in text or "\r" in text
-    text = text.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+    raw = str(text if text is not None else "")
+    had_newline = "\n" in raw or "\r" in raw
+    text = _sanitize_typed(raw)
 
     win, title = _target_window(window_hint)
     expected = title
@@ -376,6 +447,7 @@ def type_text(text: str, window_hint: str | None = None) -> dict:
         typed += len(chunk)
         time.sleep(0.01)
 
+    _record_typed(expected, text)  # slice 38: so a follow-up submit can show it
     note = " (newlines dropped — ask me to press Enter separately)" if had_newline else ""
     return {"ok": True, "message": f"Typed {typed} characters{note}.", "typed": text}
 
@@ -711,11 +783,18 @@ def scroll(direction: str, amount=3, window_hint: str | None = None) -> dict:
 
 
 def classify_type(args: dict) -> dict:
+    """Slice 38: `command` carries the VERBATIM text into the modal's monospace
+    box. Before this, a terminal-bound type confirmed as `Type into 'Windows
+    PowerShell'` — naming the window and hiding the payload, so it was approved
+    blind. Description is unchanged (additive), and the payload is the
+    _sanitize_typed form so the box matches what actually gets typed."""
     window = args.get("window")
     _win, title = _target_window(window)
     where = f"'{title}'" if title else "the focused window"
     tier = "confirm" if _is_terminal(title or "") else "auto"
-    return {"tier": tier, "expect_name": None, "description": f"Type into {where}"}
+    return {"tier": tier, "expect_name": None,
+            "description": f"Type into {where}",
+            "command": _for_confirm_box(_sanitize_typed(args.get("text")))}
 
 
 def classify_press(args: dict) -> dict:
@@ -734,7 +813,19 @@ def classify_press(args: dict) -> dict:
     label = _COMBO_LABELS.get(_norm_combo(combo), "")
     where = f" in '{title}'" if title else ""
     desc = f"Press {combo}" + (f" ({label})" if label else "") + where
-    return {"tier": tier, "expect_name": None, "description": desc}
+    out = {"tier": tier, "expect_name": None, "description": desc}
+    if tier == "confirm" and label == "submit":
+        # Slice 38: a submit commits whatever is sitting in that window, so show
+        # it. SUBMIT combos only — alt+f4/ctrl+w/delete don't commit typed text,
+        # and attaching it there would be misleading rather than informative.
+        got = _recall_typed(title)
+        if got is None:
+            out["command"] = "(JARVIS has not typed into this window)"
+        else:
+            text, age = got
+            out["command"] = (f"JARVIS typed this {int(age)}s ago:\n"
+                              f"{_for_confirm_box(text)}")
+    return out
 
 
 # ============================ verify (readback) ============================

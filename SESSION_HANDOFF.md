@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-20, after **Slice 33 (real-filesystem round 2 — write/read/move/rename/copy anywhere)**. See `git log --oneline` for the full slice history.
+> Last updated: 2026-07-25, after **Slice 38 (close the CONFIRM payload gap — commit steps now show WHAT, not just WHERE)**. See `git log --oneline` for the full slice history. (The header had been stale at "Slice 33" through slices 34–37 and the v1.0.1–v1.0.4 run; corrected here.)
 
 ---
 
@@ -235,6 +235,53 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 38 — close the CONFIRM payload gap (the modal showed WHERE, not WHAT)
+- **The gap, stated plainly:** JARVIS's whole safety promise is that a CONFIRM
+  shows the *literal* thing it will do — and that held only where a verb
+  carries its own payload (`run_shell`, `send_email`, `fsaccess`). It **broke
+  on commit steps**, where an earlier AUTO step deposits the payload and the
+  gated step just commits it. `type_text` into a terminal confirmed as `Type
+  into 'Windows PowerShell'`; `press_keys("enter")` as `Press enter (submit)
+  in 'X'`; and **`browse_key("Enter")` wasn't gated at all** (§7 item 0). You
+  approved a keystroke without seeing the command it submits.
+- **Severity was live, not theoretical:** `data/settings.json` had
+  `profile_mode: "real"` AND `allow_actions: true`, so the ungated web submit
+  was reachable on the owner's real logged-in accounts.
+- **Zero executor plumbing needed** — `confirmations.request(..., command=)`
+  already renders a monospace box (slice 9) and `_decide_tier` already returns
+  the classify dict as `gate_info`, from which `_execute_inner` reads
+  `command`. Verified in code before planning; the whole slice is three
+  classifiers.
+- **`browse_key` Enter now CONFIRMs in REAL mode only** (owner decision). The
+  isolated sandbox starts logged out, so a stray submit there commits nothing
+  of the user's, and gating it would add prompt fatigue — its own safety
+  problem. This also left `test_browse_key_enter_submits_search` passing
+  untouched. Navigation keys (Tab/Escape/arrows) stay AUTO: moving around is
+  not committing.
+- **Stage 0 probe changed the design, in the direction that matters.** The plan
+  assumed a desktop UIA read of the focused field was *unavailable*. It is
+  **available** — but on a real Notepad edit control it returned text that
+  **did not match what had just been typed.** A modal filled from that would
+  have shown the WRONG text to approve, which is strictly worse than showing
+  none. So the desktop side shows **what JARVIS itself typed** (recorded per
+  window, 120s TTL, bounded to 8 entries), which is definitionally accurate
+  about JARVIS's own action. *Do not "improve" this by switching to a live
+  read without re-running that probe.*
+- **Fails closed throughout:** a web read that raises, or finds no focused
+  field, still CONFIRMs and says the field could not be read — it never
+  downgrades to AUTO. `document.body` as `activeElement` reads as "no field"
+  (a blurred page reports body with a whitespace value). Password fields are
+  detected and their contents replaced with a placeholder, never pasted into
+  the HUD. Payloads cap at 500 chars with the true length stated.
+- **One sanitizer, two callers:** `type_text` strips newlines before sending,
+  so `classify_type` shows the *same* `_sanitize_typed()` string — otherwise
+  the box would be a paraphrase of what actually lands.
+- **Vision check passed** (`tests/harness_commit_modal.py`): 11 DOM asserts
+  plus all three screenshots inspected claim-by-claim — the terminal type, the
+  submit-with-recorded-payload (`JARVIS typed this 0s ago:` above the command,
+  rendering as two real lines), and the real-mode web submit (`Press Enter to
+  submit on bank.example.com` over `transfer $5000 to account 9912`).
 
 ### v1.0.1 – v1.0.4 — the post-release bug run (READ THIS BEFORE SHIPPING)
 Publishing exposed **five** bugs in a row that the 754-test gate had passed.
@@ -642,7 +689,9 @@ cd e:\J.A.R.V.I.S
 python run.py                 # serve HUD + open browser (http://127.0.0.1:8000)
 python run.py --no-open       # serve only; open the URL yourself. /settings is the settings page.
 
-python -m pytest tests/ -q    # full suite: 756 passed, 0 failed, 0 skipped (~4-8 min; launches/kills
+python -m pytest tests/ -q    # full suite. A clean 0-failed run is NOT reachable on the
+                              # free Gemini tier (§7 item 1) — expect a handful of live-brain failures
+                              # that pass when re-run ONE AT A TIME. (~4-8 min; launches/kills
                               # Notepad + a throwaway Chrome, may launch JARVIS's dedicated real-browser
                               # Chrome if real mode is on; needs a real desktop; live tests need the key)
 python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: touched files only
@@ -690,14 +739,30 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   already has code execution on the machine. If JARVIS is ever exposed beyond
   localhost, or run on a shared/multi-user box, this needs a real auth token —
   it is a deliberate single-trusted-user design, not an oversight.
+- **Terminal detection is a 7-keyword title match (found slice 38, NOT closed).**
+  `_is_terminal` (`input.py`) escalates `type_text`/`press_keys` to CONFIRM when
+  the window title contains `cmd`, `command prompt`, `powershell`, `terminal`,
+  `wt`, `conhost` or `console`. A **WSL tab titled `malek@DESKTOP: ~`, or any
+  renamed Windows Terminal profile, matches none of them** — so typing there is
+  AUTO. Same "curated, not exhaustive" class as the destructive-vocabulary list.
+  Severity is moderate, not critical: bare Enter is CONFIRM *everywhere*, so the
+  payload still can't be submitted ungated — and since slice 38 that confirm now
+  shows the typed command, so the blind-approval half is closed even when the
+  terminal itself isn't recognised.
+- **Commit-step payloads: what slice 38 does and does NOT cover.** The payload
+  box appears on SUBMIT combos only (`enter`/`ctrl+enter`/`ctrl+shift+enter`).
+  `ctrl+s`, `alt+f4`, `ctrl+w` and `delete` still confirm with description only
+  — they don't commit *typed text*, so attaching it would mislead rather than
+  inform. Web-side, `space` on a focused button can also activate it and is
+  **not** in `_COMMITTAL_WEB_KEYS` (the desktop rule leaves plain space AUTO
+  too — kept consistent deliberately). The desktop record is in-memory and
+  process-scoped (a restart forgets, same posture as the undo stack) with a
+  120s TTL, because a stale payload would actively mislead.
 - **Open findings from the slice-35 safety audit (verified in code, NOT yet
   fixed — each deferred deliberately, not overlooked):**
-  - **`browse_key("Enter")` is AUTO** while the desktop equivalent is
-    CONFIRM-gated (`input.py` `_CONFIRM_COMBOS` treats bare Enter as "submit").
-    So `browse_fill(...)` + `browse_key("Enter")` submits a web form with no
-    gate, while `browse_click("Submit")` on the same form IS gated. Closing it
-    changes user-facing behaviour (submits start asking), so it's a product
-    decision, not a pure bug fix — its own slice.
+  - ~~**`browse_key("Enter")` is AUTO**~~ — **CLOSED by slice 38** (CONFIRM in
+    real-browser mode, carrying the focused field's contents; isolated stays
+    AUTO by owner decision).
   - **No `input.enabled` kill switch.** `click`/`type_text`/`press_keys`/
     `scroll` is the universal actuator (it drives any window, including an open
     terminal or the signed-in real browser) and is the only major surface with
@@ -744,14 +809,14 @@ SHIPPED (public repo, real users, v1.0.4)** — so "does a friend's install work
 is now a first-class concern alongside new features. Pick one and plan it. In
 rough priority:
 
-0. **`browse_key("Enter")` is UN-GATED — the one open *safety* hole.** JARVIS
-   can submit a web form with no confirmation, while clicking that same form's
-   Submit button IS gated (`input.py`'s `_CONFIRM_COMBOS` treats bare Enter as
-   submit; `web.classify_web_key` does not). Same class as the gap slice 27
-   closed. Left open deliberately — fixing it makes web submits start
-   prompting, a user-facing behaviour change the owner should agree to first —
-   but it is the highest-value *correctness* item on this list and it now ships
-   to other people. Ask the owner, then close it.
+0. ~~**`browse_key("Enter")` is UN-GATED**~~ — **CLOSED by slice 38.** Enter now
+   CONFIRMs in real-browser mode and the modal shows the focused field's
+   contents; isolated mode stays AUTO (owner decision: that browser is logged
+   out, and over-gating causes prompt fatigue). The same slice closed the
+   *blind-approval* half on the desktop side — `type_text` and submit combos
+   now carry their payload into the modal's monospace box. Remaining related
+   residuals are in §5 (`_is_terminal`'s 7-keyword match; `space` on a focused
+   web button; non-submit combos carry no payload).
 1. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is the single biggest drag on the test gate (rate-limited runs at nearly every recent checkpoint, now carrying ~29 live-brain tests). **Slice 35 settled a long-standing assumption: a fresh DAILY bucket is NOT sufficient.** A full suite run on a verified-healthy bucket (burst-probe 5/5) still produced 7 live failures — the suite's clustered calls exhaust the PER-MINUTE cap inside one run, and all 7 passed when run one at a time. So "capture a clean pass on a fresh daily bucket", repeated in checkpoints since slice 20, is not actually achievable on the free tier; only billing or a fallback chain fixes it. Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent. Highest quality-of-life-per-effort item on the list.
 2. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these visibly-disabled ("not ported yet"). Each needs a tool-calling adapter mapping the full primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
 3. **Double-click reliability** (low priority — user call, 2026-07-20) — `click kind='double'` is confirmed flaky in real manual use, real mouse/UIA timing (§5). Single-click and right-click are solid. Not urgent; revisit only if it becomes a real friction point.
