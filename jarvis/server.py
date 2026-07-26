@@ -28,6 +28,7 @@ from starlette.concurrency import run_in_threadpool
 from jarvis import config
 from jarvis.brain import jarvis_brain
 from jarvis.core import chain
+from jarvis.core import extbridge as _extbridge_mod
 from jarvis.core.confirmations import confirmations
 from jarvis.core.settings_store import settings
 from jarvis.state import AgentState, broadcaster
@@ -457,6 +458,48 @@ async def _run_chat(text: str, ws: WebSocket) -> None:
         await run_in_threadpool(_respond, text)
     finally:
         _busy.release()
+
+
+def _extension_origin_ok(headers) -> bool:
+    """True only for the ONE Chrome extension the user configured (slice 41).
+
+    Chrome sends `Origin: chrome-extension://<id>` on the handshake (measured
+    in the Stage-0 probe), which `_origin_ok` correctly rejects — the HUD
+    socket must stay closed to it. This is a deliberately narrower, separate
+    allowlist for the browser socket only.
+
+    EMPTY ID = NOBODY. An unset setting must never read as "allow any
+    extension"; that is the unknown-means-refuse doctrine."""
+    want = str(settings.get("web.extension_id", "") or "").strip()
+    if not want:
+        return False
+    return (headers.get("origin") or "") == f"chrome-extension://{want}"
+
+
+@app.websocket("/ws/browser")
+async def browser_ws_endpoint(ws: WebSocket) -> None:
+    """The JARVIS browser extension's socket — how JARVIS reaches the user's
+    REAL everyday Chrome (slice 41; CDP provably cannot, see slice 40).
+
+    DELIBERATELY NOT `/ws`, and this peer is NEVER added to `_clients`.
+    That set is broadcast to indiscriminately and carries `confirm_request`
+    events INCLUDING their ids — a member can approve its own prompts, which
+    is precisely the slice-36 auth bypass. This socket talks to a browser full
+    of the user's logged-in sessions and relays untrusted page content, so it
+    is the last thing that should ever hold a confirmation id."""
+    if not _extension_origin_ok(ws.headers):
+        await ws.close(code=1008)      # policy violation; refuse before accept
+        return
+    await ws.accept()
+    _extbridge_mod.bridge.attach(ws, asyncio.get_running_loop())
+    try:
+        while True:
+            msg = await ws.receive_json()
+            _extbridge_mod.bridge.deliver(msg)     # resolve whatever is waiting on it
+    except WebSocketDisconnect:
+        pass
+    finally:
+        _extbridge_mod.bridge.detach(ws)
 
 
 @app.websocket("/ws")

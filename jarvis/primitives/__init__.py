@@ -1155,13 +1155,17 @@ def tools_schema() -> list[dict]:
     for key, verbs in _KILL_SWITCHES.items():
         if not settings.get(key, True):
             withheld.update(verbs)
-    if (settings.get("web.enabled", True)
-            and settings.get("web.profile_mode", "isolated") == "real"
-            and not settings.get("web.allow_actions", False)):
-        # Real-browser mode (slice 24) defaults to NAVIGATE + READ only —
-        # committal actions are withheld until web.allow_actions is turned on
-        # (slice 25). This one IS separately enforced, in web.py's classifiers
-        # via _actions_blocked() — hence not part of _KILL_SWITCHES.
+    if settings.get("web.enabled", True) and web._actions_blocked():
+        # NAVIGATE + READ only — committal actions are withheld. True for real
+        # mode until web.allow_actions is turned on (slice 25), and ALWAYS in
+        # extension mode (slice 41 ships read-only against the user's own
+        # logged-in Chrome).
+        #
+        # This calls web._actions_blocked() rather than re-deriving the
+        # condition: the two used to be separate copies of the same rule, so
+        # extension mode was withheld at execute but still ADVERTISED to the
+        # model. Same drift the slice-35 _KILL_SWITCHES rework removed —
+        # one source of truth, enforced in both places.
         withheld.update({"browse_click", "browse_fill", "browse_key"})
     return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]
 

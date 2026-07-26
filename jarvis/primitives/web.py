@@ -31,6 +31,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from jarvis import config
+from jarvis.core import extbridge
 from jarvis.core.settings_store import settings
 from jarvis.primitives.input import (  # reuse the committal classifier + box cap
     _click_tier,
@@ -627,7 +628,16 @@ _REAL_MODE_READONLY = ("Real-browser mode is navigate + read only — turn on "
 
 
 def _actions_blocked() -> bool:
-    """Real mode + acting NOT allowed = committal browser verbs refuse."""
+    """Committal browser verbs refuse.
+
+    Two cases: real mode with acting not allowed (slice 25), and ALWAYS in
+    extension mode - slice 41 ships navigate+read only, so clicking and
+    typing in the user's own logged-in browser is not merely unimplemented,
+    it is refused. Reusing this ONE predicate means the verbs are withheld
+    from the schema AND blocked at execute (the slice-35 lesson: withholding
+    alone is not a boundary)."""
+    if _extension_mode():
+        return True
     return _real_mode_setting() and not settings.get("web.allow_actions", False)
 
 
@@ -784,10 +794,76 @@ def fill_field(field: str, text: str) -> dict:
 
 def close_browser() -> dict:
     try:
-        session.close()
+        _active_session().close()
         return {"ok": True, "message": "Closed the browser."}
     except Exception as exc:
         return {"ok": False, "message": f"Couldn't close the browser: {_short(exc)}"}
+
+
+def _extension_mode() -> bool:
+    """True when JARVIS drives the user's REAL everyday Chrome through the
+    browser extension (slice 41).
+
+    This exists because CDP provably cannot reach that browser: Chrome 150
+    starts and SILENTLY IGNORES --remote-debugging-port on the default profile,
+    and relocating the profile loses every login (App-Bound Encryption). The
+    extension is the only route into the browser the user actually uses."""
+    return str(settings.get("web.profile_mode", "isolated") or "").lower() == "extension"
+
+
+class ExtensionSession:
+    """A BrowserSession-shaped facade over the extension bridge.
+
+    Deliberately the SAME method names as BrowserSession, because everything
+    above this line - tier classification, _cross_host(), the CONFIRM gate, the
+    slice-38 payload box - operates on the results and must not care which
+    transport produced them. No owner thread here: the bridge already
+    serialises onto the extension socket.
+
+    SLICE 41 IS READ-ONLY. click/fill/press_key are absent on purpose; the
+    committal verbs are withheld and refused via _actions_blocked(), so
+    reaching them would be a bug, not a fallback."""
+
+    def __init__(self) -> None:
+        self.current_url = None
+
+    def _call(self, cmd, **payload):
+        try:
+            reply = extbridge.bridge.send(cmd, payload or None)
+        except extbridge.ExtensionUnavailable as exc:
+            raise BrowserUnavailable(str(exc)) from exc
+        if not reply.get("ok"):
+            raise BrowserUnavailable(
+                reply.get("message") or "The browser extension refused that.")
+        return reply
+
+    def running(self) -> bool:
+        return extbridge.bridge.connected()
+
+    def navigate(self, url: str) -> dict:
+        out = self._call("navigate", url=url)
+        self.current_url = out.get("url")
+        return {"url": out.get("url"), "title": out.get("title") or ""}
+
+    def read(self) -> dict:
+        out = self._call("read",
+                         max_chars=int(settings.get("web.max_read_chars", 5000)))
+        self.current_url = out.get("url")
+        return {"url": out.get("url"), "title": out.get("title") or "",
+                "text": out.get("text") or "", "elements": []}
+
+    def close(self) -> None:
+        """A no-op BY DESIGN: this is the user's OWN browser. JARVIS never
+        closes it - the same rule slice 39 established for real mode."""
+        self.current_url = None
+
+
+ext_session = ExtensionSession()
+
+
+def _active_session():
+    """The browser backend for the current mode."""
+    return ext_session if _extension_mode() else session
 
 
 session = BrowserSession()
@@ -884,7 +960,7 @@ def classify_navigate(args: dict) -> dict:
 
 def navigate(url: str) -> dict:
     try:
-        out = session.navigate(str(url or "").strip())
+        out = _active_session().navigate(str(url or "").strip())
         return {"ok": True, "url": out["url"], "title": out["title"],
                 "message": f"Loaded {out['url']} — \"{out['title']}\"."}
     except BrowserUnavailable as exc:
@@ -896,7 +972,7 @@ def navigate(url: str) -> dict:
 
 def read_page() -> dict:
     try:
-        out = session.read()
+        out = _active_session().read()
         wrapped = wrap_page_content(out["url"], out["text"])
         if out.get("elements"):
             names = "; ".join(f"{e['tag']}:{e['name']}" for e in out["elements"]

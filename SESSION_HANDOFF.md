@@ -236,6 +236,38 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 41 — JARVIS drives the user's REAL everyday Chrome (extension bridge)
+- **What the owner actually wanted, finally delivered.** Slice 39's compromise
+  (adopt a synced profile) was rejected; slice 40 then measured that **no CDP
+  route exists** to the default profile. This ships the only remaining one: a
+  Chrome extension. **Live-verified on the owner's own browser** — read their
+  signed-in YouTube tab, then navigated that tab; screenshot confirms their
+  bookmarks bar and profile avatar.
+- **Scope: READ-ONLY** (navigate + read). Owner-chosen staging, mirroring
+  slice 24 → 25: prove the channel before anything can click on a logged-in
+  account. `browse_click/fill/key` are withheld **and** refused.
+- **The swap is transport-only.** `ExtensionSession` implements the same method
+  names as `BrowserSession`, so every classifier, `_cross_host()` check, CONFIRM
+  gate and the slice-38 payload box sits above it unchanged.
+- **Stage-0 probes drove the design and caught a bug that would have shipped:**
+  a `setTimeout` reconnect works in every test (tests keep the socket alive) and
+  then **never reconnects in real use** — when the socket closes, MV3 kills the
+  idle service worker and the pending timer dies with it. Measured, not
+  guessed. **`chrome.alarms` is the only timer that wakes a dead worker**, so
+  reconnection is alarm-driven. **Cost, unavoidable:** MV3's minimum alarm
+  period is 1 minute, so after a JARVIS restart the browser can take **up to
+  ~60s** to reconnect.
+- **Security shape.** The extension gets its **own** socket (`/ws/browser`) and
+  is **never** added to `_clients` — that set carries `confirm_request` events
+  *including their ids*, which is exactly the slice-36 auth bypass. Pinned by
+  `test_extension_socket_is_never_added_to_the_hud_broadcast_set`. The allowed
+  extension id is a setting, **empty by default = nobody may connect**.
+- **A real drift bug found by the tests:** `tools_schema()` carried its **own
+  copy** of the navigate+read-only rule instead of calling
+  `web._actions_blocked()`, so extension mode refused `browse_click` at execute
+  while still **advertising** it to the model. Now one predicate feeds both —
+  the same duplication the slice-35 `_KILL_SWITCHES` rework removed.
+
 ### Slice 39 — JARVIS's Chrome becomes the user's DAILY browser
 - **The complaint, and it was fair:** real-browser mode drove a dedicated,
   **empty** profile while the owner browsed in their everyday one — "it kinda
@@ -782,6 +814,21 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   a DND change re-opens Settings briefly (the original action's same cost);
   tabs/media-keys/email/shell are categorically irreversible and test-pinned
   as never-undoable. Redo does not exist (undoing an undo is out of scope).
+- **Extension mode (slice 41) — what it costs, honestly:**
+  - The extension holds **`<all_urls>`** host permission. That is what lets it
+    read the tab the user is on, and it is genuinely broad: every site, all
+    profiles it is installed in. Slice 41 is read-only (committal verbs refused
+    at two layers), but the *permission* is not read-only.
+  - **Reconnect latency up to ~60s** after a JARVIS restart — MV3's minimum
+    alarm period. Measured, not tunable. Surface it in the UI rather than
+    letting it read as "broken".
+  - **Prompt-injection reach grows**: page text now comes from a browser full of
+    live logged-in sessions. `wrap_page_content()`'s untrusted-data boundary
+    still applies (pinned by a test), but it is a mitigation, not a guarantee.
+  - The extension is **per-profile**; the owner's four profiles each need it
+    loaded separately. Only `Default` is set up.
+  - Chrome forbids extensions on `chrome://`, the Web Store and PDF viewers —
+    those return an honest refusal, never a blank success.
 - **Driving the user's REAL everyday Chrome: MEASURED, and only one route
   survives (2026-07-25).** The owner rejected slice 39's compromise (sync a
   fresh profile and adopt it) — they want their actual Chrome, four signed-in

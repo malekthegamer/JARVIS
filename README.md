@@ -122,9 +122,31 @@ model *and* refuses it if called directly:
 | `search.enabled` | `web_search` |
 | `email.enabled` | `send_email` |
 
-Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive your
-real logged-in Chrome) and, beneath it, `web.allow_actions` (let it click and
+Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive a
+dedicated real Chrome) and, beneath it, `web.allow_actions` (let it click and
 type on your sites).
+
+### Driving your actual everyday Chrome
+
+`web.profile_mode="extension"` lets JARVIS see and navigate **the browser you
+already use** — your profile, your logins, your tabs. Chrome blocks the
+DevTools protocol on the default profile, so this goes through a small
+extension instead:
+
+1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
+   select the `extension/` folder in this repo.
+2. Copy the extension's **ID** from that page into Settings (`web.extension_id`).
+   Only that exact extension may connect; an empty id means **none can**.
+3. Set `web.profile_mode` to `extension`.
+
+**Currently read-only** — JARVIS can open pages and read the tab you're on, but
+cannot click or type there. Worth knowing before you enable it:
+
+- The extension requests access to **all sites**; that is what lets it read the
+  page you're looking at.
+- After JARVIS restarts, the browser can take **up to a minute** to reconnect
+  (a Chrome limitation on background extensions, not a bug).
+- It can't touch `chrome://` pages, the Web Store, or PDFs — Chrome forbids it.
 
 ## Optional extras
 

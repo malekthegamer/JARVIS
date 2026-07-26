@@ -149,6 +149,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # When on, committal actions (post/buy/send/delete/submit) still CONFIRM;
         # benign clicks/typing run freely.
         "allow_actions": False,
+        # Slice 41 — "extension" profile_mode: drive the user's ACTUAL everyday
+        # Chrome through a browser extension, because CDP provably cannot reach
+        # it (slice 40: Chrome 150 silently ignores --remote-debugging-port on
+        # the default profile, and relocating the profile loses every login).
+        # This is the id from chrome://extensions; ONLY that extension may open
+        # the browser socket. EMPTY BY DEFAULT = no extension may connect —
+        # an unset id must never mean "allow any".
+        "extension_id": "",
     },
     "search": {
         # Web search (slice 15) — keyless DuckDuckGo (ddgs). A pure read (AUTO);
