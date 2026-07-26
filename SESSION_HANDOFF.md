@@ -782,6 +782,31 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   a DND change re-opens Settings briefly (the original action's same cost);
   tabs/media-keys/email/shell are categorically irreversible and test-pinned
   as never-undoable. Redo does not exist (undoing an undo is out of scope).
+- **Driving the user's REAL everyday Chrome: MEASURED, and only one route
+  survives (2026-07-25).** The owner rejected slice 39's compromise (sync a
+  fresh profile and adopt it) — they want their actual Chrome, four signed-in
+  profiles and all. Three probes, run on this machine, Chrome 150.0.7871.182:
+  - **P1 — the 136+ block is REAL here.** Launched `chrome.exe
+    --remote-debugging-port=9222` with **no** `--user-data-dir` on a fully
+    closed Chrome. Chrome **started normally** (rc=None) and **silently ignored
+    the flag** — no error, no warning, port never answered. Until now this was
+    quoted from slice 24 and never reproduced; it is now first-hand.
+  - **P2/P2b/P2c — a relocated profile LOSES every login.** A copy of
+    `Local State` + `Default/Network/Cookies` + `Preferences` launched from a
+    non-default dir: the debug port **did** answer (relocation *is*
+    debuggable), but `myaccount.google.com` served the **logged-out** page
+    (screenshot inspected), and after actually loading google.com the profile
+    held **3 cookies, ZERO auth cookies** (SID/SSID/HSID/APISID/SAPISID) versus
+    **1801 cookies / 71 on google.com** in the real store. App-Bound Encryption
+    does not survive relocation.
+  - **Therefore: relocating the user-data-dir is DEAD as a strategy**, and so
+    is any copy-the-profile approach. **A Chrome extension + native messaging
+    (`IDEAS.md` §6) is the only route to the literal everyday browser.**
+  - Real profile provably untouched: `Local State` size+mtime identical before
+    and after every probe; `--disable-sync` throughout.
+  - **Do not re-plan relocation or profile-copying without new evidence that
+    Chrome changed.** Probe scripts: `probe_p1_default_dir.py`,
+    `probe_p2_abe_relocation.py`, `p2c.py` (scratchpad pattern).
 - **Daily-browser debug port (slice 39):** once JARVIS's Chrome is the user's
   everyday browser, it runs with `--remote-debugging-port` open on 127.0.0.1.
   **Any local process can then drive that browser** — read its pages, act as the

@@ -74,12 +74,20 @@ The purist answer to slice 39. An extension in the user's **literal everyday
 profile**, talking to JARVIS over native messaging — driving the browser they
 already have open, across all profiles, with no CDP at all.
 
-- **Why it's not slice 39:** ~2–3 slices, the tier/CONFIRM layer has to be
-  re-derived for content scripts, it shows a developer-mode banner unless
-  published to the Web Store, and it cannot touch `chrome://` or Web Store
-  pages. Slice 39 gets most of the benefit for a fraction of the cost.
-- Worth doing if "I must keep using the exact Chrome shortcut I use today" ever
-  becomes a hard requirement.
+- **PROMOTED 2026-07-25: this is now the ONLY route, not the purist option.**
+  Slice 40's probes killed every alternative on this machine — Chrome 150
+  silently ignores `--remote-debugging-port` on the default profile, and a
+  relocated/copied user-data-dir loses every login (App-Bound Encryption does
+  not survive the move: 0 auth cookies vs 71 in the real store). See
+  `SESSION_HANDOFF.md` §5 for the measurements.
+- **Cost, honestly:** ~2–3 slices. The tier/CONFIRM layer has to be re-derived
+  for content scripts — that layer is currently proven, and this re-opens it.
+  It shows a developer-mode banner unless published to the Web Store (or
+  force-installed by local policy), and it cannot touch `chrome://` or Web
+  Store pages.
+- **What it buys:** the literal everyday browser, already open, all profiles,
+  no migration, no flags — and it survives the next round of Chrome hardening,
+  which the CDP approach demonstrably does not.
 
 ---
 
