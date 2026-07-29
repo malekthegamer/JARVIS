@@ -134,7 +134,8 @@ def _kill_tree(pid: int) -> None:
     grandchildren (e.g. a spawned ping) alive."""
     try:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                       capture_output=True, timeout=10)
+                       capture_output=True, timeout=10,
+                       creationflags=config.NO_WINDOW)
     except Exception:
         pass
 
@@ -160,7 +161,8 @@ def run_shell(command: str) -> dict:
     try:
         proc = subprocess.Popen(
             command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, errors="replace")
+            text=True, errors="replace",
+            creationflags=config.NO_WINDOW)  # output is captured, so no window
     except Exception as exc:
         return {"ok": False, "exit_code": None, "stdout": "", "stderr": "",
                 "message": f"couldn't start the command: {exc}"}

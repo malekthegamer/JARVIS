@@ -13,6 +13,18 @@ from dotenv import load_dotenv
 
 # Repo root (this file lives in jarvis/, one level down).
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Windows: keep HELPER subprocesses from flashing a console window.
+# Under pythonw.exe (the Desktop shortcut and autostart path) the process
+# has NO console to inherit, so every console child gets a BRAND NEW window.
+# The telemetry GPU sample runs every few seconds, which made a terminal
+# blink constantly (user-reported). Invisible in dev because python.exe
+# already owns a console — the same 'works in my environment' class as
+# v1.0.4's pythonw stdout bug.
+# NOT for GUI launches (apps, Chrome): hiding a window the user asked for
+# would be a different bug.
+NO_WINDOW = 0x08000000  # subprocess.CREATE_NO_WINDOW
+
 DATA_DIR = BASE_DIR / "data"
 SETTINGS_FILE = DATA_DIR / "settings.json"
 ENV_FILE = BASE_DIR / ".env"

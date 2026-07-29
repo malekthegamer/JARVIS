@@ -220,7 +220,8 @@ def _dnd_session():
         launched_by_us = _settings_window() is None
         # Activate/navigate to the notifications page (works whether or not a
         # Settings window already exists).
-        subprocess.Popen(["cmd", "/c", "start", "ms-settings:notifications"])
+        subprocess.Popen(["cmd", "/c", "start", "ms-settings:notifications"],
+                         creationflags=config.NO_WINDOW)
 
         window = None
         found = False
@@ -240,6 +241,7 @@ def _dnd_session():
     finally:
         if launched_by_us:
             subprocess.run(["taskkill", "/IM", "SystemSettings.exe", "/F"],
+                           creationflags=config.NO_WINDOW,
                            capture_output=True)
 
 

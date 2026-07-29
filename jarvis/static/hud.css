@@ -585,3 +585,17 @@ body[data-state="confirming"] .state-label { color: var(--amber); }
   0%, 100% { opacity: 1; }
   50%      { opacity: 0.35; }
 }
+
+/* Slice 42: the badge goes dim + non-pulsing when the extension is away, so
+   "JARVIS can't reach my browser right now" is visible instead of being
+   inferred from odd behaviour. */
+.realbrowser.offline {
+  border-color: var(--text-dim, #7a8899);
+  color: var(--text-dim, #7a8899);
+  opacity: 0.75;
+}
+.realbrowser.offline .realbrowser-dot {
+  background: var(--text-dim, #7a8899);
+  box-shadow: none;
+  animation: none;
+}

@@ -415,3 +415,68 @@ def test_huge_chat_is_truncated_not_fatal(client):
         user_lines = [e["text"] for e in events
                       if e["type"] == "transcript" and e["who"] == "user"]
         assert len(user_lines) == 1 and len(user_lines[0]) <= 4000
+
+
+# ---------- v1.0.7: the flashing console window ----------
+#
+# USER-REPORTED: "a terminal pops up for a split second every few seconds and I
+# can only end it by quitting JARVIS."
+#
+# Cause: the telemetry loop samples the GPU with `nvidia-smi` every third tick
+# (~6s). Under pythonw.exe — the Desktop shortcut and autostart path — the
+# process has NO console to inherit, so Windows creates a NEW console window
+# for each console subprocess and it flashes on screen. Invisible in dev,
+# because `python.exe` already owns a console for the child to inherit: the
+# same "works in my environment" class as v1.0.4.
+#
+# GUI launches (apps.py, the Chrome launches in web.py) deliberately do NOT get
+# this flag — hiding a window the user asked for would be a different bug.
+
+def test_gpu_sample_never_flashes_a_console_window(monkeypatch):
+    import subprocess as sp
+
+    from jarvis import config, server
+    seen = {}
+
+    class _Out:
+        returncode = 0
+        stdout = "10, 1024, 8192"
+
+    def fake_run(args, **kw):
+        seen.update(kw)
+        return _Out()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    server._sample_gpu()
+    assert seen.get("creationflags", 0) & config.NO_WINDOW, (
+        "nvidia-smi runs on a timer; without CREATE_NO_WINDOW it flashes a "
+        "console window every few seconds under pythonw")
+
+
+def test_shell_helpers_never_flash_a_console_window(monkeypatch):
+    """run_shell captures its output, and the kill-tree taskkill is internal —
+    neither should ever draw a window."""
+    import subprocess as sp
+
+    from jarvis import config
+    from jarvis.primitives import shell
+
+    seen_run = {}
+    monkeypatch.setattr(sp, "run", lambda a, **kw: seen_run.update(kw))
+    shell._kill_tree(4242)
+    assert seen_run.get("creationflags", 0) & config.NO_WINDOW
+
+    seen_popen = {}
+
+    class _P:
+        def communicate(self, timeout=None):
+            return ("", "")
+        returncode = 0
+
+    def fake_popen(cmd, **kw):
+        seen_popen.update(kw)
+        return _P()
+
+    monkeypatch.setattr(sp, "Popen", fake_popen)
+    shell.run_shell("echo hi")
+    assert seen_popen.get("creationflags", 0) & config.NO_WINDOW

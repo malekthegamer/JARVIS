@@ -236,6 +236,51 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 42 — browser control made correct and trustworthy (+ v1.0.7 fixes)
+- **Three user-reported bugs, all in the extension, all now named tests:**
+  1. *"it opened YouTube in my PINNED tab"* — `isUsable` checked http(s) and
+     not-the-HUD and simply **never checked `pinned`**. Tab safety is now ONE
+     predicate, `isProtected()` (pinned / HUD / non-http), so the next omission
+     is a test failure rather than a hijacked tab.
+  2. *"it opened Gmail OVER the YouTube tab it had just opened"* — a **design
+     error, not an oversight**: `navigate` did `tabs.update(ACTIVE tab)`, and
+     JARVIS's own new tab is active by then. **"Open" was implemented as
+     "replace what's in front of me."** Now `open` = `tabs.create` in the
+     current window; `tabs.update` is reachable only for JARVIS's **own tracked
+     tab** and only when `reuse` is asked for.
+  3. *"it typed the URL by hand and asked to confirm"* — **the model was
+     reasoning correctly from wrong information.** `browse_navigate`'s
+     description still said *"JARVIS's own ISOLATED browser … starts logged
+     out"*, which is FALSE in extension mode. Told its browser is a logged-out
+     sandbox and asked to open THEIR YouTube, driving the real window by hand is
+     a reasonable inference. Descriptions are now **derived per mode from one
+     source** (`_browser_blurb`) so they cannot rot away from behaviour — the
+     same class as the shipped-README falsehood slice 35 reopened. **The v1.0.7
+     heartbeat was a real fix but only half the cause; this was the other half.**
+- **The tracked tab lives in `chrome.storage.session`** — Chrome kills the MV3
+  worker constantly, so in-memory state is not state. A closed tab is EXPECTED
+  (users close things): clear it and open a fresh one, never guess at another.
+- **Stage 3 (speed) was DROPPED by its own measurement** — the honest outcome,
+  and the point of measuring first:
+  ```
+  baseline: navigate median 1129 ms / p90 1647 ms / success 8/8
+            read     median   10 ms / p90   27 ms / success 8/8
+            example.com 69-333 ms   ·   github 854-4367 ms
+  ```
+  The spread **is page-load time**; JARVIS's own overhead is <100 ms and reads
+  are already 10 ms. Returning sooner would mean replying *before the page is
+  ready* — a prettier number bought with a false result. The owner's perceived
+  slowness was the FAILURE path (dead extension → typing by hand → a confirm
+  prompt), which bugs 2-3 fix.
+- **Health is now visible** (vision-checked): the HUD badge rides the existing
+  ~2s telemetry event and shows amber "your browser" vs dim "browser
+  reconnecting…". The extension dying used to be invisible.
+- **v1.0.7 (same session): the flashing console.** `nvidia-smi` runs on the
+  telemetry loop every ~6s with no `CREATE_NO_WINDOW`; under `pythonw` there is
+  no console to inherit, so Windows created a NEW one each time. Fixed in four
+  places via one `config.NO_WINDOW`; GUI launches deliberately excluded.
+  Invisible in dev because `python.exe` owns a console — the v1.0.4 class again.
+
 ### Slice 41 — JARVIS drives the user's REAL everyday Chrome (extension bridge)
 - **What the owner actually wanted, finally delivered.** Slice 39's compromise
   (adopt a synced profile) was rejected; slice 40 then measured that **no CDP

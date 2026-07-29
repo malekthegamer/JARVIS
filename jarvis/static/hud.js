@@ -311,7 +311,10 @@
     else if (event.type === "transcript") addLine(event.who, event.text);
     else if (event.type === "confirm_request") showConfirm(event);
     else if (event.type === "confirm_resolved") hideConfirm();
-    else if (event.type === "telemetry") renderTelemetry(event);
+    else if (event.type === "telemetry") {
+      renderTelemetry(event);
+      renderBrowserBadge(event.browser_mode, event.browser_connected);
+    }
     else if (event.type === "plan" || event.type === "step" ||
              event.type === "chain_end" || event.type === "chain") {
       onChainEvent(event); // the strip (transient, current plan)
@@ -399,6 +402,34 @@
     ws.send(JSON.stringify({ type: "chat", text }));
     input.value = "";
   });
+
+  // --- slice 42: live browser health on the badge -------------------------
+  // The extension dying used to be invisible: JARVIS just started opening new
+  // windows and typing URLs by hand with nothing on screen to explain it.
+  // Telemetry already arrives every ~2s, so the state rides that.
+  function renderBrowserBadge(mode, connected) {
+    const badge = document.getElementById("realbrowser");
+    const text = document.getElementById("realbrowser-text");
+    if (!badge || !text) return;
+    if (mode === "extension") {
+      badge.classList.remove("hidden");
+      badge.classList.toggle("offline", !connected);
+      text.textContent = connected ? "your browser" : "browser reconnecting…";
+      badge.title = connected
+        ? "JARVIS is connected to your everyday Chrome and can open and read pages in it."
+        : "The JARVIS extension isn't connected right now. Chrome may have paused it; "
+          + "it reconnects on its own, which can take up to a minute.";
+      return;
+    }
+    if (mode === "real") {
+      badge.classList.remove("hidden", "offline");
+      text.textContent = "dedicated chrome";
+      badge.title = "JARVIS is driving its own signed-in Chrome, not your everyday browser.";
+      return;
+    }
+    badge.classList.add("hidden");
+  }
+  window.__hudBrowserBadge = renderBrowserBadge;
 
   // --- slice 39: show when JARVIS is driving the user's REAL browser -------
   // Two stacked opt-ins, and the difference matters: "reading" can only look,

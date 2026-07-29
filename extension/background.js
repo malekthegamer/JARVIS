@@ -1,4 +1,4 @@
-// JARVIS browser bridge — slice 41.
+// JARVIS browser bridge.
 //
 // Why this exists: JARVIS cannot reach your everyday Chrome over the DevTools
 // protocol. Chrome 136+ refuses --remote-debugging-port on the default profile
@@ -6,37 +6,102 @@
 // profile elsewhere loses every login because of App-Bound Encryption. An
 // extension is the only route into the browser you actually use.
 //
-// HARD-WON MV3 LESSON (measured in the Stage-0 probe, do not "simplify" this):
-// while the socket is open, WebSocket traffic keeps the service worker alive —
-// a 100s ping test passed cleanly. But the moment the socket CLOSES, the
-// worker goes idle, Chrome terminates it, and any pending setTimeout dies with
-// it. A setTimeout-based reconnect therefore works in every test and then
-// silently never reconnects in real use. chrome.alarms is the only timer that
-// WAKES a terminated worker, so reconnection MUST be alarm-driven. The cost is
-// real and unavoidable: MV3's minimum alarm period is 1 minute, so after a
-// JARVIS restart this can take up to ~60s to come back.
+// MEASURED LESSONS — do not "simplify" any of these away:
+//
+// 1. RECONNECT MUST BE ALARM-DRIVEN. When the socket closes, the worker goes
+//    idle, Chrome terminates it, and a pending setTimeout dies with it. A
+//    setTimeout reconnect passes every test and then never reconnects in real
+//    use. chrome.alarms is the only timer that WAKES a terminated worker.
+//
+// 2. THE SERVER HEARTBEATS US every 20s. Alarms fire at most once a minute, so
+//    on their own the worker was dead ~50% of the time (measured: up 20s, down
+//    30-60s, repeat). That intermittency is what made JARVIS fall back to
+//    opening new windows and typing URLs by hand.
+//
+// 3. NOTHING IS IN-MEMORY ACROSS COMMANDS. The worker dies constantly, so the
+//    tab JARVIS is working in lives in chrome.storage.session.
+//
+// USER-REPORTED BUGS THIS FILE NOW GUARDS (slice 42):
+//   * "it opened YouTube in my PINNED tab"  -> isProtected() checks pinned
+//   * "it opened Gmail OVER the YouTube tab it had just opened"
+//       -> `open` now means tabs.create. tabs.update is reachable ONLY for
+//          JARVIS's own tracked tab, and only when reuse was asked for.
 
 const WS_URL = "ws://127.0.0.1:8000/ws/browser";
 const ALARM = "jarvis-reconnect";
+const OWN_TAB_KEY = "jarvisTabId";
 let ws = null;
 
 function log(...a) { console.log("[JARVIS]", ...a); }
 
-async function activeTab() {
-  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-  return tab || null;
+// The JARVIS HUD lives on 127.0.0.1:8000. Navigating THAT tab away destroys
+// the conversation transcript — the v1.0.2 bug, in a new costume.
+const isHud = (t) => !!t && /^https?:\/\/(127\.0\.0\.1|localhost):8000(\/|$)/.test(t.url || "");
+const isWebPage = (t) => !!t && /^https?:/.test(t.url || "");
+
+// ONE predicate for "may JARVIS navigate this tab away?".
+//
+// The pinned bug happened because this was an inline expression that simply
+// forgot a case. Everything that decides destructively now goes through here.
+//
+// NOT protected, and deliberately so — say what this does NOT cover rather
+// than implying the list is complete: tab groups, audible/playing tabs, and
+// tabs with unsaved form input. Only the tracked-own-tab rule keeps those
+// safe, which it does, because we never update a tab we did not open.
+function isProtected(tab) {
+  if (!tab) return true;                 // unknown -> refuse
+  if (tab.pinned) return true;           // the user deliberately kept it
+  if (isHud(tab)) return true;           // the HUD's transcript lives in it
+  if (!isWebPage(tab)) return true;      // chrome://, Web Store, PDFs
+  return false;
 }
 
-// Chrome forbids script injection into chrome://, the Web Store and PDF
-// viewers. Say so honestly rather than returning an empty page that reads like
-// a successful but blank result.
-function tabRefusal(tab) {
-  if (!tab) return "no active tab";
-  if (!/^https?:/.test(tab.url || "")) {
-    return `I can't read ${tab.url || "that tab"} — Chrome blocks extensions ` +
-           `on browser pages. Switch to a normal web page.`;
+// Reading is NOT destructive, so a pinned tab is fine to read — only
+// navigation is restricted. Keeping these separate stops "protected" from
+// quietly meaning "invisible".
+const isReadable = (t) => isWebPage(t) && !isHud(t);
+
+async function getOwnTabId() {
+  try {
+    const got = await chrome.storage.session.get(OWN_TAB_KEY);
+    return got ? got[OWN_TAB_KEY] : null;
+  } catch { return null; }
+}
+
+async function setOwnTabId(id) {
+  try {
+    if (id == null) await chrome.storage.session.remove(OWN_TAB_KEY);
+    else await chrome.storage.session.set({ [OWN_TAB_KEY]: id });
+  } catch { /* session storage is a convenience, never a hard dependency */ }
+}
+
+// JARVIS's own tab, or null. A closed tab is EXPECTED (the user can close
+// anything) — clear it and let the caller open a fresh one.
+async function ownTab() {
+  const id = await getOwnTabId();
+  if (id == null) return null;
+  try {
+    const tab = await chrome.tabs.get(id);
+    return isProtected(tab) ? null : tab;
+  } catch {
+    await setOwnTabId(null);
+    return null;
   }
-  return null;
+}
+
+async function activeTab() {
+  const [t] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  return t || null;
+}
+
+async function readTarget() {
+  const active = await activeTab();
+  if (isReadable(active)) return active;          // what the user is looking at
+  const own = await ownTab();
+  if (own) return own;                            // else the tab JARVIS opened
+  const tabs = await chrome.tabs.query(
+    active ? { windowId: active.windowId } : {});
+  return tabs.find(isReadable) || null;
 }
 
 async function inPage(tabId, func, args) {
@@ -46,47 +111,76 @@ async function inPage(tabId, func, args) {
   return res && res[0] ? res[0].result : null;
 }
 
-// ---- the commands JARVIS sends -------------------------------------------
+// Resolve when the tab has actually landed, so the reply describes the NEW
+// page rather than the old one. Measured: this tracks real page-load time
+// (69ms for example.com, ~1.6s for YouTube) — the wait is the page, not us.
+function waitForLoad(tabId, capMs) {
+  return new Promise((resolve) => {
+    const done = (id, info) => {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(done);
+        resolve(true);
+      }
+    };
+    chrome.tabs.onUpdated.addListener(done);
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(done);
+      resolve(false);
+    }, capMs || 15000);
+  });
+}
+
 const COMMANDS = {
+  // Keepalive. Cheap on purpose: the TRAFFIC is the point, not the payload.
+  async ping() { return { ok: true, pong: true }; },
+
   async status() {
-    const tab = await activeTab();
+    const tab = await readTarget();
     return { ok: true, url: tab ? tab.url : null, title: tab ? tab.title : null };
   },
 
   async read(msg) {
-    const tab = await activeTab();
-    const refusal = tabRefusal(tab);
-    if (refusal) return { ok: false, message: refusal };
+    const tab = await readTarget();
+    if (!tab) {
+      return { ok: false, message:
+        "I couldn't find a normal web page to read — Chrome blocks extensions " +
+        "on browser pages like chrome://. Open a website and try again." };
+    }
     const max = msg.max_chars || 5000;
     const text = await inPage(tab.id, (n) => document.body.innerText.slice(0, n), [max]);
     return { ok: true, url: tab.url, title: tab.title, text: text || "" };
   },
 
+  // OPEN MEANS OPEN. A new tab in the CURRENT window, every time — unless
+  // JARVIS explicitly asks to continue in the tab it already owns (walking
+  // through one site without spawning a tab per step).
   async navigate(msg) {
-    const tab = await activeTab();
-    if (!tab) return { ok: false, message: "no active tab to navigate" };
-    await chrome.tabs.update(tab.id, { url: msg.url });
-    // Wait for the load to settle so the reply reflects the NEW page, not the
-    // old one — otherwise JARVIS reports the previous title as success.
-    const settled = await new Promise((resolve) => {
-      const done = (id, info) => {
-        if (id === tab.id && info.status === "complete") {
-          chrome.tabs.onUpdated.removeListener(done);
-          resolve(true);
-        }
-      };
-      chrome.tabs.onUpdated.addListener(done);
-      setTimeout(() => { chrome.tabs.onUpdated.removeListener(done); resolve(false); }, 15000);
-    });
-    const after = await chrome.tabs.get(tab.id);
-    return { ok: true, url: after.url, title: after.title, settled };
+    if (msg.reuse) {
+      const own = await ownTab();
+      if (own) {
+        await chrome.tabs.update(own.id, { url: msg.url, active: true });
+        await waitForLoad(own.id);
+        const after = await chrome.tabs.get(own.id);
+        return { ok: true, url: after.url, title: after.title, reused: true };
+      }
+      // fall through: our tab is gone, so open a fresh one rather than
+      // hijacking whatever happens to be in front of the user
+    }
+    const active = await activeTab();
+    const created = await chrome.tabs.create(
+      active ? { url: msg.url, windowId: active.windowId, active: true }
+             : { url: msg.url, active: true });
+    await setOwnTabId(created.id);
+    await waitForLoad(created.id);
+    const after = await chrome.tabs.get(created.id);
+    return { ok: true, url: after.url, title: after.title, new_tab: true };
   },
 };
 
 function connect() {
   if (ws && (ws.readyState === WebSocket.OPEN ||
              ws.readyState === WebSocket.CONNECTING)) {
-    return;                     // probe v1 bug: connected twice on startup
+    return;
   }
   ws = new WebSocket(WS_URL);
 
@@ -106,8 +200,7 @@ function connect() {
       try {
         reply = await handler(msg);
       } catch (e) {
-        // Never let an exception strand JARVIS waiting — it blocks a worker
-        // thread until timeout.
+        // Never strand JARVIS: it blocks a worker thread until timeout.
         reply = { ok: false, message: String(e && e.message ? e.message : e) };
       }
     }

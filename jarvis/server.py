@@ -80,6 +80,17 @@ def _sample_telemetry() -> dict:
             win32gui.GetForegroundWindow())[:80]
     except Exception:
         pass
+    # Slice 42: browser health rides the telemetry event the HUD already
+    # receives every ~2s. The extension dying used to be INVISIBLE — JARVIS
+    # simply started behaving oddly (opening new windows, typing URLs by hand)
+    # with nothing on screen to explain it.
+    try:
+        event["browser_mode"] = str(
+            settings.get("web.profile_mode", "isolated") or "isolated").lower()
+        event["browser_connected"] = _extbridge_mod.bridge.connected()
+    except Exception:
+        event["browser_mode"] = "isolated"
+        event["browser_connected"] = False
     return event
 
 
@@ -90,7 +101,8 @@ def _sample_gpu() -> dict | None:
         out = subprocess.run(
             ["nvidia-smi", "--query-gpu=utilization.gpu,memory.used,memory.total",
              "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=3)
+            capture_output=True, text=True, timeout=3,
+            creationflags=config.NO_WINDOW)   # never flash a console
         if out.returncode != 0:
             return None
         util, used, total = (x.strip() for x in
@@ -125,6 +137,20 @@ async def _telemetry_forever() -> None:
         tick += 1
 
 
+async def _extension_heartbeat_forever() -> None:
+    """Keep the browser extension's service worker alive (v1.0.7).
+
+    Without this the extension died after ~30s idle and only came back on its
+    once-a-minute alarm, so JARVIS could reach the user's real Chrome only
+    about half the time. 20s is comfortably inside the kill window."""
+    while True:
+        await asyncio.sleep(20)
+        try:
+            await _extbridge_mod.bridge.heartbeat()
+        except Exception:
+            pass          # a keepalive must never take the server down
+
+
 async def _fanout_forever() -> None:
     """Single consumer: preserves event order across all clients."""
     assert _events is not None
@@ -146,6 +172,7 @@ async def _lifespan(app: FastAPI):
     unsubscribe_confirm = confirmations.subscribe(_enqueue_threadsafe)
     fanout = asyncio.create_task(_fanout_forever())
     telemetry = asyncio.create_task(_telemetry_forever())
+    heartbeat = asyncio.create_task(_extension_heartbeat_forever())
     start_wake()  # no-op unless wake.enabled
     try:
         yield
@@ -160,6 +187,7 @@ async def _lifespan(app: FastAPI):
         unsubscribe_confirm()
         fanout.cancel()
         telemetry.cancel()
+        heartbeat.cancel()
 
 
 app = FastAPI(lifespan=_lifespan)

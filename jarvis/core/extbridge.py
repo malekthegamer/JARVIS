@@ -73,6 +73,29 @@ class ExtensionBridge:
             entry["error"] = reason
             entry["event"].set()
 
+    async def heartbeat(self) -> bool:
+        """Put a frame on the wire to keep Chrome from killing the extension.
+
+        MEASURED, and the reason bugs 2+3 existed: with no traffic Chrome
+        terminates the idle MV3 service worker after ~30s, and the extension's
+        reconnect alarm only fires once a minute — so the browser was
+        unreachable roughly HALF the time. browse_navigate then failed and the
+        model fell back to opening a new window or typing the URL by hand.
+
+        WebSocket traffic resets that idle timer (Stage 0: 20s pings held the
+        worker alive for 100s straight), so this is the whole fix. Fire and
+        forget — we do not wait for the pong; the traffic itself is the point.
+        Returns False when nothing is connected."""
+        with self._lock:
+            ws = self._ws
+        if ws is None:
+            return False
+        try:
+            await ws.send_json({"cmd": "ping", "id": "heartbeat"})
+            return True
+        except Exception:
+            return False
+
     # ---------- the blocking call (called from a WORKER THREAD) ----------
     def send(self, command: str, payload: dict | None = None,
              timeout: float = DEFAULT_TIMEOUT_S) -> dict:

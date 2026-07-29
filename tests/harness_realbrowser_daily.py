@@ -40,15 +40,9 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         FAILURES.append(name)
 
 
-STUB = """(settings) => {
-  window.fetch = async (url) => {
-    if (String(url).includes('/api/settings')) {
-      return { ok: true, json: async () => settings };
-    }
-    return { ok: false, json: async () => ({}) };
-  };
-  return window.__hudCheckRealBrowser();
-}"""
+# Slice 42: the badge is now driven by the LIVE telemetry event, not a
+# one-shot settings fetch, so drive its render function directly.
+RENDER = "([mode, connected]) => window.__hudBrowserBadge(mode, connected)"
 
 
 def badge_state(page) -> dict:
@@ -56,6 +50,7 @@ def badge_state(page) -> dict:
       const b = document.getElementById('realbrowser');
       const t = document.getElementById('realbrowser-text');
       return {hidden: b.classList.contains('hidden'),
+              offline: b.classList.contains('offline'),
               text: (t.textContent || '').trim(),
               title: b.getAttribute('title') || ''};
     }""")
@@ -66,34 +61,34 @@ def main() -> int:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 1440, "height": 860})
         page.goto("http://127.0.0.1:8000", wait_until="networkidle")
-        page.wait_for_function("typeof window.__hudCheckRealBrowser === 'function'")
+        page.wait_for_function("typeof window.__hudBrowserBadge === 'function'")
 
         # 1. isolated -> hidden entirely
-        page.evaluate(STUB, {"web": {"profile_mode": "isolated"}})
-        page.wait_for_timeout(150)
+        page.evaluate(RENDER, ["isolated", False])
+        page.wait_for_timeout(120)
         st = badge_state(page)
         check("badge_hidden_in_isolated_mode", st["hidden"] is True, str(st))
 
-        # 2. real, reading only
-        page.evaluate(STUB, {"web": {"profile_mode": "real", "allow_actions": False}})
-        page.wait_for_timeout(150)
-        st_read = badge_state(page)
-        check("badge_visible_and_says_reading",
-              st_read["hidden"] is False and "reading" in st_read["text"],
-              str(st_read))
+        # 2. extension mode, CONNECTED
+        page.evaluate(RENDER, ["extension", True])
+        page.wait_for_timeout(120)
+        on = badge_state(page)
+        check("badge_visible_when_connected",
+              on["hidden"] is False and on["offline"] is False
+              and "your browser" in on["text"], str(on))
+        page.screenshot(path=f"{OUT}/hud42_badge_connected.png")
 
-        # 3. real, acting — the dangerous one
-        page.evaluate(STUB, {"web": {"profile_mode": "real", "allow_actions": True}})
-        page.wait_for_timeout(150)
-        st_act = badge_state(page)
-        check("badge_visible_and_says_acting",
-              st_act["hidden"] is False and "acting" in st_act["text"],
-              str(st_act))
-        check("badge_tooltip_distinguishes_the_two",
-              st_read["title"] != st_act["title"] and "click" in st_act["title"].lower(),
-              f"read={st_read['title'][:40]!r} act={st_act['title'][:40]!r}")
+        # 3. extension mode, DISCONNECTED — the state that used to be invisible
+        page.evaluate(RENDER, ["extension", False])
+        page.wait_for_timeout(120)
+        off = badge_state(page)
+        check("badge_shows_reconnecting_when_disconnected",
+              off["hidden"] is False and off["offline"] is True
+              and "reconnect" in off["text"].lower(), str(off))
+        check("connected_and_disconnected_look_different",
+              on["text"] != off["text"] and on["title"] != off["title"])
 
-        page.screenshot(path=f"{OUT}/hud39_realbrowser_badge.png")
+        page.screenshot(path=f"{OUT}/hud42_badge_disconnected.png")
         browser.close()
 
     print(f"\n{'ALL CHECKS PASSED' if not FAILURES else 'FAILURES: ' + ', '.join(FAILURES)}")

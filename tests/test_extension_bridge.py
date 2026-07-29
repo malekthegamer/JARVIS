@@ -356,3 +356,255 @@ def test_extension_refusal_on_chrome_pages_is_surfaced(ext_mode):
     r = web.read_page()
     assert r["ok"] is False
     assert "chrome" in r["message"].lower()
+
+
+# ---------- v1.0.7: the extension kept DYING while JARVIS was idle ----------
+#
+# USER-REPORTED: "the first time it opened YouTube instantly, the second time it
+# typed the URL manually and asked for confirmation" — plus a page opening in a
+# whole new window.
+#
+# MEASURED CAUSE (probe_idle_drop.py, 3 minutes of idle):
+#     t+20s True | t+30s False ... t+60s False | t+70s True | t+100s False ...
+# Chrome kills the idle MV3 service worker after ~30s of no WebSocket traffic,
+# and the reconnect alarm only fires once a minute — so the browser was
+# unreachable ~50% of the time. browse_navigate then failed, and the model fell
+# back to launch_app (new window) or desktop typing (which is CONFIRM-gated,
+# hence the surprise prompt).
+#
+# Stage 0 had already proven the fix and it was not applied: 20s pings kept the
+# worker alive for 100s straight. The server now heartbeats.
+
+def test_bridge_heartbeat_sends_traffic_to_keep_the_worker_alive():
+    """The keepalive must actually put a frame on the wire — that traffic is
+    the ONLY thing that stops Chrome killing the service worker."""
+    import asyncio as _asyncio
+
+    b = ExtensionBridge()
+    ws = _FakeWS()
+    b.attach(ws, _FakeLoop())
+    assert _asyncio.get_event_loop_policy().new_event_loop().run_until_complete(
+        b.heartbeat()) is True
+    assert ws.sent, "heartbeat sent nothing — the worker will die"
+    assert ws.sent[0]["cmd"] == "ping"
+
+
+def test_bridge_heartbeat_is_safe_with_no_extension():
+    """Must not raise when nothing is connected — it runs forever in the
+    server's lifespan."""
+    import asyncio as _asyncio
+
+    b = ExtensionBridge()
+    loop = _asyncio.get_event_loop_policy().new_event_loop()
+    assert loop.run_until_complete(b.heartbeat()) is False
+
+
+def test_server_runs_an_extension_heartbeat_task():
+    """Pin the wiring: the bridge having a heartbeat is useless if nothing
+    calls it on a timer."""
+    from jarvis import server
+    assert hasattr(server, "_extension_heartbeat_forever")
+    import inspect
+    src = inspect.getsource(server._lifespan)
+    assert "_extension_heartbeat_forever" in src, \
+        "the heartbeat task must be started in the server lifespan"
+
+
+# ---------- static pins on the shipped extension JS ----------
+#
+# Same doctrine as the install.bat tests: a shipped script whose behaviour
+# regressed should fail the suite, not the user. Each of these encodes a
+# MEASURED lesson, not a style preference.
+
+import pathlib
+import re
+
+EXT_JS = pathlib.Path(__file__).resolve().parent.parent / "extension" / "background.js"
+
+
+def _js() -> str:
+    return EXT_JS.read_text(encoding="utf-8")
+
+
+def test_extension_reconnect_is_alarm_driven_not_a_timer():
+    """MEASURED: when the socket closes, Chrome kills the idle service worker
+    and a pending setTimeout dies with it — the extension never came back.
+    chrome.alarms is the only timer that wakes a terminated worker."""
+    js = _js()
+    assert "chrome.alarms.create" in js
+    assert not re.search(r"setTimeout\(\s*connect", js), \
+        "a setTimeout reconnect passes tests and then never reconnects in real use"
+
+
+def test_extension_answers_the_keepalive_ping():
+    """The server heartbeats every 20s to stop Chrome killing the worker
+    (without it the extension was unreachable ~50% of the time). The handler
+    must exist or the frames are answered with 'unknown command'."""
+    assert re.search(r"async ping\(", _js())
+
+
+def test_extension_never_navigates_the_hud_tab_away():
+    """v1.0.2 class: the HUD's transcript lives only in its page. Navigating
+    that tab to a requested URL would wipe the conversation."""
+    js = _js()
+    assert "isHud" in js and "8000" in js
+
+
+def test_extension_opens_a_tab_never_a_new_window():
+    """USER-REPORTED: 'it opens on an entirely new window'. With no usable tab
+    we must add one to the CURRENT window."""
+    js = _js()
+    assert "chrome.tabs.create" in js
+    assert "chrome.windows.create" not in js
+
+
+def test_extension_guards_against_double_connect():
+    """The probe connected twice (module load + onInstalled), which would give
+    the bridge two sockets for one browser."""
+    assert "readyState" in _js()
+
+
+# ---------- slice 42: tab semantics the user can trust ----------
+#
+# THREE USER-REPORTED BUGS, as named tests. All three are in the extension's
+# JS, so these are static pins on the shipped script (same doctrine as the
+# install.bat tests — a shipped script that regressed should fail the suite,
+# not the user).
+#
+#  1. "if I have a pinned tab and tell it to open YouTube, it opens in the
+#      PINNED tab"           -> isUsable() never checked `pinned`
+#  2. "I told it to open Gmail in a new tab and it opened over the YouTube tab
+#      it had just opened"   -> navigate did tabs.update(ACTIVE tab), and
+#                               JARVIS's own new tab is active by then, so
+#                               "open" was implemented as "replace what's in
+#                               front of me"
+#  3. "it typed the URL by hand and asked to confirm"
+#                            -> covered by the mode-aware description tests
+#                               below: the model was TOLD the browser is an
+#                               isolated logged-out sandbox
+
+def test_extension_never_navigates_a_pinned_tab():
+    """REPORTED BUG 1. A pinned tab is something the user deliberately kept —
+    hijacking it is never acceptable."""
+    js = _js()
+    assert "pinned" in js, \
+        "no pinned check: JARVIS will navigate the user's pinned tabs away"
+
+
+def test_protected_tabs_are_decided_in_one_place():
+    """The pinned omission happened because 'may I touch this tab?' was an
+    inline expression. One predicate, so the next omission is a test failure
+    rather than a hijacked tab."""
+    js = _js()
+    assert re.search(r"function isProtected\b|const isProtected\s*=", js), \
+        "tab protection must be a single named predicate"
+
+
+def test_open_creates_a_new_tab_and_never_replaces_the_active_one():
+    """REPORTED BUG 2. `open` must mean OPEN. The default path must call
+    tabs.create; tabs.update is only legitimate for JARVIS's OWN tracked tab
+    when reuse was explicitly requested."""
+    js = _js()
+    assert "chrome.tabs.create" in js
+    assert re.search(r"reuse", js), \
+        "there must be an explicit reuse path, so the default can be 'new tab'"
+
+
+def test_open_never_spawns_a_new_window():
+    js = _js()
+    assert "chrome.windows.create" not in js
+
+
+def test_jarvis_tracks_its_own_tab_across_worker_restarts():
+    """Chrome kills the service worker constantly, so an in-memory tab id is
+    lost. session storage survives it; on a miss the fallback must be a NEW
+    tab, never guessing at one of the user's."""
+    js = _js()
+    assert "storage.session" in js, \
+        "the tracked tab id must survive the worker being killed"
+
+
+# ---------- slice 42 stage 2: tell the model the TRUTH ----------
+#
+# REPORTED BUG 3: "I asked it to open YouTube and it typed the URL in by hand,
+# then asked me to confirm a search."
+#
+# The dead socket (fixed by the v1.0.7 heartbeat) was only half of it. The
+# other half is that browse_navigate's description said:
+#
+#   "Open a URL in JARVIS's own ISOLATED browser (separate from your real
+#    browser — STARTS LOGGED OUT)"
+#
+# In extension mode that is FALSE — it is the user's real Chrome, with their
+# logins. Told the browser is a logged-out sandbox and asked to open THEIR
+# YouTube, driving the real window by hand is a REASONABLE inference. The model
+# was not being erratic; it was correctly reasoning from wrong information.
+#
+# This is the same class of defect as the shipped-README falsehood slice 35
+# reopened: documentation that no longer matches behaviour.
+
+def _nav_description() -> str:
+    from jarvis.primitives import tools_schema
+    for schema in tools_schema():
+        if schema["name"] == "browse_navigate":
+            return schema["description"]
+    raise AssertionError("browse_navigate missing from the schema")
+
+
+def test_isolated_mode_description_says_isolated():
+    settings.set("web.profile_mode", "isolated", persist=False)
+    d = _nav_description().lower()
+    assert "isolated" in d or "logged out" in d
+
+
+def test_extension_mode_description_says_the_users_own_browser():
+    """The model must know it is driving the user's REAL, logged-in Chrome."""
+    settings.set("web.profile_mode", "extension", persist=False)
+    try:
+        d = _nav_description().lower()
+        assert "isolated" not in d, \
+            "extension mode is NOT an isolated browser — this is the wrong-belief bug"
+        assert "logged out" not in d
+        assert "your" in d and ("chrome" in d or "browser" in d)
+    finally:
+        settings.set("web.profile_mode", "isolated", persist=False)
+
+
+def test_extension_mode_description_tells_the_model_it_opens_a_new_tab():
+    """So it does not expect 'navigate' to replace what the user is looking
+    at — and so it knows it does not need to drive the window by hand."""
+    settings.set("web.profile_mode", "extension", persist=False)
+    try:
+        assert "new tab" in _nav_description().lower()
+    finally:
+        settings.set("web.profile_mode", "isolated", persist=False)
+
+
+def test_descriptions_come_from_one_source_per_mode():
+    """Anti-drift: the three modes must not be three hand-written strings that
+    can rot independently — that rot IS this bug."""
+    from jarvis.primitives import _browser_blurb
+    assert _browser_blurb("isolated") != _browser_blurb("extension")
+    assert _browser_blurb("real") != _browser_blurb("extension")
+
+
+# ---------- slice 42 stage 4: visible health ----------
+#
+# The extension dying was invisible — JARVIS just started behaving oddly. The
+# HUD already receives a telemetry event every ~2s, so connection state rides
+# that rather than needing a new endpoint or poll.
+
+def test_telemetry_carries_browser_connection_state():
+    from jarvis import server
+    ev = server._sample_telemetry()
+    assert "browser_connected" in ev, \
+        "the HUD cannot show connection state it is never sent"
+    assert isinstance(ev["browser_connected"], bool)
+
+
+def test_telemetry_carries_the_browser_mode():
+    """The badge must distinguish 'extension mode, disconnected' from 'not in
+    extension mode at all' — otherwise it would cry wolf in isolated mode."""
+    from jarvis import server
+    ev = server._sample_telemetry()
+    assert ev.get("browser_mode") in ("isolated", "real", "extension")

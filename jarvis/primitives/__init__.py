@@ -738,12 +738,10 @@ PRIMITIVES: dict[str, dict] = {
         "fn": _run_browse_navigate,
         "classify": web.classify_navigate,
         "schema": {"name": "browse_navigate",
-                   "description": ("Open a URL in JARVIS's own isolated browser "
-                                   "(separate from your real browser — starts "
-                                   "logged out). http/https only. Navigating to a "
-                                   "DIFFERENT site than the current page is "
-                                   "confirmation-gated. Use to start or continue a "
-                                   "web task."),
+                   "description": ("Open a URL in {browser}. http/https only. "
+                                   "Navigating to a DIFFERENT site than the current "
+                                   "page is confirmation-gated. Use this to open or "
+                                   "go to any web page."),
                    "parameters": {"type": "object",
                                   "properties": {"url": {"type": "string",
                                                          "description": "The full http(s) URL"}},
@@ -1147,6 +1145,53 @@ def _disabled_by_switch(name: str) -> str | None:
     return None
 
 
+# ---- slice 42: the model must know WHICH browser it is driving ----
+#
+# REPORTED BUG: asked to open YouTube, the model typed the URL into Chrome by
+# hand instead of using browse_navigate. It was reasoning correctly from wrong
+# information: browse_navigate's description said "JARVIS's own ISOLATED
+# browser ... starts logged out", which in extension mode is FALSE — that mode
+# drives the user's real, logged-in Chrome. Asked to open THEIR YouTube while
+# believing its own browser is a logged-out sandbox, driving the real window
+# manually is a reasonable inference.
+#
+# So the description is derived from the active mode, from ONE source, rather
+# than being a hand-written string that rots when behaviour changes. Same class
+# as the shipped-README falsehood slice 35 had to reopen.
+
+_BROWSER_BLURBS = {
+    "isolated": ("JARVIS's own isolated browser (separate from your real "
+                 "browser — starts logged out)"),
+    "real": ("a dedicated real Chrome signed into your accounts (separate "
+             "window from your everyday browsing)"),
+    "extension": ("YOUR everyday Chrome — your real profile, your logins, "
+                  "your tabs. Opens each new site in a NEW TAB in the window "
+                  "you are using; it never replaces a tab you were on, and "
+                  "never touches pinned tabs. Because this IS your real "
+                  "browser, use this tool to open pages — do NOT type URLs "
+                  "into the browser window by hand"),
+}
+
+
+def _browser_blurb(mode: str | None = None) -> str:
+    """One sentence naming the browser the web verbs actually drive."""
+    if mode is None:
+        mode = settings.get("web.profile_mode", "isolated")
+    return _BROWSER_BLURBS.get(str(mode or "").lower(),
+                               _BROWSER_BLURBS["isolated"])
+
+
+def _mode_aware_schema(schema: dict) -> dict:
+    """Rewrite a browser verb's description for the ACTIVE mode. Additive: any
+    verb without the placeholder is returned untouched."""
+    desc = schema.get("description", "")
+    if "{browser}" not in desc:
+        return schema
+    out = dict(schema)
+    out["description"] = desc.replace("{browser}", _browser_blurb())
+    return out
+
+
 def tools_schema() -> list[dict]:
     """Schemas the model may call. A verb whose capability switch is off is
     withheld entirely — not even advertised — and _disabled_by_switch() also
@@ -1167,7 +1212,8 @@ def tools_schema() -> list[dict]:
         # model. Same drift the slice-35 _KILL_SWITCHES rework removed —
         # one source of truth, enforced in both places.
         withheld.update({"browse_click", "browse_fill", "browse_key"})
-    return [p["schema"] for n, p in PRIMITIVES.items() if n not in withheld]
+    return [_mode_aware_schema(p["schema"])
+            for n, p in PRIMITIVES.items() if n not in withheld]
 
 
 def execute(name: str, args: dict) -> str:
