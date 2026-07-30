@@ -33,9 +33,9 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 895 collected** (slice 45). The **non-desktop gate** (desktop-driving
-tests deselected, so it runs without an idle machine) is now **677 passed / 0
-failed / 0 skipped** — the first clean gate in the project's history, because
+**Tests: 930 collected** (slice 47). The **non-desktop gate** (desktop-driving
+tests deselected, so it runs without an idle machine) is now **712 passed / 0
+failed / 0 skipped** (slice 47) — clean since slice 45, because
 slice 45 paces live Gemini calls so quota stops forging failures (it costs ~175s
 of deliberate sleeping; the price is printed at the end of every run). **The full
 suite including desktop tests has NOT been re-run since pacing landed** — that
@@ -244,6 +244,58 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 47 — screen-aware Q&A ("what am I looking at?")
+- **Closes `screen.py`'s own TODO.** Its docstring said *"capture_screen() is
+  internal-only this slice — screenshots feed screenshot_diff, not the model
+  (vision round-trip is a later slice)."* This is that slice: JARVIS could see
+  that the screen *changed*, never what was *on* it.
+- **`screen_query(question, window_hint=None)`** — AUTO tier (it returns prose;
+  nothing is clicked, typed or run from its output, same precedent as
+  `read_page`/`read_ui_tree`). Answer wrapped by `web._wrap_untrusted` before
+  re-entering the agent loop, reusing the one boundary rather than a second copy.
+- **The design flaw this avoided.** The obvious default — capture the *focused*
+  window — is wrong: typing "what am I looking at?" into the HUD makes the
+  BROWSER the focused window, so it would answer *"you're looking at the JARVIS
+  interface."* Verified nothing excludes the HUD from `_foreground_window()`.
+  **Owner chose whole-screen by default**; `window_hint` narrows. Bonus:
+  `capture_screen()` does not `set_focus()`, so asking never rearranges the
+  desktop (unlike the click path's `_grab_window`).
+- **Stage 0 MEASURED before any code** (`scratchpad/probe_screen_qa.py`), 4
+  planted facts checked by exact string on a synthetic 1920×1080 desktop:
+
+  | max_edge | KB | sec | heading 30px | body 15px | small 12px | dialog |
+  |---|---|---|---|---|---|---|
+  | **1024** | 34 | 1.6 | ✅ | ✅ | ✅ | ✅ |
+  | 1536 | 55 | 1.3 | ✅ | ✅ | ✅ | ✅ |
+  | 1920 | 34 | 1.4 | ✅ | ✅ | ✅ | ✅ |
+
+  **1024 reads 12px small print** (~6px after the 0.53 downscale), so it is the
+  default — cheapest and measured sufficient. ~1.4s vs the click path's ~7.1s
+  (no `response_schema`).
+- **`vision.qa_max_edge_px` is SEPARATE from `vision.max_edge_px` on purpose** —
+  the latter is load-bearing for slices 16/17's published click accuracy, so
+  tuning Q&A must never drag the click path with it. Test-pinned
+  (`test_qa_uses_its_own_max_edge_not_the_click_paths`).
+- **Live-proven on the REAL screen** (`tests/harness_screen_qa.py`): read the
+  foreground app, the browser, an installed extension, and quoted a small
+  in-app error message verbatim — confirming the synthetic measurement holds on
+  real antialiased content. Gate tests use a synthetic image + a REAL model call
+  (the `_mock_grab_image` pattern), so they're deterministic and
+  `test_vision.py` stays out of `_DESKTOP_DRIVING_MODULES`.
+- **Confabulation guard test-pinned on this path**: asked for something not on
+  screen ("the user's bank balance"), it must admit it rather than invent.
+- **Kill switch both ways** — `vision.enabled` withholds it from `tools_schema()`
+  AND `_disabled_by_switch()` refuses a direct call (the slice-35 lesson).
+- **⚠ Privacy, stated not buried:** this sends the WHOLE screen — every visible
+  window, notification and message — to Gemini. Genuinely bigger than the click
+  path's single window. It rides the existing `vision.enabled` switch rather
+  than a new flag nobody knows about; README says so plainly. Not solvable by
+  cleverness — it is the honest cost of the feature.
+- **Inherited gap, unchanged:** this is a THIRD Gemini call site and the vision
+  path still has **no** brain fallback chain (slice 44 covers `brain.think()`
+  only), so a 429 here is a hard failure. Slice 45's pacer *does* cover it
+  automatically (it wraps the shared SDK method).
 
 ### Slice 46 — test the way a USER actually starts JARVIS
 - **The gap it closed:** all five post-release bugs were one class — *green in my
@@ -1059,6 +1111,18 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
 - **Settings page (slice 23)**: multi-brain (OpenAI/Claude/Ollama) is visibly present but disabled — "not ported yet" is honest UI, not a bug. Autostart targets `tray_start.pyw`; if the repo is moved, re-toggle autostart to refresh the Run-key path.
 - **Real-browser mode (slices 24-25)**: cannot use the user's literal Default Chrome profile — Chrome 136+ blocks remote-debugging on it and app-bound cookie encryption resists copying its logins (this is Google's deliberate hardening, not a JARVIS limitation). JARVIS instead drives a **dedicated** Chrome profile (`data/browser_profile/`) that the user signs into once per site. Committal actions (click/type/submit) are OFF by default and, even when enabled, only committal ones (post/buy/send/delete/submit) CONFIRM — benign clicks/typing are un-gated on the real account (the user's chosen trade for smoothness). A click that leaves the current host via an **anchor** is now re-gated through the cross-origin CONFIRM (slice 27); the remaining residual is a *named, benign-looking* control that navigates cross-host via **JavaScript** (no inspectable href) — that is detected and flagged after the click, not pre-gated. Rich text editors (contenteditable) work best-effort, verified on Claude's ProseMirror box but not exhaustively tested across every site. `browse_key` presses only a fixed allow-list of navigation keys (Enter/Tab/Escape/arrows/etc.) — never arbitrary key combos.
 - **Flaky test note**: (1) live-UIA/input tests (`test_input`, `test_tabs`) intermittently fail under load in a full run on real mouse/UIA/browser timing; (2) live-model tests accept any bounded/terminal chain state to absorb transient provider errors; (3) a recurring cross-session Win11-Notepad session-restore orphan can make `test_close_window_closes_notepad` fail (a genuinely unsaved leftover Notepad from a prior session — not a code bug, `close_window` correctly refuses to force it past its save dialog); (4) **never run two full live suites back-to-back** — free-tier Gemini quota exhausts and live tests fail in clusters (rotating failures across runs = the signature of throttling, not a regression). Always re-run the named test in isolation before calling anything a regression.
+- **A flake that LOOKS like a safety regression (seen slice 47, evidence-backed).**
+  `test_extension_browser.py::test_nameless_actionable_element_fails_closed` can
+  fail with `assert 'auto' == 'confirm'` on `classify_web_click({"target":
+  "submit"})`. That reads like a committal click escaping its gate — it is not.
+  `web.py:753` returns `tier="auto"` when `find_clickable` raises
+  `BrowserUnavailable`, because with no browser the click cannot execute at all;
+  the CONFIRM is skipped only for an action that then fails. So a momentarily
+  disconnected extension bridge mid-gate degrades the TIER, not the safety.
+  **Evidence it is nondeterministic:** same code, back-to-back non-desktop gates
+  — run A `1 failed`, run B `712 passed / 0 failed`; the test also passed alone
+  (1/1) and as a whole file (20/20). Do not "fix" the classifier in response to
+  this without reproducing it twice.
 - **Brain fallback chain (slice 44) — what it does and does NOT fix.** A transient
   brain failure walks a bounded model chain, and that is **live-proven** to rescue
   real 429s. But it does **NOT** clear the gate's clustered live failures, and the

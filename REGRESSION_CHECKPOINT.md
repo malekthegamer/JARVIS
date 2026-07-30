@@ -27,7 +27,22 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (895 tests as of slice 45)
+## 1. Regression signal — test suite (930 tests as of slice 47)
+
+### Slice 47 — JARVIS can read the screen
+- **`screen_query`** answers questions about what is visible. AUTO tier (prose
+  only), answer wrapped as UNTRUSTED, `vision.enabled` gated both ways.
+- **Stage 0 measured** on a synthetic 1920x1080 desktop, exact-string scored:
+  max_edge 1024 / 1536 / 1920 all read a 30px heading, 15px body, **12px small
+  print** and a dialog message — 4/4 each, ~1.3-1.6s. **1024 is the default**
+  and is why `vision.qa_max_edge_px` exists separately from `vision.max_edge_px`
+  (which is load-bearing for slices 16/17's published click accuracy).
+- **Live-proven on the real desktop** (`tests/harness_screen_qa.py`) — quoted a
+  small in-app error message verbatim.
+- Gate tests are synthetic-image + REAL model call, so they are deterministic
+  and `test_vision.py` stays out of `_DESKTOP_DRIVING_MODULES`.
+- **Privacy:** sends the WHOLE screen to Gemini by default. Documented in README,
+  gated by `vision.enabled`, `window_hint` narrows it.
 
 ### Slice 46 — the entry point is finally tested by RUNNING it
 - **`tests/test_entrypoint_smoke.py` (14 tests)** launches

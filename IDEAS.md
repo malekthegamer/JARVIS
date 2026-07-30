@@ -40,7 +40,7 @@ user names it, and it replays on request.
   log. Needs a durable schedule store and a timer thread.
 - Composes directly with **#1** — scheduled *routines* is the real feature.
 
-## 3. Screen-aware Q&A
+## 3. Screen-aware Q&A — ✅ SHIPPED (slice 47)
 
 > *"What am I looking at?"* / *"Summarise this."*
 
@@ -48,6 +48,10 @@ user names it, and it replays on request.
   already multimodal. Mostly wiring machinery that exists but has never been
   pointed at the user's own question.
 - **Cheapest big win on this list**, and the best ten-second demo.
+- **DONE:** `screen_query` — whole screen by default (capturing the FOCUSED
+  window would have answered "you're looking at the JARVIS interface" when
+  you type into the HUD), AUTO tier, untrusted-wrapped, `vision.enabled`
+  gated. Stage 0 measured 12px text readable at max_edge 1024.
 
 ## 4. Barge-in (interrupt mid-sentence)
 
@@ -64,11 +68,14 @@ Less flashy, most strategic: it attacks the project's #1 recurring pain.
 
 - A small local model handles simple intents with **no quota, no network, no
   key**; Gemini handles the hard reasoning.
-- This is §7 item 1's brain fallback chain **plus** offline capability, and it
-  would stop the test gate producing false red — which currently trains everyone
-  to ignore red.
+- This is §7 item 1's brain fallback chain **plus** offline capability.
+- **CORRECTION (slice 45):** this entry used to claim it would "stop the test
+  gate producing false red". That problem is SOLVED, by a different mechanism
+  — test-call pacing (`tests/_pacer.py`), 6 failures → 0. Do not re-justify
+  this idea on gate noise. The real remaining case is offline / no-key /
+  no-quota operation, which is still genuinely unbuilt.
 
-## 6. Chrome extension bridge
+## 6. Chrome extension bridge — ✅ SHIPPED (slices 41-43, v1.1.0)
 
 The purist answer to slice 39. An extension in the user's **literal everyday
 profile**, talking to JARVIS over native messaging — driving the browser they

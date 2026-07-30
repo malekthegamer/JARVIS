@@ -378,3 +378,222 @@ def test_live_confabulation_is_documented_and_still_gated(monkeypatch):
     if r["ok"]:  # confabulated (the common case) → must be gated, not AUTO
         assert r["tier"] == "confirm", f"a confabulated risky control must gate: {r}"
     # if the model happened to say not-found, that's fine too — either is safe.
+
+
+# ==================== slice 47: screen-aware Q&A ====================
+# A different shape from locate_and_classify: free prose, no response_schema,
+# no coordinate mapping — so it answers questions about the screen instead of
+# pointing at controls. Whole screen by DEFAULT (the owner's call): if this
+# captured the focused window, typing "what am I looking at?" into the HUD would
+# capture the HUD and answer "you're looking at JARVIS" — verified that nothing
+# excludes the HUD from _foreground_window().
+#
+# STAGE 0 MEASURED (re-run scratchpad/probe_screen_qa.py, don't trust this):
+# at max_edge 1024/1536/1920 the model read a 30px heading, 15px body, 12px
+# small print and a dialog message — 4/4 at every size, ~1.3-1.6s. 1024 is
+# therefore enough and is the default.
+
+def _fake_screen(w=400, h=300):
+    return np.zeros((h, w, 3), dtype=np.uint8)
+
+
+def test_answer_about_screen_captures_the_whole_screen_when_no_hint(monkeypatch):
+    """The DEFAULT path must be the whole desktop, NOT the focused window."""
+    calls = {"whole": 0, "window": 0}
+
+    def fake_capture(monitor=0):
+        calls["whole"] += 1
+        return _fake_screen()
+
+    monkeypatch.setattr(jv.screen, "capture_screen", fake_capture)
+    monkeypatch.setattr(jv, "_grab_window",
+                        lambda hint: calls.__setitem__("window", calls["window"] + 1))
+    monkeypatch.setattr(jv, "_call_gemini_qa", lambda png, q: "a code editor")
+
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] and r["answer"] == "a code editor", r
+    assert calls["whole"] == 1, "must capture the whole screen"
+    assert calls["window"] == 0, "must NOT use the focused-window path"
+
+
+def test_answer_about_screen_captures_the_named_window_when_hinted(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(jv, "_grab_window",
+                        lambda hint: (seen.setdefault("hint", hint),
+                                      (_fake_screen(), (0, 0), RECT, "Notepad"))[1])
+    monkeypatch.setattr(jv.screen, "capture_screen",
+                        lambda monitor=0: pytest.fail("must not grab whole screen"))
+    monkeypatch.setattr(jv, "_call_gemini_qa", lambda png, q: "a text file")
+
+    r = jv.answer_about_screen("what does it say?", window_hint="Notepad")
+    assert r["ok"] and r["answer"] == "a text file", r
+    assert seen["hint"] == "Notepad"
+    assert "Notepad" in r["source"], f"source must name the window: {r}"
+
+
+def test_answer_about_screen_does_not_steal_focus_on_the_whole_screen_path(monkeypatch):
+    """capture_screen() must be used precisely because it does NOT set_focus().
+    Asking a question should never rearrange the user's desktop."""
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _fake_screen())
+    monkeypatch.setattr(jv, "_grab_window",
+                        lambda hint: pytest.fail("_grab_window focuses — not on this path"))
+    monkeypatch.setattr(jv, "_call_gemini_qa", lambda png, q: "ok")
+    assert jv.answer_about_screen("what is this?")["ok"]
+
+
+def test_answer_about_screen_fails_closed_when_vision_disabled(monkeypatch):
+    from jarvis.core.settings_store import settings
+    monkeypatch.setattr(settings, "get",
+                        lambda k, d=None: False if k == "vision.enabled" else d)
+    monkeypatch.setattr(jv.screen, "capture_screen",
+                        lambda monitor=0: pytest.fail("must not capture when disabled"))
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] is False and "disabled" in r["reason"]
+
+
+def test_answer_about_screen_fails_closed_when_capture_fails(monkeypatch):
+    def boom(monitor=0):
+        raise RuntimeError("no display")
+    monkeypatch.setattr(jv.screen, "capture_screen", boom)
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] is False and "capture" in r["reason"].lower()
+
+
+def test_answer_about_screen_fails_closed_when_the_window_is_missing(monkeypatch):
+    monkeypatch.setattr(jv, "_grab_window", lambda hint: None)
+    r = jv.answer_about_screen("what does it say?", window_hint="Nope")
+    assert r["ok"] is False and "capture" in r["reason"].lower()
+
+
+def test_answer_about_screen_fails_closed_when_the_model_is_unavailable(monkeypatch):
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _fake_screen())
+    monkeypatch.setattr(jv, "_call_gemini_qa", lambda png, q: None)
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] is False and "unavailable" in r["reason"]
+
+
+@pytest.mark.parametrize("empty", ["", "   ", "\n"])
+def test_answer_about_screen_fails_closed_on_an_empty_answer(monkeypatch, empty):
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _fake_screen())
+    monkeypatch.setattr(jv, "_call_gemini_qa", lambda png, q: empty)
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] is False, f"blank answer must fail closed, got {r}"
+
+
+def test_qa_uses_its_own_max_edge_not_the_click_paths(monkeypatch):
+    """RISK 1: vision.max_edge_px=1024 is load-bearing for slice 16/17's
+    PUBLISHED accuracy. Tuning the Q&A path must never drag the click path with
+    it, so they read different settings."""
+    from jarvis.core.settings_store import settings
+    seen = {}
+
+    def fake_encode(img, max_edge):
+        seen["max_edge"] = max_edge
+        return b"png", 1.0
+
+    monkeypatch.setattr(settings, "get", lambda k, d=None: {
+        "vision.enabled": True,
+        "vision.qa_max_edge_px": 1536,
+        "vision.max_edge_px": 1024,
+    }.get(k, d))
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _fake_screen())
+    monkeypatch.setattr(jv, "_downscale_and_encode", fake_encode)
+    monkeypatch.setattr(jv, "_call_gemini_qa", lambda png, q: "ok")
+
+    jv.answer_about_screen("what am I looking at?")
+    assert seen["max_edge"] == 1536, \
+        f"Q&A must use vision.qa_max_edge_px, got {seen['max_edge']}"
+
+
+def test_answer_about_screen_never_raises(monkeypatch):
+    """Every seam fails closed; nothing propagates to the agent loop."""
+    def boom(*a, **k):
+        raise RuntimeError("kaboom")
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _fake_screen())
+    monkeypatch.setattr(jv, "_downscale_and_encode", boom)
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] is False
+
+
+# ---------- slice 47 stage 3: LIVE screen Q&A on a constructed screen ----------
+# Same trick as the live locate tests above: the IMAGE is synthetic (so the
+# assertion is deterministic and the desktop is never driven — this module stays
+# out of conftest's _DESKTOP_DRIVING_MODULES), but the MODEL CALL IS REAL. That
+# is what proves the prompt actually reads a screen, which no mock can.
+
+_DOC_HEADING = "Quarterly Revenue Report"
+_DOC_COMPANY = "Northwind"
+_DOC_INVOICE = "INV-88421"
+_DLG_CODE = "0x8007045D"
+
+
+def _screen_image():
+    """A 1920x1080 'desktop': a document window + an error dialog. Facts are
+    planted at 30px/15px/12px so the test proves SMALL text is readable, not
+    just headlines. Returns BGR (capture_screen's format)."""
+    from PIL import Image, ImageDraw
+    im = Image.new("RGB", (1920, 1080), (32, 34, 40))
+    d = ImageDraw.Draw(im)
+    d.rectangle([120, 90, 1180, 900], fill=(255, 255, 255))
+    d.rectangle([120, 90, 1180, 130], fill=(230, 232, 236))
+    d.text((136, 100), "report.docx - Word", font=_font(15), fill=(40, 40, 40))
+    d.text((160, 170), _DOC_HEADING, font=_font(30), fill=(15, 15, 15))
+    lines = [
+        (f"Prepared for {_DOC_COMPANY} Traders Ltd for the period ending March.", 15),
+        ("Total revenue rose 18% year on year, driven by the retail channel.", 15),
+        (f"Outstanding invoice reference {_DOC_INVOICE} remains unpaid.", 12),
+    ]
+    y = 240
+    for text, size in lines:
+        d.text((160, y), text, font=_font(size), fill=(30, 30, 30))
+        y += 40
+    d.rectangle([1250, 380, 1800, 620], fill=(240, 240, 244))
+    d.rectangle([1250, 380, 1800, 420], fill=(200, 60, 60))
+    d.text((1266, 390), "Disk Write Error", font=_font(16), fill=(255, 255, 255))
+    d.text((1276, 460), f"Cannot save to drive E: (code {_DLG_CODE})",
+           font=_font(14), fill=(20, 20, 20))
+    import numpy as np
+    return np.asarray(im)[:, :, ::-1].copy()
+
+
+@live
+def test_live_screen_query_reads_text_from_the_screen(monkeypatch):
+    """The real thing: a real model call must read planted text off a screen.
+    12px small print is included deliberately — Stage 0 measured it readable at
+    max_edge=1024 (~6px after downscale), so a regression here is real."""
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _screen_image())
+    r = jv.answer_about_screen(
+        "What is the document's heading, which company is it prepared for, "
+        "and what is the outstanding invoice reference?")
+    assert r["ok"], r
+    a = r["answer"].lower()
+    assert _DOC_HEADING.lower() in a, f"missed the 30px heading: {r['answer']}"
+    assert _DOC_COMPANY.lower() in a, f"missed the 15px body text: {r['answer']}"
+    assert _DOC_INVOICE.lower() in a, f"missed the 12px small print: {r['answer']}"
+    assert r["source"] == "the whole screen"
+
+
+@live
+def test_live_screen_query_describes_a_dialog(monkeypatch):
+    """'What does this error say?' — the case with no accessible text layer,
+    which is exactly why a vision path exists at all."""
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _screen_image())
+    r = jv.answer_about_screen("What does the error dialog say?")
+    assert r["ok"], r
+    a = r["answer"].lower()
+    assert _DLG_CODE.lower() in a or "disk write error" in a, \
+        f"didn't read the dialog: {r['answer']}"
+
+
+@live
+def test_live_screen_query_admits_when_the_answer_is_not_on_screen(monkeypatch):
+    """Confabulation guard. Asked about something absent, it must say so rather
+    than invent — the residual vision.py documents, checked on THIS path."""
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _screen_image())
+    r = jv.answer_about_screen("What is the user's bank account balance?")
+    assert r["ok"], r
+    a = r["answer"].lower()
+    admits = any(w in a for w in
+                 ("no ", "not ", "n't", "cannot", "can't", "unable", "isn't",
+                  "does not", "nothing"))
+    assert admits, f"must admit the answer isn't on screen, said: {r['answer']}"

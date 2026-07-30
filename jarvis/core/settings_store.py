@@ -51,6 +51,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # path can't identify an element (see jarvis.primitives.vision).
         "enabled": True,          # kill switch; off -> fast-path failure fails as before
         "max_edge_px": 1024,      # downscale the window crop's longest edge to this
+        # Slice 47 screen_query. SEPARATE from max_edge_px on purpose: that one
+        # is load-bearing for slices 16/17's PUBLISHED click accuracy, so tuning
+        # Q&A must never drag the click path with it. MEASURED (Stage 0): at
+        # 1024 the model read a 30px heading, 15px body, 12px small print and a
+        # dialog message — 4/4, ~1.6s. 1024 is enough and is the cheapest.
+        "qa_max_edge_px": 1024,
         "min_confidence": 0.5,    # below this, fail closed to CONFIRM (never click blind)
         # Slice 17 — pre-click point verification. Vision can label a control
         # correctly but POINT at its neighbour (measured slice 16), so the CONFIRM

@@ -58,6 +58,7 @@ import re
 
 from jarvis import config
 from jarvis.core.settings_store import settings
+from jarvis.primitives import screen
 
 _VISION_SCHEMA = {
     "type": "object",
@@ -478,3 +479,124 @@ def locate_and_classify(description: str, window_hint: str | None = None) -> dic
     tier = _tier_for(parsed["label"], parsed["risk"], parsed["confidence"], min_conf)
     return {"ok": True, "point": point, "label": parsed["label"], "tier": tier,
             "window_title": title, "confidence": parsed["confidence"]}
+
+
+# ==================== slice 47: screen-aware Q&A ====================
+# "What am I looking at?" / "summarise this" / "what does this error say?"
+#
+# A different shape from locate_and_classify: FREE PROSE, no response_schema, no
+# coordinate mapping. It answers questions about the screen instead of pointing
+# at controls, so none of the box/tier machinery above applies.
+#
+# WHOLE SCREEN BY DEFAULT (owner's decision). The tempting default — the focused
+# window — is wrong here: typing "what am I looking at?" into the HUD makes the
+# BROWSER the focused window, so it would answer "you're looking at the JARVIS
+# interface". Verified while planning: nothing in input.py/windows.py excludes
+# the HUD from _foreground_window(). capture_screen() also does NOT set_focus(),
+# so asking a question never rearranges the user's desktop — unlike _grab_window.
+#
+# STAGE 0 MEASURED (scratchpad/probe_screen_qa.py — re-run it, don't trust this):
+# a synthetic 1920x1080 desktop with 4 planted facts, checked by exact string:
+#     max_edge 1024 -> 4/4 correct, 1.6s     (heading 30px, body 15px,
+#     max_edge 1536 -> 4/4 correct, 1.3s      small print 12px, dialog text)
+#     max_edge 1920 -> 4/4 correct, 1.4s
+# 1024 already reads 12px small print (~6px after the 0.53 downscale), so it is
+# the default: cheapest, and measured sufficient.
+#
+# PRIVACY: this sends the WHOLE screen — every visible window, notification and
+# message — to Gemini. That is a genuinely bigger surface than the click path's
+# single window. It rides the existing `vision.enabled` switch rather than a new
+# flag nobody knows about, and the README says so plainly.
+#
+# Fails closed everywhere and never raises: any capture/model/parse problem
+# returns {"ok": False, "reason": ...}, exactly like locate_and_classify.
+
+_QA_PROMPT = (
+    "You are looking at a screenshot of the user's computer screen.\n"
+    "Answer their question about it directly and concisely — 1-3 sentences, "
+    "plain spoken prose, no markdown, no bullet points, no preamble.\n"
+    "Report ONLY what is actually visible. If the screen does not show what "
+    "they asked about, say so plainly instead of guessing or inventing detail.\n"
+    "If they ask you to read text, quote it exactly.\n\n"
+    "Their question: {question}"
+)
+
+
+def _call_gemini_qa(png_bytes: bytes, question: str) -> str | None:
+    """Free-text multimodal call. Returns the answer text, or None on any
+    failure (missing key, network, SDK error).
+
+    Sibling of _call_gemini, deliberately NOT a parameter on it: that one is
+    locked to a response_schema for structured locate/verify results, and this
+    one must return prose. Shares the cached client and key handling.
+
+    Note: this is a THIRD Gemini call site. Slice 45's test pacer wraps
+    google.genai.models.Models.generate_content, so it is paced automatically.
+    Slice 44's model fallback chain covers brain.think() ONLY, so a 429 here is
+    still a hard failure — a known, unchanged gap, not one this slice widens.
+    """
+    global _cached_client, _cached_key
+    key = config.get_api_key("gemini")
+    if not key:
+        return None
+    try:
+        from google import genai
+        from google.genai import types
+        if _cached_client is None or _cached_key != key:
+            _cached_client = genai.Client(api_key=key, http_options={"timeout": 30_000})
+            _cached_key = key
+        model = settings.get("brain.models.gemini", "gemini-3.1-flash-lite")
+        resp = _cached_client.models.generate_content(
+            model=model,
+            contents=[
+                types.Part.from_bytes(data=png_bytes, mime_type="image/png"),
+                types.Part.from_text(text=_QA_PROMPT.format(question=question)),
+            ],
+        )
+        return resp.text
+    except Exception:
+        return None
+
+
+def answer_about_screen(question: str, window_hint: str | None = None) -> dict:
+    """Answer `question` about what is currently on screen.
+
+    Returns {"ok": True, "answer": str, "source": str} or
+    {"ok": False, "reason": str}. Never raises.
+
+    window_hint=None -> the WHOLE screen (default; no focus steal).
+    window_hint given -> just that window (reuses _grab_window, which focuses it
+    first, exactly as the click path already does).
+    """
+    if not settings.get("vision.enabled", True):
+        return {"ok": False, "reason": "vision is disabled in settings"}
+
+    try:
+        if window_hint:
+            grabbed = _grab_window(window_hint)
+            if grabbed is None:
+                return {"ok": False,
+                        "reason": f"couldn't capture the window {window_hint!r}"}
+            img, _offset, _rect, title = grabbed
+            source = f"window: {title}"
+        else:
+            img = screen.capture_screen()
+            source = "the whole screen"
+        if img is None or getattr(img, "size", 0) == 0:
+            return {"ok": False, "reason": "couldn't capture the screen"}
+    except Exception:
+        return {"ok": False, "reason": "couldn't capture the screen"}
+
+    try:
+        max_edge = int(settings.get("vision.qa_max_edge_px", 1024))
+        png, _scale = _downscale_and_encode(img, max_edge)
+    except Exception:
+        return {"ok": False, "reason": "couldn't encode the screenshot"}
+
+    answer = _call_gemini_qa(png, question)
+    if answer is None:
+        return {"ok": False, "reason": "the vision model was unavailable"}
+    answer = answer.strip()
+    if not answer:
+        return {"ok": False, "reason": "the vision model returned nothing"}
+    return {"ok": True, "answer": answer, "source": source}
