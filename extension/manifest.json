@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "JARVIS browser bridge",
-  "version": "1.1.0",
+  "version": "1.4.1",
   "description": "Lets JARVIS see and navigate the tab you're actually looking at, in your own Chrome, with your own logins.",
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "permissions": [
     "tabs",

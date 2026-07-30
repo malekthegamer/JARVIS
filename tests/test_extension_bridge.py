@@ -289,9 +289,11 @@ def ext_mode(monkeypatch):
 
 
 def test_extension_mode_withholds_committal_verbs_from_schema(ext_mode):
-    """Slice 41 is READ-ONLY. click/fill/key must not even be advertised, using
-    the proven slice-25/35 withholding path rather than a new mechanism."""
+    """CONTRACT CHANGED IN SLICE 43 (deliberate): extension mode can now act,
+    but only behind web.allow_actions — the same second switch real mode uses,
+    default OFF. With it off, click/fill/key must not even be advertised."""
     from jarvis.brain import JarvisBrain
+    settings.set("web.allow_actions", False, persist=False)
     names = [t["name"] for t in JarvisBrain().tools()]
     assert "browse_navigate" in names and "read_page" in names
     for verb in ("browse_click", "browse_fill", "browse_key"):
@@ -300,7 +302,9 @@ def test_extension_mode_withholds_committal_verbs_from_schema(ext_mode):
 
 def test_extension_mode_refuses_committal_verbs_at_execute(ext_mode):
     """Withholding from the schema is not a boundary on its own (slice 35):
-    a direct execute() by name must be refused too."""
+    a direct execute() by name must be refused too. Still true in slice 43 —
+    with allow_actions OFF the verbs are blocked, not merely hidden."""
+    settings.set("web.allow_actions", False, persist=False)
     assert web.classify_web_click({"target": "Buy"})["tier"] == "blocked"
     assert web.classify_web_fill({"field": "q", "text": "x"})["tier"] == "blocked"
     assert web.classify_web_key({"key": "enter"})["tier"] == "blocked"
@@ -608,3 +612,16 @@ def test_telemetry_carries_the_browser_mode():
     from jarvis import server
     ev = server._sample_telemetry()
     assert ev.get("browser_mode") in ("isolated", "real", "extension")
+
+
+def test_extension_mode_ADVERTISES_committal_verbs_once_acting_is_allowed(ext_mode):
+    """The other half of the slice-43 contract: turning the second switch on
+    must actually grant the capability, or the switch is decorative."""
+    from jarvis.brain import JarvisBrain
+    settings.set("web.allow_actions", True, persist=False)
+    try:
+        names = [t["name"] for t in JarvisBrain().tools()]
+        for verb in ("browse_click", "browse_fill", "browse_key"):
+            assert verb in names, f"{verb} must be available once acting is on"
+    finally:
+        settings.set("web.allow_actions", False, persist=False)

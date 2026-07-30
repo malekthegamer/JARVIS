@@ -627,6 +627,17 @@ _REAL_MODE_READONLY = ("Real-browser mode is navigate + read only — turn on "
                        "\"let JARVIS click & type\" in settings to allow acting.")
 
 
+def _on_user_accounts() -> bool:
+    """True when the browser being driven is signed into the USER'S accounts —
+    real mode OR extension mode.
+
+    This exists because slice 38 gated Enter behind `_real_mode_setting()`, and
+    adding extension mode silently answered "no" there: Enter submitted forms on
+    the user's real logins with NO confirmation, reopening the exact hole slice
+    38 closed. The next mode added must not be able to do that again."""
+    return _real_mode_setting() or _extension_mode()
+
+
 def _actions_blocked() -> bool:
     """Committal browser verbs refuse.
 
@@ -637,14 +648,18 @@ def _actions_blocked() -> bool:
     from the schema AND blocked at execute (the slice-35 lesson: withholding
     alone is not a boundary)."""
     if _extension_mode():
-        return True
+        # Slice 43: extension mode now ACTS, behind the same second switch real
+        # mode uses. Default OFF — the standing rule for high-risk capability is
+        # opt-in, layered, default-off, and this one clicks on accounts the user
+        # is signed into.
+        return not settings.get("web.allow_actions", False)
     return _real_mode_setting() and not settings.get("web.allow_actions", False)
 
 
 def _site_host() -> str:
     """The current page's host, for informed-consent CONFIRM text (real mode)."""
     try:
-        h = urlparse(session.current_url or "").hostname or ""
+        h = urlparse(_active_session().current_url or "").hostname or ""
         return f" on {h}" if h else ""
     except Exception:
         return ""
@@ -662,7 +677,7 @@ def _cross_host(target_url: str) -> str | None:
         if (parsed.scheme or "").lower() not in ("http", "https"):
             return None
         target_host = parsed.hostname or ""
-        cur = session.current_url
+        cur = _active_session().current_url
         cur_host = (urlparse(cur).hostname if cur else None)
         if cur_host and target_host and target_host != cur_host:
             return target_host
@@ -688,7 +703,7 @@ def _submit_payload() -> str:
     honest message — never to silence, and never to the raw value of a
     password field."""
     try:
-        info = session.focused_field()
+        info = _active_session().focused_field()
     except Exception:
         info = None
     if not info or not info.get("found"):
@@ -716,7 +731,7 @@ def classify_web_key(args: dict) -> dict:
     if _actions_blocked():
         return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
     raw = str(args.get("key", "") or "").strip().lower()
-    if raw not in _COMMITTAL_WEB_KEYS or not _real_mode_setting():
+    if raw not in _COMMITTAL_WEB_KEYS or not _on_user_accounts():
         return {"tier": "auto", "description": f"Press {str(args.get('key',''))}"}
     return {"tier": "confirm",
             "description": f"Press Enter to submit{_site_host()}",
@@ -730,11 +745,11 @@ def classify_web_click(args: dict) -> dict:
     verb is BLOCKED until acting is allowed (slice 25). Never raises."""
     if _actions_blocked():
         return {"tier": "blocked", "description": f"BLOCKED: {_REAL_MODE_READONLY}"}
-    real = _real_mode_setting()
+    real = _on_user_accounts()
     where = _site_host() if real else " on the page"
     target = str(args.get("target", "") or "").strip()
     try:
-        m = session.find_clickable(target)
+        m = _active_session().find_clickable(target)
     except BrowserUnavailable:
         return {"tier": "auto", "description": f"Click '{target}' (browser not started)"}
     except Exception:
@@ -767,7 +782,7 @@ def classify_web_click(args: dict) -> dict:
 
 def click_element(target: str) -> dict:
     try:
-        return session.click(str(target or "").strip())
+        return _active_session().click(str(target or "").strip())
     except BrowserUnavailable as exc:
         return {"ok": False, "message": str(exc)}
     except Exception as exc:
@@ -776,7 +791,7 @@ def click_element(target: str) -> dict:
 
 def press_browser_key(key: str) -> dict:
     try:
-        return session.press_key(str(key or "").strip())
+        return _active_session().press_key(str(key or "").strip())
     except BrowserUnavailable as exc:
         return {"ok": False, "message": str(exc)}
     except Exception as exc:
@@ -785,7 +800,7 @@ def press_browser_key(key: str) -> dict:
 
 def fill_field(field: str, text: str) -> dict:
     try:
-        return session.fill(str(field or "").strip(), str(text or ""))
+        return _active_session().fill(str(field or "").strip(), str(text or ""))
     except BrowserUnavailable as exc:
         return {"ok": False, "message": str(exc)}
     except Exception as exc:
@@ -826,8 +841,15 @@ class ExtensionSession:
 
     def __init__(self) -> None:
         self.current_url = None
+        # The tab JARVIS is working in, as reported by the extension. Threaded
+        # through EVERY command so "which tab" is never re-derived: doing that
+        # per-command was measurably nondeterministic (it depends on Chrome
+        # holding OS focus) and let classification and the action disagree.
+        self._tab_id = None
 
     def _call(self, cmd, **payload):
+        if self._tab_id is not None:
+            payload.setdefault("tab_id", self._tab_id)
         try:
             reply = extbridge.bridge.send(cmd, payload or None)
         except extbridge.ExtensionUnavailable as exc:
@@ -835,6 +857,8 @@ class ExtensionSession:
         if not reply.get("ok"):
             raise BrowserUnavailable(
                 reply.get("message") or "The browser extension refused that.")
+        if reply.get("tab_id") is not None:
+            self._tab_id = reply["tab_id"]
         return reply
 
     def running(self) -> bool:
@@ -852,10 +876,82 @@ class ExtensionSession:
         return {"url": out.get("url"), "title": out.get("title") or "",
                 "text": out.get("text") or "", "elements": []}
 
+    # ---- slice 43: acting. The TIER for every one of these is decided by the
+    # classifiers in this module from the metadata below; nothing in the
+    # extension judges safety. That split is why the committal CONFIRM, the
+    # cross-host gate and the slice-38 payload box all work unchanged.
+
+    def find_clickable(self, target: str) -> dict:
+        """Metadata of the element a click would resolve to (for TIERING).
+
+        Contract identical to BrowserSession.find_clickable, because
+        classify_web_click computes the gate from it. Stage 0 measured 7/7
+        element AND 7/7 tier agreement against the Playwright resolver on the
+        fixture set before this was wired. Never raises: an unreachable browser
+        reads as 'not found', which classify treats as the fail-closed case."""
+        try:
+            r = self._call("find_clickable", target=str(target or ""))
+        except BrowserUnavailable:
+            return {"found": False, "name": "", "kind": "", "href": ""}
+        return {"found": bool(r.get("found")), "name": r.get("name") or "",
+                "kind": r.get("kind") or "", "href": r.get("href") or ""}
+
+    def click(self, target: str) -> dict:
+        out = self._call("click", target=str(target or ""))
+        before, after = out.get("before") or "", out.get("url") or ""
+        # ORDER MATTERS: _cross_host compares against the session's CURRENT url,
+        # so the check has to happen while that is still the PRE-click page.
+        # Assigning current_url first made _cross_host compare `after` to itself
+        # and the JS-jump flag could never fire — caught by
+        # test_js_navigation_is_flagged_after_the_click.
+        jumped_host = _cross_host(after) if after else None
+        self.current_url = after or self.current_url
+        msg = f"clicked {out.get('name') or target!r}."
+        if after and before and after != before:
+            msg += f" Page went to {after}."
+            # Slice 27: a JS jump has no inspectable href, so it cannot be
+            # pre-gated — it is FLAGGED after the fact instead of pretended
+            # about.
+            host = jumped_host
+            if host and not out.get("href"):
+                msg += (f" NOTE: that click left the site via JavaScript and "
+                        f"landed on {host} — it could not be checked before "
+                        f"clicking.")
+        else:
+            msg += " (no navigation)"
+        return {"ok": True, "message": msg, "url": after}
+
+    def fill(self, field: str, value: str) -> dict:
+        out = self._call("fill", field=str(field or ""), text=str(value or ""))
+        readback = out.get("readback") or ""
+        # VERIFY, never assume: a fill that silently no-ops is the exact failure
+        # Playwright's fill() had before contenteditable was special-cased.
+        if str(value or "").strip() and not readback.strip():
+            return {"ok": False,
+                    "message": f"typed into {field!r} but the field read back "
+                               f"EMPTY — the text did not land."}
+        return {"ok": True,
+                "message": f"filled {field!r} — readback {readback[:120]!r}."}
+
+    def press_key(self, key: str) -> dict:
+        out = self._call("key", key=str(key or ""))
+        self.current_url = out.get("url") or self.current_url
+        extra = " Form submitted." if out.get("submitted") else ""
+        return {"ok": True, "message": f"pressed {key}.{extra}"}
+
+    def focused_field(self) -> dict:
+        """For the slice-38 payload box: what the field about to be submitted
+        actually contains."""
+        r = self._call("focused")
+        return {"found": bool(r.get("found")),
+                "isPassword": bool(r.get("isPassword")),
+                "value": r.get("value") or ""}
+
     def close(self) -> None:
         """A no-op BY DESIGN: this is the user's OWN browser. JARVIS never
         closes it - the same rule slice 39 established for real mode."""
         self.current_url = None
+        self._tab_id = None
 
 
 ext_session = ExtensionSession()

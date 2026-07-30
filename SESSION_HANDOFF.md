@@ -236,6 +236,64 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 43 — JARVIS ACTS in the user's real Chrome (click / type / Enter)
+- **The goal reached:** extension mode could look but not touch. It can now
+  click, fill and press Enter in the owner's everyday browser, with every gate
+  intact — committal CONFIRM naming the real site, cross-host gated pre-click
+  via `href`, Enter carrying the field payload (slice 38), nameless elements
+  failing closed, and `web.allow_actions` as a real second opt-in (default OFF).
+- **Stage 0 measured the resolver BEFORE anything could click.**
+  `lib.js:matchClickable` is a port of `_match_clickable`, and tiers are computed
+  from the resolved element's NAME — so a mis-resolve can compute the WRONG TIER,
+  not merely click the wrong thing. Scored against the proven Playwright
+  resolver on the same pages: **7/7 element agreement, 7/7 TIER agreement**,
+  including cross-host and the nameless fail-closed case.
+  (`tests/harness_resolver_eval.py`, re-runnable.)
+- **My shadow-DOM prediction was WRONG and the measurement said so:** I expected
+  a naive `querySelectorAll` to find nothing on YouTube (Polymer). Measured **0
+  open shadow hosts**, 79 clickables, identical to a piercing walk. Piercing was
+  kept anyway (cheap, correct in principle) but the loudest risk did not exist.
+- **`extension/lib.js` exists for two reasons:** Playwright cannot reach an MV3
+  service worker, so logic that lives only in `background.js` is untestable —
+  which is exactly how the pinned-tab bug shipped. And the resolver must be ONE
+  copy, or the Python tier and the page's element silently diverge. It is a
+  **classic script exposing a global**, not an ES module, because the same file
+  must be importable by the worker AND injectable into pages; MV3's CSP forbids
+  `new Function`, so it cannot be rebuilt from source there.
+- **THREE real bugs the new tests caught:**
+  1. **`classify_web_key` returned AUTO in extension mode** — Enter submitted
+     forms on the user's logged-in accounts **with no confirmation**. Slice 38
+     gated it behind `_real_mode_setting()`, and adding a third mode silently
+     answered "no", reopening the exact hole slice 38 closed. Now
+     `_on_user_accounts()` (real OR extension), so the next mode cannot repeat it.
+  2. **The committal confirm did not name the site** — `_site_host()` read the
+     Playwright singleton's `current_url`, so the modal said just `Click 'Delete
+     account'`. Approving a destructive click without being told WHERE defeats
+     informed consent. `_cross_host` had the same defect.
+  3. **`activeTab()` returned nothing whenever Chrome lacked OS focus** — i.e.
+     normally, since the user is typing in the HUD. Every command failed with
+     "no web page to click in".
+- **The flakiness, and the lesson.** The E2E suite was nondeterministic: the same
+  file gave `1 failed / 1 failed / 9 failed`. Cause: tab identity was re-derived
+  on EVERY command from two unstable sources (Chrome holding focus; whether
+  `storage.session` survived a worker restart) — which also let classification
+  and the action resolve DIFFERENT tabs, making a computed tier meaningless.
+  Fixed by threading an explicit **`tab_id`** from `navigate` through every
+  later command: `1 / 1 / 1`, then `20 / 20 / 20` after the split below.
+  **I made three "fixes" while reacting to counts that were mostly noise** — a
+  90-second stability check first would have prevented all of it.
+- **Deterministic tests vs live proof, split deliberately.** Two checks depend on
+  real navigation completing and were flaky as pytest; a flaky safety test is
+  worse than none because it teaches you to ignore red. Their logic is now
+  deterministic unit tests, and the live evidence is
+  `tests/harness_extension_actions.py` — **7/7 PASS**, the same split as
+  `harness_wake` / `harness_realbrowser_*`.
+- **Automated what used to be manual:** `tests/test_extension_browser.py`
+  launches Chrome with the extension itself (the unpacked id is derived from its
+  PATH, so the repo copy gets the id the settings already allow). The owner's
+  three reported tab bugs are now E2E tests instead of hand-checks. What it still
+  cannot cover: their LOGINS (fresh profile).
+
 ### Slice 42 — browser control made correct and trustworthy (+ v1.0.7 fixes)
 - **Three user-reported bugs, all in the extension, all now named tests:**
   1. *"it opened YouTube in my PINNED tab"* — `isUsable` checked http(s) and

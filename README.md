@@ -139,8 +139,15 @@ extension instead:
    Only that exact extension may connect; an empty id means **none can**.
 3. Set `web.profile_mode` to `extension`.
 
-**Currently read-only** — JARVIS can open pages and read the tab you're on, but
-cannot click or type there. Worth knowing before you enable it:
+It opens each new site in a **new tab** in the window you're using — it never
+replaces a tab you were on, and never touches pinned tabs or the JARVIS HUD tab.
+
+To let it **click and type** in your browser too, turn on `web.allow_actions`
+(off by default). Committal actions — post, buy, send, delete, submit — still
+stop and ask, naming the real site; a link that leaves the current site asks
+first; and pressing Enter shows you exactly what's about to be submitted.
+
+Worth knowing before you enable it:
 
 - The extension requests access to **all sites**; that is what lets it read the
   page you're looking at.
