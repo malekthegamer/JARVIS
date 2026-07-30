@@ -245,6 +245,50 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 46 — test the way a USER actually starts JARVIS
+- **The gap it closed:** all five post-release bugs were one class — *green in my
+  dev environment, broken on the user's machine* — and the entry point had **34
+  tests that never ran it** (`test_installer.py` reads `install.bat` as text,
+  `test_tray.py` is pure logic behind `monkeypatch`, `test_smoke.py` is
+  import-level). Every one of them passes on a machine where the real launch is
+  dead.
+- **What it does now:** `tests/test_entrypoint_smoke.py` launches the *actual*
+  user path — `.venv\Scripts\pythonw.exe tray_start.pyw` — as a subprocess and
+  proves the HUD serves: `GET /` → 200 with a HUD body, `/api/state` → valid
+  JSON, no startup-error artifact, no orphan process. **Under `pythonw`
+  specifically**, because "pythonw has no stdout" is what made the v1.0.1 crash
+  silent; the same code under `python.exe` cannot catch it.
+- **Stage 0 measured before any test existed:** cold start **11.6s** to first
+  HTTP 200, killing the process tree left **zero** orphan pythonw, and no dialog
+  on a clean boot ⇒ the full-fidelity tray path is safe to automate (the plan's
+  fallback to `run.py --no-open` was not needed).
+- **PROVEN ABLE TO FAIL** (a smoke test that can't go red is decoration): with
+  `tray_start.pyw`'s import deliberately broken, the boot test went red in
+  **6.11s** with *"the launcher EXITED with code 1 … under pythonw a crash is
+  silent — this is the v1.0.1 class"*, then green again once restored. The early
+  exit-code check is what turns an opaque 90s timeout into a 6s diagnosis.
+- **Venv fidelity, not dev fidelity:** asserts the venv is Python **3.12** (3.13
+  removed `audioop`, PEP 594, which killed voice for a real user) and that
+  `speech_recognition` / `pystray` / `win32com.client` / `openwakeword` /
+  `uvicorn` import **in that interpreter**, plus that the openwakeword
+  `hey_jarvis*.onnx` model file is really on disk (v1.0.3: the package ships
+  without models).
+- **Two of my own test-design bugs, caught by the tests themselves:**
+  `test_the_launch_left_no_orphan_process` was **passing vacuously** — it read
+  `booted.orphans` before the fixture's teardown populated it, so it asserted
+  against an empty set — and the live module fixture held port 8000 against the
+  mid-startup test. Both came from killing in teardown; the fixture now runs the
+  **entire lifecycle in setup** and hands the tests a recording.
+- **⚠ Ordering dependency, now explicit rather than accidental:**
+  `test_extension_browser.py:77` starts uvicorn in a **daemon thread it never
+  shuts down**, so it owns port 8000 for the rest of the pytest process.
+  Alphabetical collection puts `test_entrypoint_smoke.py` first, which is the
+  only reason the full suite works. Running them in the other order fails — and
+  the port guard now **names the holder** (`psutil`) and says which of the two
+  causes it is: the owner's JARVIS running, or a leaked test server. Fixing the
+  leak properly is a separate slice (`uvicorn.run()` in a thread cannot be
+  cleanly stopped).
+
 ### Slice 45 — quota stops forging test failures (the first 0-failure gate)
 - **The problem, in one number:** for seven slices every gate carried 6-9 failures
   that were never bugs. Slice 44 attacked it from `brain.py` and the measurement

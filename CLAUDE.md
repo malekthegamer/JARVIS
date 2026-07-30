@@ -110,6 +110,13 @@ python -m pytest tests/ -q
   single probe call succeeding is a token trickle, NOT headroom — burst-probe
   (5 rapid calls) before believing quota is back. The deterministic core is
   unaffected and can be re-run freely.
+- **QUIT the running JARVIS before a full suite.** Two files start a REAL server
+  and must own port 8000: `test_entrypoint_smoke.py` (slice 46 — launches the
+  actual `pythonw tray_start.pyw` user path) and `test_extension_browser.py`.
+  With JARVIS running you get ~18 errors, each naming the holder and the fix.
+  Note the implicit ordering: `test_extension_browser.py` leaks its uvicorn
+  daemon thread for the rest of the process, so `test_entrypoint_smoke.py` only
+  works because alphabetical collection runs it first.
 - **Announce full-suite runs and get an idle desktop (~8 min)** — the live-UIA
   tests steal focus (the user may be gaming; busy desktops also flake those
   tests). Mechanical backstop: conftest refuses to start a desktop-driving run

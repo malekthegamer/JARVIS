@@ -29,6 +29,21 @@ dry-run chain proving no Notepad appeared).
 
 ## 1. Regression signal — test suite (895 tests as of slice 45)
 
+### Slice 46 — the entry point is finally tested by RUNNING it
+- **`tests/test_entrypoint_smoke.py` (14 tests)** launches
+  `.venv\Scripts\pythonw.exe tray_start.pyw` for real and asserts the HUD serves.
+  Before this, 34 entry-point tests existed and **none executed the launch** —
+  which is why five post-release bugs reached users.
+- **Measured:** cold start **11.6s** to first HTTP 200; process tree kill leaves
+  **zero** orphans; no dialog on a clean boot.
+- **Deliberate-break proof (a DoD clause, not a nicety):** breaking
+  `tray_start.pyw`'s import made the boot test go red in **6.11s** naming the
+  exit code, then green after restore. Re-run that proof if you ever doubt the
+  file can fail.
+- **Requires port 8000.** Quit JARVIS first. `test_entrypoint_smoke.py` must run
+  BEFORE `test_extension_browser.py` (which leaks a uvicorn daemon thread for the
+  rest of the process); alphabetical collection guarantees this today.
+
 ### Slice 45 — the first 0-failure gate (quota pacing)
 - **Non-desktop gate: `677 passed, 0 failed, 0 skipped`.** First clean gate in the
   project's history. Nothing was loosened, skipped or deleted to get it.

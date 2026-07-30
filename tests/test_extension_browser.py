@@ -24,7 +24,6 @@ the pure logic was extracted there.
 from __future__ import annotations
 
 import shutil
-import socket
 import tempfile
 import threading
 import time
@@ -41,9 +40,7 @@ EXT_DIR = ROOT / "extension"
 LIB_JS = EXT_DIR / "lib.js"
 
 
-def _port_free(port: int) -> bool:
-    with socket.socket() as s:
-        return s.connect_ex(("127.0.0.1", port)) != 0
+from tests._ports import port_free as _port_free   # shared with test_entrypoint_smoke
 
 
 @pytest.fixture(scope="module")
