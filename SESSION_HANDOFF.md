@@ -33,13 +33,15 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 876 collected** (slice 44). Latest measurement is the **non-desktop gate**
-(the desktop-driving tests deselected, so it can run without an idle machine):
-**651 passed / 7 failed / 0 skipped**, and all 7 traced to free-tier Gemini quota —
-each failure's captured stdout shows the fallback chain exhausted (see §2 slice 44
-for the per-test trace). The last **full** run (desktop included) was **748 passed /
-6 failed / 0 skipped, all 6 live-brain/live-UIA and each re-verified green
-individually**
+**Tests: 895 collected** (slice 45). The **non-desktop gate** (desktop-driving
+tests deselected, so it runs without an idle machine) is now **677 passed / 0
+failed / 0 skipped** — the first clean gate in the project's history, because
+slice 45 paces live Gemini calls so quota stops forging failures (it costs ~175s
+of deliberate sleeping; the price is printed at the end of every run). **The full
+suite including desktop tests has NOT been re-run since pacing landed** — that
+needs an idle desktop and now takes longer. Before slice 45 the best full run was
+**748 passed / 6 failed / 0 skipped, all 6 live-brain/live-UIA and each re-verified
+green individually**
  (a clean single 756/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
@@ -242,6 +244,56 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 45 — quota stops forging test failures (the first 0-failure gate)
+- **The problem, in one number:** for seven slices every gate carried 6-9 failures
+  that were never bugs. Slice 44 attacked it from `brain.py` and the measurement
+  said no (6 → 7). Slice 44's own conclusion — *this is test pacing, not brain
+  resilience* — is what this slice acted on, and it worked.
+- **Result, same suite, nothing loosened or skipped:**
+
+  | | before | after |
+  |---|---|---|
+  | failures | **6** | **0** |
+  | 429s in the run | 9 fallback calls | **0** |
+  | wall-clock | 1:56 | 5:10 |
+  | slept on purpose | 0s | **176.6s** |
+
+  `677 passed, 0 failed, 0 skipped` — the first clean non-desktop gate in the
+  project's history. **The cost is real and is the point:** the gate is ~2.7x
+  slower because it sleeps to stay legal. That price is printed at the end of
+  every run so it can never be hidden.
+- **How:** `tests/_pacer.py` wraps the ONE method all three Gemini call sites go
+  through (`google.genai.models.Models.generate_content` — brain
+  `gemini_provider.py:84` plus vision `vision.py:232` and `:335`), and paces each
+  model with a sliding 60s window at 12 calls/min. Per-model, because the fallback
+  has a separate bucket. Deterministic tests make no API calls, so they sleep 0s.
+- **Stage 0 measured the premise and could have cancelled the slice:** 32 primary
+  calls in 116s = **16.5/min against a measured ~15/min cap.** Had it come in under
+  12/min the failures would have been daily-bucket exhaustion, which pacing cannot
+  fix, and the slice would have stopped. **Correction worth keeping:** that 41-call
+  figure was an UNDERCOUNT — the leak below meant the last four live files weren't
+  counted. The conclusion survives (the true rate was *higher*), but the number was
+  measured with a broken instrument.
+- **⚠ The bug that nearly shipped a fake win.** The first paced gate read 6 → 1
+  failures. It was partly an illusion: `tests/test_quota_pacer.py` calls
+  `uninstall()`, and it sorts *before* `search_live`/`undo_live`/`vision`/
+  `web_live` — so those four ran **unpaced and uncounted** while the summary looked
+  great. The tell was one inconsistent line: a `gemini-2.5-flash` fallback in the
+  log that the counter said never happened. Chasing that discrepancy is the only
+  reason this slice isn't a pacer that silently dies a third of the way through
+  every run. Fixed with `rearm()` + a `pytest_runtest_teardown` backstop that
+  re-arms and **names the culprit module**, scoped so it doesn't cry wolf on the
+  pacer's own tests.
+- **THIRD state-leak-between-tests bug in three slices** (43 browser settings, 44
+  `brain.models.gemini`, 45 the SDK patch). That is a pattern in how these tests
+  are written, not three coincidences: anything installed process-wide needs a
+  restoring fixture written *at the same time as* the install.
+- **Honest limits:** pacing handles per-minute limits only — the **daily** cap is
+  untouched, so "never run two full live suites back-to-back" still stands. It is
+  process-local (no xdist coordination; xdist isn't used). And it fixes the
+  *signal*, not the product: a user on a free key still meets the real limit, which
+  is what slice 44's chain is for.
 
 ### Slice 44 — brain resilience: a model-level fallback chain (DoD clause 4 NOT met)
 - **Built:** a transient brain failure (`rate_limit` / `quota_exceeded` /

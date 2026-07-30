@@ -62,6 +62,59 @@ def pytest_collection_finish(session):
             f"is free.", returncode=2)
 
 
+def pytest_sessionstart(session):
+    """Slice 45: install the Gemini call pacer for the whole session.
+
+    Free-tier RPM limits produced 6-9 failures in EVERY gate run for seven
+    slices — failures that were never bugs, which is how a real one gets
+    dismissed as "just quota". Slice 44 proved a model fallback chain cannot fix
+    it (the suite bursts past both models' buckets); pacing the calls can.
+
+    Installed here rather than as a fixture because it patches one shared SDK
+    method for the entire process, and because a session-wide window is exactly
+    what a per-minute quota measures. Deterministic tests make no API calls, so
+    they never sleep.
+    """
+    from tests import _pacer
+    session.config._jarvis_pacer = _pacer.install()
+
+
+def pytest_runtest_teardown(item, nextitem):
+    """Backstop: no test may leave the rest of the session unpaced.
+
+    Not hypothetical — tests/test_quota_pacer.py did exactly this once, and
+    because it sorts before search_live/undo_live/vision/web_live, those ran
+    unpaced and uncounted while the summary still looked plausible. That is the
+    quiet failure mode this whole slice exists to prevent, so it gets a
+    mechanical guard rather than a promise. Counters are preserved on re-arm.
+    """
+    from tests import _pacer
+    pacer = getattr(item.config, "_jarvis_pacer", None)
+    if pacer is None or not _pacer.rearm(pacer):
+        return
+    # test_quota_pacer.py installs/uninstalls the wrapper as its subject matter,
+    # and this hook can run before its restoring fixture — so a re-arm there is
+    # expected ordering, not a leak. Only count the ones worth chasing, or the
+    # warning becomes noise and stops being read.
+    module = getattr(getattr(item, "module", None), "__name__", "")
+    if not module.endswith("test_quota_pacer"):
+        item.config._jarvis_pacer_rearms = \
+            getattr(item.config, "_jarvis_pacer_rearms", 0) + 1
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """Report the COST beside the win — never hide what pacing charged us."""
+    pacer = getattr(config, "_jarvis_pacer", None)
+    if pacer is not None:
+        terminalreporter.write_line("")
+        terminalreporter.write_line(pacer.report())
+        rearms = getattr(config, "_jarvis_pacer_rearms", 0)
+        if rearms:
+            terminalreporter.write_line(
+                f"  NOTE: pacing was re-armed {rearms}x — a test tore the "
+                f"wrapper off. Find it; the guard should not be load-bearing.")
+
+
 @pytest.fixture(autouse=True)
 def _isolated_audit_log(tmp_path, monkeypatch):
     """Slice 18: point the process-wide audit log at a per-test temp file.

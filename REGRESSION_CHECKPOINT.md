@@ -27,7 +27,32 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (876 tests as of slice 44)
+## 1. Regression signal — test suite (895 tests as of slice 45)
+
+### Slice 45 — the first 0-failure gate (quota pacing)
+- **Non-desktop gate: `677 passed, 0 failed, 0 skipped`.** First clean gate in the
+  project's history. Nothing was loosened, skipped or deleted to get it.
+
+  | | before | after |
+  |---|---|---|
+  | failures | 6 | **0** |
+  | 429s in the run | 9 fallback calls | **0** |
+  | wall-clock | 1:56 | 5:10 |
+  | slept on purpose | 0s | 176.6s |
+
+- **The cost is the headline, not a footnote:** the gate is ~2.7x slower because
+  it deliberately sleeps 176.6s to stay under the ~15 RPM cap. Printed at the end
+  of every run (`quota pacer: N calls … slept Xs`). **Do not "fix" the slow gate
+  by raising `JARVIS_TEST_RPM_BUDGET`** — 16.5 calls/min is precisely what caused
+  6-9 false failures per run for seven slices.
+- **Read the "pacing was re-armed Nx" note if it appears.** It means a test tore
+  the wrapper off the SDK and later tests ran unprotected. The first paced gate
+  read 6 → 1 failures and was PARTLY AN ILLUSION for exactly this reason
+  (`tests/test_quota_pacer.py` sorts before the four remaining live files). The
+  tell was a `gemini-2.5-flash` fallback in the log that the counter said never
+  happened — one inconsistent line between two numbers.
+- **Still true after this slice:** pacing fixes per-minute limits only. The DAILY
+  cap is untouched, so two full live suites back-to-back still fail in clusters.
 
 ### Slice 44 — brain fallback chain: the metric REFUSED the claim
 - **What was built:** transient brain failures (`rate_limit`/`quota_exceeded`/

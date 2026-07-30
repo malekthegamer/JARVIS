@@ -68,8 +68,8 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 606 as of slice 25; it only
-  grows.)
+  failure with better manners. (Baseline N = 606 as of slice 25; **895 collected
+  as of slice 45**; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
   Chrome, drives a headless Playwright Chromium against local fixtures, sends
   live-test email to `TEST_SELF_EMAIL`, briefly toggles real Do Not Disturb
@@ -89,12 +89,27 @@ python -m pytest tests/ -q
 - A failing live/model test: re-run it in isolation and read the actual
   assertion. Confirm regression vs. nondeterminism before dismissing it — do not
   call something flaky without evidence.
+- **Per-minute rate limits are handled now (slice 45) — the DAILY cap is not.**
+  `tests/_pacer.py` wraps the one SDK method every Gemini call goes through
+  (`google.genai.models.Models.generate_content`, covering brain AND both vision
+  paths) and paces each model to 12 calls/min against a measured ~15 RPM cap.
+  This is why a gate now takes ~5 min instead of ~2: it sleeps ~175s on purpose.
+  The cost is printed at the end of every run (`quota pacer: N calls … slept Xs`)
+  — read it; it is the honest price of trustworthy red.
+  - **Do not "fix" a slow gate by raising the budget.** 16.5 calls/min was the
+    measured cause of 6-9 false failures per run for seven slices.
+  - `JARVIS_TEST_NO_PACING=1` disables it (for deliberate-429 work like
+    `tests/harness_brain_chain.py`); `JARVIS_TEST_RPM_BUDGET=N` retunes it.
+  - If the summary says **"pacing was re-armed Nx"**, a test tore the wrapper off
+    the SDK and later tests ran unprotected — find that test. (This happened once,
+    in the pacer's own file, and made a gate look 5 failures better than it was.)
 - **Never run two full live suites back-to-back**: the second exhausts the
   free-tier Gemini DAILY quota (429 RESOURCE_EXHAUSTED; resets midnight
-  Pacific / 07:00 UTC) and live tests fail in clusters. A single probe call
-  succeeding is a token trickle, NOT headroom — burst-probe (5 rapid calls)
-  before believing quota is back. The deterministic core is unaffected and
-  can be re-run freely.
+  Pacific / 07:00 UTC) and live tests fail in clusters. **Pacing does NOT fix
+  this** — it spaces calls within a minute, it cannot create daily headroom. A
+  single probe call succeeding is a token trickle, NOT headroom — burst-probe
+  (5 rapid calls) before believing quota is back. The deterministic core is
+  unaffected and can be re-run freely.
 - **Announce full-suite runs and get an idle desktop (~8 min)** — the live-UIA
   tests steal focus (the user may be gaming; busy desktops also flake those
   tests). Mechanical backstop: conftest refuses to start a desktop-driving run
