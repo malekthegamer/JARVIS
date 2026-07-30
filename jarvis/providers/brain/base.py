@@ -38,8 +38,14 @@ class BrainProvider:
     supports_tools: bool = False
 
     def generate(self, messages: list[dict], system_prompt: str,
-                 tools: list[dict] | None = None) -> BrainResponse:
-        """Run one model turn. Raise ProviderError (never a raw SDK error) on failure."""
+                 tools: list[dict] | None = None,
+                 model: str | None = None) -> BrainResponse:
+        """Run one model turn. Raise ProviderError (never a raw SDK error) on failure.
+
+        `model` (slice 44) names a SPECIFIC model, overriding the provider's
+        configured default. The fallback chain needs this: reading a global
+        setting per call cannot express "now try the next one". Providers that
+        expose only one model may ignore it."""
         raise NotImplementedError
 
     def is_configured(self) -> bool:

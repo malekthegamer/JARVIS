@@ -126,6 +126,22 @@ Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive a
 dedicated real Chrome) and, beneath it, `web.allow_actions` (let it click and
 type on your sites).
 
+### If Gemini rate-limits you
+
+On a free key you may see *"Gemini is rate-limiting us."* JARVIS retries the
+request on a second model before giving up — `brain.fallback_models` in
+`data/settings.json` (default `["gemini-2.5-flash"]`, which has a **separate**
+rate-limit bucket from the primary). When a fallback answers, that is stated
+rather than hidden, because a different model can behave differently.
+
+Honest limits: it retries **only** transient failures — a bad API key still fails
+immediately instead of being masked by a slower answer. And it does not make the
+free tier unlimited: sustained bursts exhaust both models, and a rate limit takes
+roughly **20 seconds** to clear, which is longer than it is reasonable to make you
+wait. Add more models to the list if you have quota for them, but only ones you
+have confirmed can make tool calls — a model that cannot will break multi-step
+commands worse than a clean error.
+
 ### Driving your actual everyday Chrome
 
 `web.profile_mode="extension"` lets JARVIS see and navigate **the browser you

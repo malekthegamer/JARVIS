@@ -204,12 +204,89 @@ UNDO_SCHEMA = {
 }
 
 
+
+# Slice 44 — only these are worth retrying on another model. A bad key or a
+# malformed response is NOT transient: walking the chain there would hide a real
+# configuration or provider bug behind a slower answer, which is strictly worse
+# than failing honestly.
+def _accepts_model_arg(provider) -> bool:
+    """Does this provider's generate() take an explicit model? Older providers
+    and test doubles do not, and passing it would raise TypeError."""
+    try:
+        import inspect
+        return "model" in inspect.signature(provider.generate).parameters
+    except Exception:
+        return False
+
+
+_TRANSIENT_KINDS = ("rate_limit", "quota_exceeded", "connection")
+
+
 class JarvisBrain:
     def __init__(self) -> None:
         self.history: list[dict] = []
         self._lock = threading.RLock()
         self._provider_override = None  # tests inject a fake here
         self.memory = memory_store      # tests inject a temp store here
+        # Slice 44 attribution: WHICH model answered, and whether it was a
+        # fallback. Uptime bought by quietly downgrading the model would be a
+        # correctness risk disguised as reliability, so this is never implicit.
+        self.last_model: str | None = None
+        self.last_model_was_fallback: bool = False
+
+    # ---------- brain resilience (slice 44) ----------
+    def _model_chain(self) -> list[str]:
+        """Active model first, then the configured fallbacks — deduped, order
+        preserved. Same shape as voice_manager._fallback_chain().
+
+        MEASURED (Stage 0): the primary caps at ~15 RPM, and gemini-2.5-flash
+        ANSWERED while the primary was 429 — sibling models have SEPARATE
+        buckets, which is the only reason a model-level chain helps. Both were
+        also proven to return correct tool calls against all 40 real tool
+        declarations; gemini-2.0-flash could not be proven and is deliberately
+        NOT in the default chain."""
+        active = settings.get("brain.models.gemini", "gemini-3.1-flash-lite")
+        chain = [active]
+        for extra in (settings.get("brain.fallback_models", []) or []):
+            if extra and extra not in chain:
+                chain.append(extra)
+        return chain
+
+    def _generate_with_fallback(self, prompt: str, tools):
+        """One model turn, retried down the chain on TRANSIENT failures only.
+
+        Bounded: every candidate is tried at most once. If the whole chain is
+        rate-limited the ORIGINAL error is re-raised, so the user still sees the
+        honest "rate-limiting" message rather than a generic failure."""
+        provider = self.provider()
+        first_error: ProviderError | None = None
+        # A provider that cannot SELECT a model cannot be chained — passing
+        # model= to one with the old signature raises TypeError and breaks it
+        # entirely (it broke every memory test the first time). Detect once and
+        # degrade to a single plain call, which is the honest behaviour: no model
+        # choice means no fallback to choose.
+        if not _accepts_model_arg(provider):
+            return provider.generate(self.history, prompt, tools=tools)
+        chain = self._model_chain()
+        for index, model in enumerate(chain):
+            try:
+                resp = provider.generate(self.history, prompt, tools=tools,
+                                         model=model)
+            except ProviderError as exc:
+                if exc.kind not in _TRANSIENT_KINDS:
+                    raise                     # never mask a real error
+                first_error = first_error or exc
+                if index + 1 < len(chain):
+                    print(f"  [brain] {model} unavailable ({exc.kind}) — "
+                          f"falling back to {chain[index + 1]}")
+                continue
+            self.last_model = model
+            self.last_model_was_fallback = index > 0
+            if index > 0:
+                print(f"  [brain] answered by FALLBACK model {model}")
+            return resp
+        raise first_error if first_error else ProviderError(
+            "generic", "brain", "no model in the chain could answer")
 
     # ---------- provider / prompt ----------
     def provider(self):
@@ -281,7 +358,7 @@ class JarvisBrain:
         tools = (self.tools() or None) if provider.supports_tools else None
         for _round in range(MAX_TOOL_ROUNDS):
             try:
-                resp: BrainResponse = provider.generate(self.history, prompt, tools=tools)
+                resp: BrainResponse = self._generate_with_fallback(prompt, tools)
             except ProviderError as exc:
                 if tools and exc.kind in ("bad_response", "generic"):
                     # Some models/providers choke on tool schemas — retry plain.

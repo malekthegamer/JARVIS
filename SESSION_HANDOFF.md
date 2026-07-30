@@ -33,7 +33,14 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 756 collected; best full-suite run 748 passed / 6 failed / 0 skipped, all 6 live-brain/live-UIA and each re-verified green individually** (a clean single 756/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 876 collected** (slice 44). Latest measurement is the **non-desktop gate**
+(the desktop-driving tests deselected, so it can run without an idle machine):
+**651 passed / 7 failed / 0 skipped**, and all 7 traced to free-tier Gemini quota —
+each failure's captured stdout shows the fallback chain exhausted (see §2 slice 44
+for the per-test trace). The last **full** run (desktop included) was **748 passed /
+6 failed / 0 skipped, all 6 live-brain/live-UIA and each re-verified green
+individually**
+ (a clean single 756/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
@@ -235,6 +242,53 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 44 — brain resilience: a model-level fallback chain (DoD clause 4 NOT met)
+- **Built:** a transient brain failure (`rate_limit` / `quota_exceeded` /
+  `connection`) now retries the same request down a **bounded** chain
+  (`brain.fallback_models`, default `gemini-3.1-flash-lite → gemini-2.5-flash`),
+  each candidate at most once. A **non-transient** failure (`missing_key`,
+  `bad_response`) does NOT walk — masking a config bug behind a slower answer is
+  worse than failing. The answering model is attributed
+  (`brain.last_model` / `last_model_was_fallback`, on telemetry).
+- **Stage 0 measured the premise before any code, and it held:** the primary caps
+  at **~15 RPM** (429 at burst 15-17), and `gemini-2.5-flash` **answered while the
+  primary was 429** — sibling models have SEPARATE buckets, the only reason a
+  model-level chain can help. Tool-calling parity confirmed against all 40 real
+  declarations for both; `gemini-2.0-flash` could not be proven and is
+  deliberately excluded. Model names were enumerated from the SDK, not guessed
+  (`gemini-3.1-flash` does not exist).
+- **Live-proven** against a real 429 (`tests/harness_brain_chain.py`):
+  `gemini-2.0-flash unavailable (rate_limit) — falling back to gemini-2.5-flash`,
+  `last_model='gemini-2.5-flash'`, `was_fallback=True`.
+- **⚠ DoD clause 4 is NOT MET — recorded honestly.** The gate's live failures did
+  **not** drop: **6 before → 7 after** (same suite, same noise band). Diagnosis,
+  measured rather than assumed:
+  - the chain **engaged 9 times** and **rescued 3**; the other **6 exhausted both
+    models**, because the suite bursts past the combined ~30 RPM.
+  - a 429 takes **~22s to clear** (measured: still 429 at 18s, recovered at 22s),
+    so a backoff retry is **not** a legitimate product fix — a 22-second wait on a
+    user-facing path is worse than an honest error. The probe said don't build it,
+    so it wasn't built.
+  - **Therefore: the "6–9 false failures per gate" problem is a TEST-PACING
+    problem, not a brain problem.** The plan aimed clause 4 at the wrong
+    subsystem; no model-level chain can fix a suite demanding more RPM than the
+    account has. Next work belongs in the test harness, not `brain.py`.
+- **A suspicion I had to drop:** the three `tools=[]` failures looked like the
+  fallback model refusing to call tools (risk register #3, behavioural drift).
+  It isn't — every one shows `falling back to` with **no** matching `answered by
+  FALLBACK`, i.e. the chain was exhausted and the reply was the rate-limit
+  message. Attribution (clause 3) is what made that distinguishable at all.
+- **Gap this exposed:** the **vision** path (`the vision model was unavailable`)
+  is a separate Gemini call site that gets **no** fallback — the chain only covers
+  `brain.think()`. Not in this slice's scope; now a named gap (§5).
+- **My own bug, worth remembering:** the first post-change gate showed *15*
+  failures and zero rate-limit errors. Cause was my chain tests leaving
+  `brain.models.gemini="m-primary"` in the store, so every later live test 404'd
+  on a nonexistent model. Same class as the slice-43 leak. Now contained by an
+  autouse `_restore_brain_settings` guard in `tests/test_brain.py`. **A metric
+  that doesn't explain itself is not a metric** — the fallback count (0) is what
+  exposed it.
 
 ### Slice 43 — JARVIS ACTS in the user's real Chrome (click / type / Enter)
 - **The goal reached:** extension mode could look but not touch. It can now
@@ -909,6 +963,21 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
 - **Settings page (slice 23)**: multi-brain (OpenAI/Claude/Ollama) is visibly present but disabled — "not ported yet" is honest UI, not a bug. Autostart targets `tray_start.pyw`; if the repo is moved, re-toggle autostart to refresh the Run-key path.
 - **Real-browser mode (slices 24-25)**: cannot use the user's literal Default Chrome profile — Chrome 136+ blocks remote-debugging on it and app-bound cookie encryption resists copying its logins (this is Google's deliberate hardening, not a JARVIS limitation). JARVIS instead drives a **dedicated** Chrome profile (`data/browser_profile/`) that the user signs into once per site. Committal actions (click/type/submit) are OFF by default and, even when enabled, only committal ones (post/buy/send/delete/submit) CONFIRM — benign clicks/typing are un-gated on the real account (the user's chosen trade for smoothness). A click that leaves the current host via an **anchor** is now re-gated through the cross-origin CONFIRM (slice 27); the remaining residual is a *named, benign-looking* control that navigates cross-host via **JavaScript** (no inspectable href) — that is detected and flagged after the click, not pre-gated. Rich text editors (contenteditable) work best-effort, verified on Claude's ProseMirror box but not exhaustively tested across every site. `browse_key` presses only a fixed allow-list of navigation keys (Enter/Tab/Escape/arrows/etc.) — never arbitrary key combos.
 - **Flaky test note**: (1) live-UIA/input tests (`test_input`, `test_tabs`) intermittently fail under load in a full run on real mouse/UIA/browser timing; (2) live-model tests accept any bounded/terminal chain state to absorb transient provider errors; (3) a recurring cross-session Win11-Notepad session-restore orphan can make `test_close_window_closes_notepad` fail (a genuinely unsaved leftover Notepad from a prior session — not a code bug, `close_window` correctly refuses to force it past its save dialog); (4) **never run two full live suites back-to-back** — free-tier Gemini quota exhausts and live tests fail in clusters (rotating failures across runs = the signature of throttling, not a regression). Always re-run the named test in isolation before calling anything a regression.
+- **Brain fallback chain (slice 44) — what it does and does NOT fix.** A transient
+  brain failure walks a bounded model chain, and that is **live-proven** to rescue
+  real 429s. But it does **NOT** clear the gate's clustered live failures, and the
+  numbers say why: 6 failures before → **7 after**, with the chain engaging 9
+  times and rescuing only 3. The other 6 exhausted BOTH models, because the suite
+  bursts past the combined ~30 RPM of the two buckets. **A 429 needs ~22s to
+  clear** (measured), which is too long to wait on a user-facing path — so a
+  backoff retry was deliberately NOT built. Conclusion: the clustered-failure
+  problem is **test pacing**, not brain resilience; fixing it means spacing the
+  suite's live calls, not adding more models. Also: the chain covers
+  `brain.think()` only — **the vision path is a separate Gemini call site with no
+  fallback** (`the vision model was unavailable` is still a hard live failure).
+  Depth is 1 by design: only `gemini-2.5-flash` was PROVEN on tool-calling parity,
+  and an unproven model in the chain would break agent chains worse than a clean
+  failure.
 - **Double-click (`click kind='double'`, slice 29) is confirmed flaky in real manual use (user-observed, 2026-07-20)** — the same live-UIA/mouse-timing class as (1) above, not a tiering/logic bug (the deterministic `kind` dispatch + `classify_click` tests are all green; `_click_xy` correctly maps `kind` to `pydirectinput`/`pyautogui` `doubleClick`). Single-click and right-click were solid in the same session. **User call: low priority, not worth a dedicated slice right now** — leave as a known rough edge. If it's ever revisited: likely candidates are the OS double-click-speed timing window (`pydirectinput`/`pyautogui`'s synthetic double-click may fire faster/slower than Windows' registered threshold) or needing a fresh point-verify between the two clicks rather than one shared resolve.
 - **Undo (slice 26):** the stack is in-memory and process-scoped — a restart
   forgets what was undoable (same posture as the chain tracker, documented not

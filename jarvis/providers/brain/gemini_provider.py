@@ -38,7 +38,8 @@ class GeminiProvider(BrainProvider):
             self._cached_key = key
         return self._cached_client
 
-    def generate(self, messages, system_prompt, tools=None) -> BrainResponse:
+    def generate(self, messages, system_prompt, tools=None,
+                 model=None) -> BrainResponse:
         try:
             from google.genai import types
         except ImportError as exc:
@@ -75,7 +76,10 @@ class GeminiProvider(BrainProvider):
                                           parameters=t["parameters"]) for t in tools
             ])]
 
-        model = settings.get("brain.models.gemini", "gemini-3.1-flash-lite")
+        # An explicit model wins: that is how the slice-44 chain asks for the
+        # NEXT model after a 429. Falls back to the configured default.
+        model = model or settings.get("brain.models.gemini",
+                                      "gemini-3.1-flash-lite")
         try:
             resp = self._client().models.generate_content(
                 model=model, contents=contents, config=gen_config)

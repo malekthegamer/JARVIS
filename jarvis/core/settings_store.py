@@ -16,6 +16,13 @@ from jarvis import config
 DEFAULT_SETTINGS: dict[str, Any] = {
     "brain": {
         "active": "gemini",
+        # Slice 44 — models to retry on when the active one is rate-limited,
+        # quota-exhausted or unreachable. MEASURED: sibling Gemini models
+        # have SEPARATE rate-limit buckets (gemini-2.5-flash answered while
+        # flash-lite was 429), which is the only reason this helps. Only
+        # models PROVEN to return correct tool calls belong here —
+        # gemini-2.0-flash could not be proven and is excluded.
+        "fallback_models": ["gemini-2.5-flash"],
         "models": {
             # Verified live 2026-07-08: returns "pong". Swap here if it 404s.
             "gemini": "gemini-3.1-flash-lite",

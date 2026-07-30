@@ -91,6 +91,15 @@ def _sample_telemetry() -> dict:
     except Exception:
         event["browser_mode"] = "isolated"
         event["browser_connected"] = False
+    # Slice 44: WHICH brain answered. A fallback model quietly handling requests
+    # would be uptime bought by downgrading quality — visible, or it isn't
+    # honest.
+    try:
+        event["brain_model"] = jarvis_brain.last_model
+        event["brain_is_fallback"] = bool(jarvis_brain.last_model_was_fallback)
+    except Exception:
+        event["brain_model"] = None
+        event["brain_is_fallback"] = False
     return event
 
 

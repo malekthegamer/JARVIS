@@ -27,7 +27,34 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (756 tests: 754 + 2 pythonw-stream pins)
+## 1. Regression signal — test suite (876 tests as of slice 44)
+
+### Slice 44 — brain fallback chain: the metric REFUSED the claim
+- **What was built:** transient brain failures (`rate_limit`/`quota_exceeded`/
+  `connection`) walk a bounded model chain; non-transient ones never do; the
+  answering model is attributed.
+- **The baseline vs. the result, same non-desktop gate:**
+
+  | | live failures | chain engaged | rescued |
+  |---|---|---|---|
+  | before (slice 43 gate) | **6** | — | — |
+  | after (slice 44 gate) | **7** | 9 | **3** |
+
+- **So the DoD's measured clause is NOT met** and is recorded as such. The chain
+  works (3 real rescues, plus a live 429 proof in `harness_brain_chain.py`) but
+  cannot clear the cluster: 6 of 9 engagements exhausted BOTH models, because the
+  suite bursts past the two buckets' combined ~30 RPM.
+- **Recovery time, measured:** a 429 clears in **~22s** (still 429 at 18s). Too
+  long for a user-facing wait, so the backoff retry was **not** built — the probe
+  cancelled that work rather than the other way round.
+- **Reusable conclusion for the next session:** clustered live failures are a
+  **test-pacing** problem. Do not attack them from `brain.py` again.
+- **Trap that cost a whole gate run:** the first post-change run read *15 failed*
+  with **zero** rate-limit errors — my own chain tests had leaked
+  `brain.models.gemini="m-primary"` into the settings store, 404ing every later
+  live test. The diagnostic that caught it was the fallback counter reading 0
+  when it should have been >0. **Always check that a metric moved for the reason
+  you think.**
 
 ### v1.0.6 — "JARVIS could not start" on EVERY boot: a guessed constant
 - **Symptom:** the user got the `JARVIS could not start` dialog after every
