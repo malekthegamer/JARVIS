@@ -194,6 +194,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # by name up to this long, then report the dispatch honestly.
         "game_window_wait_s": 20,
     },
+    "routines": {
+        # Slice 48 -- named, saved chains ("work mode"). Steps are DATA: every
+        # one is re-gated through execute() at run time, so a saved routine can
+        # never smuggle an action past the CONFIRM gate.
+        "enabled": True,
+    },
     "audit": {
         # Persistent audit log (slice 18) — every execute() call + memory
         # mutation, durable JSONL at data/audit/ (plaintext envelope +

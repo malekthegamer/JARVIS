@@ -33,7 +33,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 930 collected** (slice 47). The **non-desktop gate** (desktop-driving
+**Tests: 976 collected** (slice 48). The **non-desktop gate** (desktop-driving
 tests deselected, so it runs without an idle machine) is now **712 passed / 0
 failed / 0 skipped** (slice 47) — clean since slice 45, because
 slice 45 paces live Gemini calls so quota stops forging failures (it costs ~175s
@@ -244,6 +244,54 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 48 — Routines: "work mode" runs a saved chain
+- **The unit of autonomy.** `save_routine` / `run_routine` / `list_routines` /
+  `delete_routine`. Saying a bare routine name runs it. Persisted
+  **DPAPI-encrypted** (`data/routines.bin`) — steps carry app names, URLs and
+  file paths, so the write path REFUSES plaintext, mirroring `MemoryStore`.
+- **A routine is stored STEPS, never stored AUTHORITY.** `run_routine` replays
+  each step through `primitives.execute()`, so every one re-hits the kill
+  switch, the tier decision and the CONFIRM gate as if the model had just asked.
+  **Re-confirmation is the FREE default** — skipping it would take deliberate
+  extra work. That mechanically answers the open design question IDEAS.md #1
+  posed. Live-proven: a `run_shell` step inside a routine still prompted.
+- **Stage 0 measured the model's half BEFORE any code** — and the CONTROL row
+  changed the plan:
+
+  | probe | result |
+  |---|---|
+  | compose from a plain request | **4/4** — `steps=['launch_app','set_mute']`, real tools |
+  | bare "work mode" | **4/4** → `run_routine('work mode')` |
+  | "Work Mode" / "work-mode" | **4/4** — the model self-normalises to the stored name |
+  | **CONTROL: no routine names in the prompt** | **0/4** — it called `list_routines` instead |
+
+  So **Stage 3 (names in the prompt) is load-bearing, not a nicety** — it was
+  planned as discoverability polish and the control row proved the feature does
+  not work without it. Failure mode without it is at least benign
+  (`list_routines`, not a wrong action). The store's normalized matching is a
+  backstop for hand-edited files, since the model does the matching itself.
+- **⚠ A REAL safety bug my own test caught.** `_run_run_routine` first detected
+  a stopped step with `result.split(":")[0]`. The gate returns
+  `"CANCELLED (declined): …"`, so the parenthetical made the comparison miss and
+  **declining step 2 let step 3 run** — precisely the property this slice
+  claims. Now a `startswith` prefix check, pinned by
+  `test_declining_a_step_aborts_the_rest_of_the_routine`.
+- **Visible, not opaque:** each step registers with `ChainTracker` so the HUD
+  Action Log shows real progress. `brain.py:389` only wraps the OUTER tool call,
+  so without this a whole routine collapsed into one row.
+- **Honest failure:** stops at the first FAILED/CANCELLED/BLOCKED step and names
+  which step of how many, plus what completed before it. A half-run routine
+  reported as success would be the worst outcome here.
+- **Bounded and non-recursive:** `run_routine` inside a routine is rejected at
+  save AND re-validated at run (the file can be hand-edited); caps on steps (40),
+  routines (100) and name length (80).
+- **Known trade, stated in the README:** a routine with 3 CONFIRM steps prompts
+  3× every run. Deliberate — approving a routine's *shape* once is not approving
+  today's execution.
+- Kill switch `routines.enabled`, both directions.
+- **Stale-file note:** `data/reminders.json` exists, contains `[]`, and nothing
+  in `jarvis/` references it — orphaned legacy debris. Flagged, not built on.
 
 ### Slice 47 — screen-aware Q&A ("what am I looking at?")
 - **Closes `screen.py`'s own TODO.** Its docstring said *"capture_screen() is

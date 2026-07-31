@@ -322,7 +322,32 @@ class JarvisBrain:
             relevant = self.memory.format_for_prompt(self.memory.retrieve(user_message))
         except Exception:
             relevant = ""  # a memory failure must never break think()
-        return pinned + relevant
+        return pinned + relevant + self._routines_block()
+
+    def _routines_block(self) -> str:
+        """Saved routine names, in EVERY prompt (slice 48).
+
+        MEASURED and load-bearing, not a nicety: with this block the model maps a
+        bare "work mode" to run_routine 4/4; WITHOUT it, 0/4 -- it falls back to
+        list_routines, costing a round trip. (Stage 0,
+        scratchpad/probe_routines.py.) Names only, never steps: the steps can be
+        long and the model does not need them to invoke one.
+
+        Empty string when there are no routines, so an unused feature adds no
+        prompt noise. Never raises.
+        """
+        if not settings.get("routines.enabled", True):
+            return ""
+        try:
+            from jarvis.core.routines import routine_store
+            names = routine_store.names()
+        except Exception:
+            return ""
+        if not names:
+            return ""
+        listed = ", ".join(f"'{n}'" for n in names)
+        return ("\n\nSaved routines you can run by name with run_routine: "
+                f"{listed}. If the user says one of these names, run it.\n")
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str, dry_run: bool = False) -> str:

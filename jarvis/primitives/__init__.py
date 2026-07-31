@@ -12,6 +12,7 @@ import os
 import time
 
 from jarvis.core import audit, chain
+from jarvis.core.routines import routine_store, valid_steps
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
 from jarvis.core.undo import UndoEntry, undo_stack
@@ -275,6 +276,125 @@ def _run_screen_query(args: dict, gate_info: dict | None = None) -> str:
     return "OK: " + web._wrap_untrusted("SCREEN CONTENT", r["source"], r["answer"])
 
 
+
+# ---------------------------------------------------------------- routines
+# A routine is a named, saved chain (slice 48). The crucial property: it is
+# STORED STEPS, not stored authority. run_routine replays each step through
+# execute(), so every one re-hits the kill switch, the tier decision and the
+# CONFIRM gate exactly as if the model had just asked for it. Re-confirmation
+# is therefore the FREE default -- skipping it would take deliberate work.
+
+def _classify_save_routine(args: dict) -> dict:
+    """AUTO to create, CONFIRM to overwrite -- the write_file precedent: losing
+    a routine you built is the irreversible part, not storing a new one."""
+    name = str(args.get("name", "")).strip()
+    if name and routine_store.exists(name):
+        existing = routine_store.get(name)
+        return {"tier": "confirm",
+                "description": (f"replace your existing routine "
+                                f"'{existing['name']}' ({len(existing['steps'])} "
+                                f"steps) with a new {len(args.get('steps') or [])}-step "
+                                f"version")}
+    return {"tier": "auto"}
+
+
+def _classify_delete_routine(args: dict) -> dict:
+    name = str(args.get("name", "")).strip()
+    found = routine_store.get(name) if name else None
+    if found is None:
+        # Nothing to delete -> let the primitive report it honestly rather than
+        # gating on a no-op.
+        return {"tier": "auto"}
+    return {"tier": "confirm",
+            "description": f"delete the routine '{found['name']}' "
+                           f"({len(found['steps'])} steps)"}
+
+
+def _run_save_routine(args: dict, gate_info: dict | None = None) -> str:
+    name = str(args.get("name", "")).strip()
+    steps = args.get("steps")
+    try:
+        rec = routine_store.save(name, steps)
+    except ValueError as exc:
+        return f"FAILED: {exc}"
+    except RuntimeError as exc:
+        return f"FAILED: {exc}"
+    tools = ", ".join(st.get("tool", "?") for st in rec["steps"])
+    return (f"OK: saved the routine '{rec['name']}' with {len(rec['steps'])} "
+            f"steps ({tools}). Say its name to run it.")
+
+
+def _run_list_routines(args: dict, gate_info: dict | None = None) -> str:
+    items = routine_store.all()
+    if not items:
+        return "OK: there are no routines saved yet."
+    lines = [f"- {r['name']} ({len(r['steps'])} steps: "
+             f"{', '.join(st.get('tool', '?') for st in r['steps'])})"
+             for r in items]
+    return "OK: saved routines:\n" + "\n".join(lines)
+
+
+def _run_delete_routine(args: dict, gate_info: dict | None = None) -> str:
+    name = str(args.get("name", "")).strip()
+    if routine_store.delete(name):
+        return f"OK: deleted the routine '{name}'."
+    known = routine_store.names()
+    return (f"FAILED: there is no routine called '{name}'."
+            + (f" Saved routines: {', '.join(known)}." if known else ""))
+
+
+def _run_run_routine(args: dict, gate_info: dict | None = None) -> str:
+    """Replay a saved routine, one execute() call per step.
+
+    Stops at the FIRST failure, cancellation or block and says which step --
+    a half-run routine reported as success would be the worst outcome here.
+    Each step is registered with the ChainTracker so the HUD Action Log shows
+    real progress: brain.py only wraps the OUTER call, so without this the whole
+    routine would collapse into one opaque row.
+    """
+    name = str(args.get("name", "")).strip()
+    routine = routine_store.get(name)
+    if routine is None:
+        known = routine_store.names()
+        return (f"FAILED: there is no routine called '{name}'."
+                + (f" Saved routines: {', '.join(known)}." if known else
+                   " No routines are saved yet."))
+
+    steps = routine["steps"]
+    # RE-VALIDATE at run time: save() already checked, but the file on disk can
+    # be hand-edited, so this is the real boundary (recursion, unknown tools).
+    ok, why = valid_steps(steps)
+    if not ok:
+        return (f"FAILED: the routine '{routine['name']}' is not safe to run "
+                f"({why}). Delete and re-save it.")
+
+    tracker = chain.current()
+    done = []
+    for i, step in enumerate(steps, 1):
+        tool = step["tool"]
+        step_args = step.get("args") or {}
+        n = tracker.begin_call(tool, step_args) if tracker else None
+        result = execute(tool, step_args)
+        if tracker is not None:
+            tracker.end_call(n, chain.status_from_result(str(result)),
+                             note=str(result))
+        # startswith, NOT split-on-colon: the gate returns
+        # "CANCELLED (declined): ..." and the parenthetical made a
+        # split(":")[0] comparison miss, so a DECLINED step let the rest of the
+        # routine run. Caught by
+        # test_declining_a_step_aborts_the_rest_of_the_routine — the exact
+        # safety property this slice claims.
+        text = str(result).lstrip()
+        if text.startswith(("FAILED", "CANCELLED", "BLOCKED", "Unknown tool")):
+            return (f"FAILED: routine '{routine['name']}' stopped at step {i} "
+                    f"of {len(steps)} ({tool}): {result} "
+                    f"Completed before that: "
+                    f"{', '.join(done) if done else 'nothing'}.")
+        done.append(tool)
+    return (f"OK: ran the routine '{routine['name']}' -- all {len(steps)} "
+            f"steps completed ({', '.join(done)}).")
+
+
 def _run_browse_click(args: dict, gate_info: dict | None = None) -> str:
     r = web.click_element(str(args.get("target", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
@@ -533,6 +653,85 @@ PRIMITIVES: dict[str, dict] = {
                             "user's screen. Use ONLY when the user asks what is open or "
                             "on screen, or to double-check the result of an action."),
             "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "save_routine": {
+        "fn": _run_save_routine,
+        "classify": _classify_save_routine,
+        "schema": {
+            "name": "save_routine",
+            "description": (
+                "Save a named, reusable routine: a fixed list of steps the user "
+                "can replay later just by naming it (e.g. 'work mode' = open the "
+                "editor, mute, turn on Do Not Disturb). Use when the user asks to "
+                "remember, save or create a routine, shortcut or mode. Each step "
+                "is a tool call with its arguments; compose them from the tools "
+                "you have. Saving does NOT run the steps."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string",
+                             "description": "What the user will call it"},
+                    "steps": {
+                        "type": "array",
+                        "description": "Ordered tool calls to replay",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "tool": {"type": "string",
+                                         "description": "Name of the tool to call"},
+                                "args": {"type": "object",
+                                         "description": "Arguments for that tool"},
+                            },
+                            "required": ["tool"],
+                        },
+                    },
+                },
+                "required": ["name", "steps"],
+            },
+        },
+    },
+    "run_routine": {
+        "fn": _run_run_routine,
+        "tier": "auto",   # each STEP re-gates itself through execute()
+        "schema": {
+            "name": "run_routine",
+            "description": (
+                "Run one of the user's saved routines by name. Use this whenever "
+                "they name a saved routine, even on its own with no other words "
+                "(saying just 'work mode' means run it). Steps that need "
+                "confirmation will still ask, every time."),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string",
+                                        "description": "The routine's name"}},
+                "required": ["name"],
+            },
+        },
+    },
+    "list_routines": {
+        "fn": _run_list_routines,
+        "tier": "auto",
+        "schema": {
+            "name": "list_routines",
+            "description": ("List the user's saved routines and what each one "
+                            "does. Use when they ask what routines they have."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "delete_routine": {
+        "fn": _run_delete_routine,
+        "classify": _classify_delete_routine,
+        "schema": {
+            "name": "delete_routine",
+            "description": ("Delete a saved routine by name. The user must "
+                            "approve first. Use ONLY when they explicitly ask to "
+                            "delete or forget a routine."),
+            "parameters": {
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+            },
         },
     },
     "screen_query": {
@@ -1179,6 +1378,10 @@ _KILL_SWITCHES: dict[str, set[str]] = {
     # It rides the existing vision switch rather than a new flag nobody knows
     # about — "may JARVIS send screenshots to the model" is one question.
     "vision.enabled": {"screen_query"},
+    # slice 48: routines are stored STEPS, not stored authority -- but the
+    # switch withholds the whole surface when off, same as every other verb.
+    "routines.enabled": {"save_routine", "run_routine", "list_routines",
+                         "delete_routine"},
     # slices 32-33: real-filesystem access — the most powerful surface.
     "fs.enabled": {"list_directory", "delete_path", "create_shortcut",
                    "write_path", "read_path", "move_path", "rename_path",
@@ -1191,6 +1394,7 @@ _SWITCH_LABELS = {
     "web.enabled": "browser automation",
     "search.enabled": "web search",
     "vision.enabled": "screen vision",
+    "routines.enabled": "saved routines",
     "fs.enabled": "real-filesystem access",
 }
 

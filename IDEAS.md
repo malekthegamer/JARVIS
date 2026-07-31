@@ -9,7 +9,7 @@ codebase the cost is almost entirely "what already exists".
 
 ---
 
-## 1. Routines — "remember this as 'work mode'"
+## 1. Routines — "remember this as 'work mode'" — SHIPPED (slice 48)
 
 > *"work mode"* → open VS Code, mute Spotify, DND on, close non-work tabs.
 
@@ -24,6 +24,11 @@ user names it, and it replays on request.
   today's arguments, and the whole gate doctrine is "ground truth, per action".
 - **Why it's good:** small build, large payoff. It's what makes JARVIS feel like
   *yours* rather than a generic assistant.
+- **DONE.** The design question above resolved itself: replaying each step
+  through `execute()` makes re-confirmation the FREE default, so a routine is
+  stored STEPS and never stored AUTHORITY. Stage 0 also measured that putting
+  saved names in the prompt is LOAD-BEARING (bare "work mode" mapped 4/4 with
+  it, 0/4 without). Next: this unblocks #2, scheduled routines.
 
 ## 2. Proactive / scheduled JARVIS
 

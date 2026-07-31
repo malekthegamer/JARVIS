@@ -27,7 +27,24 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (930 tests as of slice 47)
+## 1. Regression signal — test suite (976 tests as of slice 48)
+
+### Slice 48 — Routines (named, saved chains)
+- **save/run/list/delete_routine**, DPAPI-encrypted at rest, `routines.enabled`
+  kill switch both directions.
+- **The safety invariant to re-check if this is ever refactored:** `run_routine`
+  replays every step through `primitives.execute()`, so each step re-hits its
+  own gate. Live-proven — a `run_shell` step inside a routine still prompts.
+- **Stage 0 measured the model half:** compose 4/4, bare-name invoke 4/4,
+  near-miss names 4/4, and **0/4 with the routine names removed from the prompt**
+  — that block is load-bearing, not decoration.
+- **Regression to watch:** step-stop detection uses `startswith`, NOT
+  `split(":")[0]`. The gate returns `"CANCELLED (declined): …"` and the
+  parenthetical broke the original comparison, letting a DECLINED step fall
+  through to the next one. Pinned by
+  `test_declining_a_step_aborts_the_rest_of_the_routine`.
+- Bounded: 40 steps, 100 routines, no nested routines (rejected at save AND
+  re-validated at run, because the file can be hand-edited).
 
 ### Slice 47 — JARVIS can read the screen
 - **`screen_query`** answers questions about what is visible. AUTO tier (prose

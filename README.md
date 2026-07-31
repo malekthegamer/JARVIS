@@ -126,6 +126,27 @@ Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive a
 dedicated real Chrome) and, beneath it, `web.allow_actions` (let it click and
 type on your sites).
 
+### Routines — teach it "work mode"
+
+> *"Save a routine called work mode that opens VS Code, mutes, and turns on Do Not Disturb."*
+>
+> …then later, just: **"work mode"**
+
+Saying the name runs it. `list_routines` shows what you have; deleting asks first.
+
+**A routine stores steps, not permission.** Every step is re-checked when it
+runs — so if one of them needs confirmation, it still asks, **every single
+time**. That means a 3-confirmation routine prompts 3 times on every run. That
+is deliberate: agreeing to a routine's *shape* once isn't agreeing to today's
+run of it. If that annoys you, build routines out of steps that don't need
+confirming.
+
+It also means a routine can't be used to smuggle something past the gate — a
+saved `run_shell` step still stops and shows you the exact command.
+
+Routines are stored encrypted on your machine, capped at 40 steps each, and
+can't contain other routines (that would loop forever).
+
 ### Asking about what's on your screen
 
 *"What am I looking at?"* · *"What does this error say?"* · *"Summarise this."*
