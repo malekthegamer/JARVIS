@@ -106,9 +106,15 @@ class ChainTracker:
         """None = proceed. A string = synthetic tool result; the call must
         NOT execute (and gets no step events — nothing ran)."""
         if self.aborted:
-            reason = ("the user declined a confirmation"
-                      if self.aborted == "cancelled"
-                      else f"too many failures ({CHAIN_FAILURE_BUDGET})")
+            # Slice 49: an interrupted chain must say INTERRUPTED, not "declined"
+            # or "too many failures" — reporting the wrong reason would have the
+            # model tell the user something untrue about their own request.
+            reasons = {
+                "cancelled": "the user declined a confirmation",
+                "interrupted": "the user interrupted you and asked you to stop",
+            }
+            reason = reasons.get(
+                self.aborted, f"too many failures ({CHAIN_FAILURE_BUDGET})")
             return (f"CHAIN ABORTED — {reason}. No further actions will run "
                     "for this request. Tell the user honestly which steps "
                     "completed and which did not.")

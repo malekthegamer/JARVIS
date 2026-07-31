@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 
 from jarvis import config
 from jarvis.brain import jarvis_brain
-from jarvis.core import chain
+from jarvis.core import chain, interrupt
 from jarvis.core import extbridge as _extbridge_mod
 from jarvis.core.confirmations import confirmations
 from jarvis.core.settings_store import settings
@@ -297,7 +297,22 @@ def _on_wake() -> None:
     """Called (on the listener thread) when the wake word fires. The listener
     has already released the mic, so the follow-up capture owns it alone."""
     if not _busy.acquire(blocking=False):
-        return  # PTT/chat/confirm mid-flight — drop this trigger, never stack
+        # Slice 49 barge-in. An interaction is mid-flight. If JARVIS is TALKING
+        # or ACTING, the wake word means "stop" — so interrupt instead of
+        # dropping the trigger, which is what made it impossible to cut JARVIS
+        # off. It stops and RETURNS: capturing a follow-up here would re-enter
+        # _busy and stack triggers, the exact thing this lock exists to prevent.
+        #
+        # CONFIRMING is deliberately excluded: that modal owns its own answer
+        # (Approve/Cancel), and cancelling it out from under the user would be a
+        # different action than they asked for.
+        #
+        # Safe because Stage 0 MEASURED that JARVIS's own TTS peaks at 0.196
+        # against the 0.50 wake threshold (381 frames of real speech, 0 trips),
+        # so listening while speaking does not make it interrupt itself.
+        if broadcaster.current in (AgentState.SPEAKING, AgentState.EXECUTING):
+            interrupt.request()
+        return  # never stack a second interaction
     try:
         from jarvis.core.settings_store import settings as _s
         timeout = float(_s.get("wake.follow_up_timeout_s", 5))
@@ -466,6 +481,17 @@ def _safe_speak(text: str) -> None:
         pass
 
 
+@app.post("/api/stop")
+async def api_stop() -> JSONResponse:
+    """Barge-in (slice 49): stop speaking and run no further steps.
+
+    No _busy acquisition, by design — see the WS handler. Pressing stop when
+    nothing is running is a harmless no-op, reported as interrupted=false rather
+    than an error.
+    """
+    return JSONResponse({"interrupted": interrupt.request()})
+
+
 @app.post("/api/listen")
 async def api_listen() -> JSONResponse:
     """Push-to-talk: capture one utterance, then run the pipeline on it."""
@@ -571,6 +597,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 task = asyncio.create_task(_run_chat(text, ws))
                 _chat_tasks.add(task)
                 task.add_done_callback(_chat_tasks.discard)
+            elif kind == "stop":
+                # Slice 49: deliberately does NOT touch _busy. A stop that
+                # waited on the lock held by the interaction it is cancelling
+                # would deadlock until that interaction finished on its own —
+                # i.e. exactly never do its job. The receive loop staying free
+                # mid-chain is the same property CONFIRM already relies on.
+                interrupt.request()
             elif kind == "confirm_response":
                 confirmations.resolve(str(msg.get("id", "")),
                                       bool(msg.get("approved")))

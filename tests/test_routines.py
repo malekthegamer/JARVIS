@@ -189,6 +189,24 @@ from jarvis.core.confirmations import confirmations
 
 
 @pytest.fixture(autouse=True)
+def _broadcaster_back_to_idle():
+    """LEAK GUARD — the same one test_audit.py carries, for the same reason.
+
+    primitives.execute() called OUTSIDE think() deliberately parks the
+    broadcaster at THINKING (think()'s finally normally restores IDLE). This
+    file drives execute() directly all through the stage-2 block, and it sorts
+    before test_server.py, so without this reset it leaks THINKING into
+    test_server::test_state_endpoint's `state == "idle"` assertion.
+
+    It was invisible until slice 49 ran a deterministic-ONLY gate: the live
+    tests in between were quietly resetting the state by calling think().
+    """
+    yield
+    from jarvis.state import AgentState, broadcaster
+    broadcaster.set(AgentState.IDLE)
+
+
+@pytest.fixture(autouse=True)
 def _temp_routine_store(tmp_path, monkeypatch):
     """Never touch the user's real routines from a test."""
     st = R.RoutineStore(tmp_path / "r.bin")

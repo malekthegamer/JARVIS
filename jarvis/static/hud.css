@@ -599,3 +599,36 @@ body[data-state="confirming"] .state-label { color: var(--amber); }
   box-shadow: none;
   animation: none;
 }
+
+/* ---------- barge-in stop control (slice 49) ---------- */
+/* Hidden unless JARVIS is actually doing something interruptible. A stop
+   button visible at idle would be noise that trains you to ignore it. */
+.stop-button {
+  display: none;
+  margin-top: 0.55rem;
+  padding: 0.32rem 0.9rem;
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+  background: rgba(255, 176, 32, 0.08);
+  border: 1px solid rgba(255, 176, 32, 0.55);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+body[data-state="speaking"] .stop-button,
+body[data-state="executing"] .stop-button {
+  display: inline-block;
+}
+
+.stop-button:hover,
+.stop-button:focus-visible {
+  background: rgba(255, 176, 32, 0.2);
+  color: var(--text-bright);
+  outline: none;
+}
+
+.stop-button:active { transform: translateY(1px); }

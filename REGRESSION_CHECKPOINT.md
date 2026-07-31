@@ -27,7 +27,20 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (976 tests as of slice 48)
+## 1. Regression signal — test suite (994 tests as of slice 49)
+
+### Slice 49 — Barge-in
+- **Live-measured:** 14.4s utterance interrupted 1.0s in stopped at **1.0s**;
+  audio worked again afterwards.
+- **Stage 0 (re-runnable):** JARVIS's own TTS through the real wake model —
+  381 frames, **0 trips, peak 0.196 vs threshold 0.50**. If that margin ever
+  narrows (new voice, new model, lower threshold), JARVIS will start interrupting
+  ITSELF. Re-run `scratchpad/probe_selftrigger.py` before changing any of them.
+- **Two invariants to preserve in any refactor:** the stop path must never
+  acquire `server._busy` (deadlock), and barge-in must never capture a follow-up
+  (stacking). Both test-pinned in `tests/test_interrupt.py`.
+- Interrupted chains report "the user interrupted you" — NOT "declined" or
+  "too many failures". `chain.pre_call_guard` maps the reason.
 
 ### Slice 48 — Routines (named, saved chains)
 - **save/run/list/delete_routine**, DPAPI-encrypted at rest, `routines.enabled`

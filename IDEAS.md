@@ -58,7 +58,7 @@ user names it, and it replays on request.
   you type into the HUD), AUTO tier, untrusted-wrapped, `vision.enabled`
   gated. Stage 0 measured 12px text readable at max_edge 1024.
 
-## 4. Barge-in (interrupt mid-sentence)
+## 4. Barge-in (interrupt mid-sentence) — SHIPPED (slice 49)
 
 Today TTS plays to completion and the wake listener drops input while `_busy`.
 Being able to cut JARVIS off — *"stop"* — is the single change that most makes
@@ -66,6 +66,12 @@ an assistant feel alive rather than like a script playing back.
 
 - **Cost:** a real cancel path through `voice/playback.py` **and** the chain
   loop, which is not currently interruptible mid-step. Moderate, not trivial.
+- **DONE.** Cheaper than feared: `playback.stop()` already existed (unwired),
+  and the chain already refuses steps when `aborted` is set — so it was one
+  small `core/interrupt.py` plus two triggers. The real work was MEASURING
+  that JARVIS's own voice does not trip its own wake word (0 trips, peak
+  0.196 vs 0.50), without which voice barge-in would make it interrupt
+  itself forever.
 
 ## 5. Local model fallback (Ollama)
 

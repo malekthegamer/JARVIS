@@ -32,5 +32,22 @@ def play_bytes(data: bytes, block: bool = True) -> None:
 
 
 def stop() -> None:
-    """Interrupt any current playback (used by the HUD 'stop speaking')."""
+    """Interrupt any current playback.
+
+    Slice 49: this used to claim it was "used by the HUD 'stop speaking'" while
+    NOTHING called it — a stub whose comment described a feature that did not
+    exist. It is now the audio half of barge-in; the one caller is
+    jarvis.core.interrupt.request(), which every trigger goes through.
+    """
     _stop_flag.set()
+
+
+def is_playing() -> bool:
+    """Is audio actually coming out right now? False on any audio failure —
+    a missing mixer means nothing is playing, which is the honest answer."""
+    try:
+        import pygame
+        return bool(pygame.mixer.get_init()
+                    and pygame.mixer.music.get_busy())
+    except Exception:
+        return False

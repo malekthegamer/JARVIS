@@ -33,6 +33,11 @@
       <canvas id="orb"></canvas>
     </button>
     <p class="state-label" id="state-label">OFFLINE</p>
+    <!-- Barge-in (slice 49). CSS shows this ONLY while data-state is speaking
+         or executing. Says STOP, never "undo": it halts what is next, it does
+         not reverse what already happened. -->
+    <button class="stop-button" id="stop-button" type="button"
+            aria-label="Stop JARVIS">&#9632; STOP</button>
     <ol class="chain-strip hidden" id="chain-strip" aria-label="Plan progress"></ol>
     <p class="hint">Click the orb or press <kbd>Space</kbd>, then speak</p>
   </main>

@@ -388,6 +388,19 @@
   window.__hudCheckSetup = checkSetup;
 
   document.getElementById("orb-button").addEventListener("click", pushToTalk);
+
+  // Barge-in (slice 49): cut JARVIS off mid-sentence. Sent over the WS the
+  // receive loop keeps free during an interaction, so it lands while JARVIS is
+  // still talking or acting — the server side never waits on the busy lock.
+  // Falls back to POST /api/stop if the socket is not open.
+  document.getElementById("stop-button").addEventListener("click", () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "stop" }));
+    } else {
+      fetch("/api/stop", { method: "POST" }).catch(() => {});
+    }
+    flashHint("Stopped.");
+  });
   document.addEventListener("keydown", (e) => {
     if (e.code === "Space" && document.activeElement !== input) {
       e.preventDefault();

@@ -126,6 +126,22 @@ Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive a
 dedicated real Chrome) and, beneath it, `web.allow_actions` (let it click and
 type on your sites).
 
+### Cutting it off
+
+Talking too long? Say **"hey jarvis"** while it's speaking, or click the amber
+**■ STOP** button in the HUD. It stops talking immediately and runs no further
+steps.
+
+**What stop does and doesn't do:** it prevents whatever comes *next*. It cannot
+un-do something already done — if it already clicked the button, that click
+happened. JARVIS will tell you honestly which steps finished and which didn't.
+
+The wake word only interrupts while JARVIS is actually speaking or acting; a
+confirmation prompt is left alone, since that already has its own Cancel button.
+Tested: JARVIS's own voice scores well below the wake threshold, so it won't
+interrupt itself — but a noisy room could trigger a stop you didn't mean. That
+only ever *prevents* work, never causes any.
+
 ### Routines — teach it "work mode"
 
 > *"Save a routine called work mode that opens VS Code, mutes, and turns on Do Not Disturb."*

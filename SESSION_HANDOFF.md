@@ -33,7 +33,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 976 collected** (slice 48). The **non-desktop gate** (desktop-driving
+**Tests: 994 collected** (slice 49). The **non-desktop gate** (desktop-driving
 tests deselected, so it runs without an idle machine) is now **712 passed / 0
 failed / 0 skipped** (slice 47) — clean since slice 45, because
 slice 45 paces live Gemini calls so quota stops forging failures (it costs ~175s
@@ -244,6 +244,46 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 49 — Barge-in: cut JARVIS off mid-sentence
+- **The feature:** say "hey jarvis" while it is talking or acting, or click the
+  amber **■ STOP** pill in the HUD, and it stops — speaking AND running further
+  steps. `IDEAS.md` #4's own framing: the change that most makes an assistant
+  feel alive rather than a script playing back.
+- **LIVE-PROVEN:** a 14.4s utterance, interrupted 1.0s in, **stopped at 1.0s**.
+  Audio still worked afterwards (the mixer is not wedged by an abrupt stop).
+  `tests/harness_barge_in.py`.
+- **Research found TWO barriers, not one:**
+  1. `playback.stop()` already existed — and **nothing called it.** Its docstring
+     claimed *"used by the HUD 'stop speaking'"*, describing a feature that did
+     not exist. Fixed; it now names its one real caller.
+  2. `_on_wake` **returns early whenever `_busy` is held**, so while JARVIS spoke
+     the wake word could not fire at all. Voice barge-in was actively blocked,
+     not merely unwired.
+- **Stage 0 measured the headline risk before any voice code existed:** does
+  JARVIS's own TTS trip its own wake word? **381 frames / 30.7s of real speech,
+  0 trips, peak 0.196 against a 0.50 threshold** — a 2.5x margin, worst case
+  being "JARVIS is ready. How can I help you today?". That measurement is what
+  permitted the voice trigger to ship. Today's `_busy` drop was *accidentally*
+  protecting it from hearing itself; barge-in removes that protection.
+- **Reuses the proven abort path:** `interrupt.request()` sets
+  `tracker.aborted="interrupted"` and `pre_call_guard` already refuses every
+  later step. No new machinery — but `chain.py` now maps the reason properly, so
+  an interrupted chain says **"the user interrupted you"**, not "declined a
+  confirmation" or "too many failures". Reporting the wrong reason would have the
+  model tell the user something untrue about their own request.
+- **Never touches `_busy`** — a stop that waited on the lock held by the
+  interaction it is cancelling would deadlock until that interaction finished on
+  its own, i.e. never do its job. Test-pinned
+  (`test_stop_does_not_acquire_the_busy_lock`).
+- **Never stacks:** barge-in stops and RETURNS; it does not capture a follow-up,
+  which would re-enter `_busy`. Test-pinned. CONFIRMING is excluded — that modal
+  owns its own Approve/Cancel.
+- **§4 vision-checked** (this slice had a visual goal): screenshots inspected —
+  hidden at idle, amber pill reading "■ STOP" under the state label while
+  SPEAKING/EXECUTING. It says STOP, never "undo".
+- **Honest limit, stated everywhere:** a step already in flight cannot be
+  un-fired. Stop prevents the NEXT step. A click that has fired has fired.
 
 ### Slice 48 — Routines: "work mode" runs a saved chain
 - **The unit of autonomy.** `save_routine` / `run_routine` / `list_routines` /
