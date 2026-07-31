@@ -30,7 +30,7 @@ user names it, and it replays on request.
   saved names in the prompt is LOAD-BEARING (bare "work mode" mapped 4/4 with
   it, 0/4 without). Next: this unblocks #2, scheduled routines.
 
-## 2. Proactive / scheduled JARVIS
+## 2. Proactive / scheduled JARVIS — SHIPPED (slice 50)
 
 > *"Every weekday at 8, tell me my calendar and anything urgent."*
 
@@ -44,6 +44,10 @@ user names it, and it replays on request.
 - **Reuses:** the tray process (already persistent), `ChainTracker`, the audit
   log. Needs a durable schedule store and a timer thread.
 - Composes directly with **#1** — scheduled *routines* is the real feature.
+- **DONE, and that note was right**: scope is saved routines only. The
+  AUTO-only safety shape survived contact — Stage 0 measured realistic
+  routines at 4/4 AUTO, so parking bounds the feature without gutting it.
+  Free-text scheduled prompts remain a separate trust decision, not built.
 
 ## 3. Screen-aware Q&A — ✅ SHIPPED (slice 47)
 

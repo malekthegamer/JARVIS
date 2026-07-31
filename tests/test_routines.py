@@ -460,3 +460,48 @@ def test_the_block_lists_names_only_not_steps(monkeypatch, _temp_routine_store):
     monkeypatch.setattr(R, "routine_store", _temp_routine_store)
     block = JarvisBrain()._routines_block()
     assert "launch_app" not in block and "set_mute" not in block, block
+
+
+# ---------- a parked step must never be reported as completed ----------
+# Caught LIVE, not by unit tests: the scheduled run reported "all 2 steps
+# completed (set_volume, run_shell)" while run_shell had been PARKED and never
+# ran. The step was safely not executed -- but the REPORT was false, which is
+# the half-run-reported-as-success failure the routine contract forbids.
+
+def test_a_parked_step_is_not_counted_as_completed(monkeypatch, _temp_routine_store):
+    from jarvis import primitives
+    from jarvis.core import chain
+    ran = []
+    _fake_tool(monkeypatch, "t_auto", record=ran)
+    _fake_tool(monkeypatch, "t_risky", tier="confirm", record=ran)
+    _temp_routine_store.save("mixed", [{"tool": "t_auto", "args": {}},
+                                       {"tool": "t_risky", "args": {}}])
+    chain.start(unattended=True)
+    try:
+        out = primitives.execute("run_routine", {"name": "mixed"})
+    finally:
+        chain.clear("done")
+    assert [n for n, _ in ran] == ["t_auto"],         f"the CONFIRM step must not run unattended: {ran}"
+    assert "all 2 steps completed" not in out, f"FALSE report: {out}"
+    assert "SKIPPED" in out and "t_risky" in out, out
+    assert "did NOT run" in out.lower() or "did not run" in out.lower(), out
+
+
+def test_parked_steps_do_not_stop_the_rest_of_the_routine(monkeypatch,
+                                                          _temp_routine_store):
+    """A parked step is not a failure -- the remaining AUTO steps are still
+    wanted at 8am. Stopping would silently lose useful work."""
+    from jarvis import primitives
+    from jarvis.core import chain
+    ran = []
+    _fake_tool(monkeypatch, "t_risky", tier="confirm", record=ran)
+    _fake_tool(monkeypatch, "t_after", record=ran)
+    _temp_routine_store.save("after", [{"tool": "t_risky", "args": {}},
+                                       {"tool": "t_after", "args": {}}])
+    chain.start(unattended=True)
+    try:
+        out = primitives.execute("run_routine", {"name": "after"})
+    finally:
+        chain.clear("done")
+    assert [n for n, _ in ran] == ["t_after"],         f"steps after a park must still run: {ran}"
+    assert "1 of 2" in out, out

@@ -346,8 +346,26 @@ class JarvisBrain:
         if not names:
             return ""
         listed = ", ".join(f"'{n}'" for n in names)
-        return ("\n\nSaved routines you can run by name with run_routine: "
-                f"{listed}. If the user says one of these names, run it.\n")
+        block = ("\n\nSaved routines you can run by name with run_routine: "
+                 f"{listed}. If the user says one of these names, run it.\n")
+        return block + self._schedules_block()
+
+    def _schedules_block(self) -> str:
+        """What is set to run automatically (slice 50). Same seam and same
+        reasoning as the routines list: without it the model has to make a
+        lookup call before it can answer "what do you run for me?"."""
+        if not settings.get("schedules.enabled", True):
+            return ""
+        try:
+            from jarvis.core.schedules import schedule_store
+            items = schedule_store.all()
+        except Exception:
+            return ""
+        if not items:
+            return ""
+        listed = "; ".join(f"'{s['routine']}' {s['kind']} at {s['at']}"
+                           for s in items)
+        return f"Scheduled to run automatically: {listed}.\n"
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str, dry_run: bool = False) -> str:

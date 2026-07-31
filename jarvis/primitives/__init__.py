@@ -13,6 +13,7 @@ import time
 
 from jarvis.core import audit, chain
 from jarvis.core.routines import routine_store, valid_steps
+from jarvis.core.schedules import schedule_store
 from jarvis.core.confirmations import Decision, confirmations
 from jarvis.core.settings_store import settings
 from jarvis.core.undo import UndoEntry, undo_stack
@@ -370,6 +371,7 @@ def _run_run_routine(args: dict, gate_info: dict | None = None) -> str:
 
     tracker = chain.current()
     done = []
+    parked = []
     for i, step in enumerate(steps, 1):
         tool = step["tool"]
         step_args = step.get("args") or {}
@@ -378,6 +380,16 @@ def _run_run_routine(args: dict, gate_info: dict | None = None) -> str:
         if tracker is not None:
             tracker.end_call(n, chain.status_from_result(str(result)),
                              note=str(result))
+        # Slice 50: a PARKED step did not run and did NOT fail — it needs a
+        # human. It must not stop the routine (the remaining AUTO steps are
+        # still wanted at 8am) but it must NEVER be counted as completed.
+        # Caught live: without this the run reported "all 2 steps completed
+        # (set_volume, run_shell)" when run_shell had been parked and never ran,
+        # which is exactly the half-run-reported-as-success failure the routine
+        # contract forbids.
+        if str(result).lstrip().startswith("PARKED"):
+            parked.append(f"step {i} ({tool})")
+            continue
         # startswith, NOT split-on-colon: the gate returns
         # "CANCELLED (declined): ..." and the parenthetical made a
         # split(":")[0] comparison miss, so a DECLINED step let the rest of the
@@ -391,8 +403,74 @@ def _run_run_routine(args: dict, gate_info: dict | None = None) -> str:
                     f"Completed before that: "
                     f"{', '.join(done) if done else 'nothing'}.")
         done.append(tool)
+    if parked:
+        # Honest: say what did NOT happen, and why, so the user can do it.
+        return (f"OK: ran the routine '{routine['name']}' — {len(done)} of "
+                f"{len(steps)} steps completed "
+                f"({', '.join(done) if done else 'none'}). "
+                f"SKIPPED, needs your approval: {', '.join(parked)}. "
+                f"Those did NOT run.")
     return (f"OK: ran the routine '{routine['name']}' -- all {len(steps)} "
             f"steps completed ({', '.join(done)}).")
+
+
+
+# ---------------------------------------------------------------- schedules
+# Slice 50. A schedule is a saved routine + a time. Storing one is AUTO: it
+# performs no action, and the routine it names re-gates every step when it
+# actually runs (and PARKS anything non-AUTO, because nobody is watching).
+
+def _classify_cancel_schedule(args: dict) -> dict:
+    sid = str(args.get("id", "")).strip()
+    found = next((s for s in schedule_store.all() if s["id"] == sid), None)
+    if found is None:
+        return {"tier": "auto"}          # nothing to cancel -> honest report
+    return {"tier": "confirm",
+            "description": f"cancel the schedule that runs "
+                           f"'{found['routine']}' {found['kind']} at {found['at']}"}
+
+
+def _run_schedule_routine(args: dict, gate_info: dict | None = None) -> str:
+    try:
+        rec = schedule_store.add(
+            str(args.get("routine", "")),
+            kind=str(args.get("kind", "daily")),
+            at=str(args.get("at", "")),
+            weekday=args.get("weekday"),
+            announce=bool(args.get("announce", False)))
+    except ValueError as exc:
+        return f"FAILED: {exc}"
+    except RuntimeError as exc:
+        return f"FAILED: {exc}"
+    when = {"daily": "every day", "weekdays": "every weekday",
+            "weekly": "weekly"}.get(rec["kind"], rec["kind"])
+    return (f"OK: '{rec['routine']}' will run {when} at {rec['at']}. "
+            f"Steps needing approval will be skipped and reported, since "
+            f"nobody is there to approve them. (id {rec['id']})")
+
+
+def _run_list_schedules(args: dict, gate_info: dict | None = None) -> str:
+    items = schedule_store.all()
+    if not items:
+        return "OK: nothing is scheduled."
+    lines = []
+    for s in items:
+        when = {"daily": "every day", "weekdays": "every weekday",
+                "weekly": "weekly"}.get(s["kind"], s["kind"])
+        last = s.get("last_run") or "never"
+        lines.append(f"- {s['routine']} — {when} at {s['at']} "
+                     f"(last run: {last}, id {s['id']})")
+    return "OK: scheduled routines:\n" + "\n".join(lines)
+
+
+def _run_cancel_schedule(args: dict, gate_info: dict | None = None) -> str:
+    sid = str(args.get("id", "")).strip()
+    if schedule_store.cancel(sid):
+        return f"OK: cancelled schedule {sid}."
+    known = [f"{s['routine']} at {s['at']} (id {s['id']})"
+             for s in schedule_store.all()]
+    return (f"FAILED: there is no schedule with id '{sid}'."
+            + (f" Current: {'; '.join(known)}." if known else " Nothing is scheduled."))
 
 
 def _run_browse_click(args: dict, gate_info: dict | None = None) -> str:
@@ -731,6 +809,61 @@ PRIMITIVES: dict[str, dict] = {
                 "type": "object",
                 "properties": {"name": {"type": "string"}},
                 "required": ["name"],
+            },
+        },
+    },
+    "schedule_routine": {
+        "fn": _run_schedule_routine,
+        "tier": "auto",   # stores only; the routine re-gates when it RUNS
+        "schema": {
+            "name": "schedule_routine",
+            "description": (
+                "Run one of the user's saved routines automatically at a set "
+                "time — 'run work mode every weekday at 8am'. Use when they ask "
+                "for something to happen on a schedule, automatically, or every "
+                "day/weekday/week. The routine must already be saved. Steps that "
+                "need approval are SKIPPED when it runs unattended, so schedule "
+                "routines made of safe steps."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "routine": {"type": "string",
+                                "description": "Name of an existing saved routine"},
+                    "kind": {"type": "string", "enum": ["daily", "weekdays", "weekly"],
+                             "description": "How often"},
+                    "at": {"type": "string",
+                           "description": "24-hour local time, e.g. 08:00"},
+                    "weekday": {"type": "integer",
+                                "description": "For weekly: 0=Monday .. 6=Sunday"},
+                    "announce": {"type": "boolean",
+                                 "description": "Say out loud when it has run"},
+                },
+                "required": ["routine", "at"],
+            },
+        },
+    },
+    "list_schedules": {
+        "fn": _run_list_schedules,
+        "tier": "auto",
+        "schema": {
+            "name": "list_schedules",
+            "description": ("List what is scheduled to run automatically, and "
+                            "when each last ran."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    "cancel_schedule": {
+        "fn": _run_cancel_schedule,
+        "classify": _classify_cancel_schedule,
+        "schema": {
+            "name": "cancel_schedule",
+            "description": ("Stop a scheduled routine from running any more. "
+                            "Needs the schedule's id — call list_schedules "
+                            "first if you do not have it."),
+            "parameters": {
+                "type": "object",
+                "properties": {"id": {"type": "string"}},
+                "required": ["id"],
             },
         },
     },
@@ -1382,6 +1515,10 @@ _KILL_SWITCHES: dict[str, set[str]] = {
     # switch withholds the whole surface when off, same as every other verb.
     "routines.enabled": {"save_routine", "run_routine", "list_routines",
                          "delete_routine"},
+    # slice 50: scheduling is the unattended surface -- one switch turns off
+    # everything that can act while nobody is watching.
+    "schedules.enabled": {"schedule_routine", "list_schedules",
+                          "cancel_schedule"},
     # slices 32-33: real-filesystem access — the most powerful surface.
     "fs.enabled": {"list_directory", "delete_path", "create_shortcut",
                    "write_path", "read_path", "move_path", "rename_path",
@@ -1395,6 +1532,7 @@ _SWITCH_LABELS = {
     "search.enabled": "web search",
     "vision.enabled": "screen vision",
     "routines.enabled": "saved routines",
+    "schedules.enabled": "scheduled routines",
     "fs.enabled": "real-filesystem access",
 }
 
@@ -1524,6 +1662,20 @@ def _execute_inner(name: str, args: dict, outcome: dict) -> str:
             # The spec's third tier: refused outright. NEVER gates (no
             # approvable modal) and NEVER runs — the command dies here.
             return description or "BLOCKED: refused."
+        if tier != "auto" and tracker is not None and tracker.unattended:
+            # Slice 50, THE CARDINAL RULE. Nobody is watching, so this step
+            # cannot be approved by anyone — and raising a modal at an empty
+            # room is not a gate, it is a 30s timeout nobody sees. PARK it:
+            # do not run it, do not prompt, and report it so the user can do it
+            # themselves. An unattended agent must never approve itself.
+            #
+            # Deliberately AFTER the blocked check (a BLOCKED verb stays
+            # blocked) and BEFORE the gate (so no confirm_request is emitted).
+            outcome["gate"] = "parked"
+            what = description or name
+            return (f"PARKED: '{what}' needs your approval, and this ran "
+                    f"unattended on a schedule — so it was NOT done. Run it "
+                    f"yourself when you are back.")
         if tier != "auto":
             # Slice 35: "auto" is the ONLY value that runs ungated. Anything
             # else — "confirm", or a malformed/typo'd tier from a buggy

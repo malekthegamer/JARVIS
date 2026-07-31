@@ -1,7 +1,6 @@
 """Make the repo root importable so `import jarvis` works from anywhere."""
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -23,28 +22,13 @@ _DESKTOP_DRIVING_MODULES = frozenset({
     "test_agent_loop", "test_email_live",
 })
 
-# SHQueryUserNotificationState values meaning "the screen is claimed":
-# 2 = QUNS_BUSY (fullscreen, F11-style), 3 = QUNS_RUNNING_D3D_FULL_SCREEN
-# (a game), 4 = QUNS_PRESENTATION_MODE. 5 = normal desktop.
-_SCREEN_CLAIMED_STATES = {2, 3, 4}
+# Slice 50: ONE definition of "the screen is claimed", shared with the product.
+# This used to be a copy that existed only here -- which is why the product had
+# no such guard and a scheduled routine would have launched apps mid-game.
+from jarvis.core.desktop import SCREEN_CLAIMED_STATES as _SCREEN_CLAIMED_STATES
 
 
-def _user_notification_state() -> int:
-    """The Windows fullscreen/presentation state. JARVIS_FAKE_QUNS overrides
-    for deterministic tests. Any failure reads as 'normal desktop' (5) — the
-    guard must never be the thing that blocks a legitimate run."""
-    fake = os.environ.get("JARVIS_FAKE_QUNS")
-    if fake:
-        return int(fake)
-    try:
-        import ctypes
-        state = ctypes.c_int(0)
-        if ctypes.windll.shell32.SHQueryUserNotificationState(
-                ctypes.byref(state)) == 0:  # S_OK
-            return state.value
-    except Exception:
-        pass
-    return 5
+from jarvis.core.desktop import notification_state as _user_notification_state
 
 
 def pytest_collection_finish(session):

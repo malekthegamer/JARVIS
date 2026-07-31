@@ -194,6 +194,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # by name up to this long, then report the dispatch honestly.
         "game_window_wait_s": 20,
     },
+    "schedules": {
+        # Slice 50 -- run a saved routine at a set time, unattended. The safety
+        # rule lives in the tracker: a scheduled run sets unattended=True, so
+        # any step needing approval is PARKED rather than prompted at an empty
+        # room. An unattended agent must never approve itself.
+        "enabled": True,
+        # How late is still "due". The PC asleep at 08:00 must not make the
+        # morning routine fire at 18:00.
+        "grace_minutes": 60,
+    },
     "routines": {
         # Slice 48 -- named, saved chains ("work mode"). Steps are DATA: every
         # one is re-gated through execute() at run time, so a saved routine can

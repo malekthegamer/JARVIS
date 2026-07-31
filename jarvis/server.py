@@ -27,7 +27,8 @@ from starlette.concurrency import run_in_threadpool
 
 from jarvis import config
 from jarvis.brain import jarvis_brain
-from jarvis.core import chain, interrupt
+from jarvis.core import chain, desktop, interrupt
+from jarvis.core.schedules import schedule_store
 from jarvis.core import extbridge as _extbridge_mod
 from jarvis.core.confirmations import confirmations
 from jarvis.core.settings_store import settings
@@ -172,6 +173,91 @@ async def _fanout_forever() -> None:
                 _clients.discard(ws)
 
 
+
+# ---------- scheduled routines (slice 50) ----------
+# A schedule fires a SAVED ROUTINE, unattended. Two things make that safe:
+#   * chain.start(unattended=True) -> any non-AUTO step is PARKED, never
+#     prompted at an empty room and never auto-approved.
+#   * the guards below -> it never interrupts the user or steals focus.
+# Measured (Stage 0): realistic routines resolve 4/4 AUTO, so this is not a
+# feature that spends its life parking.
+
+SCHEDULER_TICK_S = 60      # a minute's resolution is what "08:00" means
+
+
+def _run_scheduled(record: dict) -> None:
+    """Run one due schedule's routine with nobody watching.
+
+    Holds _busy for the duration, exactly like every other trigger, so a
+    scheduled run and a user interaction can never overlap.
+    """
+    routine = record["routine"]
+    chain.start(unattended=True)
+    try:
+        from jarvis import primitives   # lazy: server imports before primitives
+        result = primitives.execute("run_routine", {"name": routine})
+        print(f"  [schedule] {routine}: {str(result)[:160]}")
+        if record.get("announce"):
+            try:
+                voice_manager.speak(f"Your {routine} routine has run.")
+            except Exception:
+                pass       # a silent announcement is not a failed run
+    finally:
+        chain.clear("done")
+
+
+def _scheduler_tick(now=None) -> None:
+    """One pass. Separated from the loop so tests drive it with a fake clock
+    instead of waiting real minutes."""
+    from datetime import datetime
+    if not settings.get("schedules.enabled", True):
+        return
+    now = now or datetime.now()
+    grace = int(settings.get("schedules.grace_minutes", 60))
+
+    try:
+        due = schedule_store.due(now, grace_minutes=grace)
+    except Exception:
+        return
+    if not due:
+        return
+
+    # Guards, in cheapest-first order. A skip must NOT consume the window --
+    # the job stays due, so it can still run once the user is free.
+    if desktop.screen_is_claimed():
+        print(f"  [schedule] {len(due)} due, skipped: a fullscreen app is up")
+        return
+    if not _busy.acquire(blocking=False):
+        print(f"  [schedule] {len(due)} due, skipped: an interaction is in flight")
+        return
+    try:
+        for record in due:
+            # Stamp BEFORE running: a crash mid-routine must not leave the job
+            # looking un-run, or the next tick fires it again (risk 3).
+            try:
+                schedule_store.mark_ran_id(record["id"], now)
+            except Exception:
+                pass
+            try:
+                _run_scheduled(record)
+            except Exception as exc:
+                # One bad routine must never kill the scheduler (risk 8).
+                print(f"  [schedule] {record.get('routine')!r} failed: {exc}")
+    finally:
+        _busy.release()
+
+
+async def _scheduler_forever() -> None:
+    """The timer. Same shape and same discipline as _telemetry_forever: an
+    exception here must never take the server down."""
+    while True:
+        await asyncio.sleep(SCHEDULER_TICK_S)
+        try:
+            await run_in_threadpool(_scheduler_tick)
+        except Exception:
+            pass
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     global _loop, _events
@@ -182,6 +268,7 @@ async def _lifespan(app: FastAPI):
     fanout = asyncio.create_task(_fanout_forever())
     telemetry = asyncio.create_task(_telemetry_forever())
     heartbeat = asyncio.create_task(_extension_heartbeat_forever())
+    scheduler = asyncio.create_task(_scheduler_forever())
     start_wake()  # no-op unless wake.enabled
     try:
         yield
@@ -197,6 +284,7 @@ async def _lifespan(app: FastAPI):
         fanout.cancel()
         telemetry.cancel()
         heartbeat.cancel()
+        scheduler.cancel()
 
 
 app = FastAPI(lifespan=_lifespan)

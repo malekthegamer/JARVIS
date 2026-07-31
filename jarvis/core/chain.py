@@ -51,9 +51,14 @@ def status_from_result(result: str) -> str:
 
 
 class ChainTracker:
-    def __init__(self, dry_run: bool = False) -> None:
+    def __init__(self, dry_run: bool = False, unattended: bool = False) -> None:
         self.chain_id = uuid.uuid4().hex[:8]  # groups audit records per think()
         self.dry_run = dry_run              # slice 18: rehearsal — nothing executes
+        # Slice 50: nobody is watching (a scheduled run). Rides the tracker the
+        # same way dry_run does, so the decision is ground truth at RUN time
+        # rather than a guess made when the schedule was created. Any non-AUTO
+        # step is PARKED — never prompted at an empty room, never auto-approved.
+        self.unattended = unattended
         self.steps: list[str] = []          # declared plan (descriptive)
         self.revision = 0                   # bumped per plan_steps call
         self.calls: list[dict] = []         # ground truth: executed tool calls
@@ -179,9 +184,9 @@ def _args_key(args: dict | None) -> str:
 _current: ChainTracker | None = None
 
 
-def start(dry_run: bool = False) -> ChainTracker:
+def start(dry_run: bool = False, unattended: bool = False) -> ChainTracker:
     global _current
-    _current = ChainTracker(dry_run=dry_run)
+    _current = ChainTracker(dry_run=dry_run, unattended=unattended)
     return _current
 
 

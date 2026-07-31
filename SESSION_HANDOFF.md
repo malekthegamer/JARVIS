@@ -33,7 +33,7 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 994 collected** (slice 49). The **non-desktop gate** (desktop-driving
+**Tests: 1034 collected** (slice 50). The **non-desktop gate** (desktop-driving
 tests deselected, so it runs without an idle machine) is now **712 passed / 0
 failed / 0 skipped** (slice 47) — clean since slice 45, because
 slice 45 paces live Gemini calls so quota stops forging failures (it costs ~175s
@@ -244,6 +244,51 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 50 — Scheduled routines: JARVIS acts without being asked
+- **The feature:** *"run work mode every weekday at 8am"*. `schedule_routine` /
+  `list_schedules` / `cancel_schedule`, stored DPAPI-encrypted in
+  `data/schedules.bin`. Scope is **saved routines only** (owner's call) — JARVIS
+  never improvises actions while nobody is watching.
+- **THE CARDINAL RULE — an unattended agent must never approve itself.** A
+  scheduled run sets `chain.start(unattended=True)`, riding the same tracker seam
+  `dry_run` uses, so the decision is ground truth at RUN time. Any non-AUTO step
+  is **PARKED**: not executed, and **no `confirm_request` is even emitted** —
+  prompting an empty room is not a gate, it is a 30s timeout nobody sees.
+- **Stage 0 measured whether AUTO-only is useful or hollow** — through the REAL
+  classifiers (18 of 44 primitives decide their tier from args at run time):
+
+  | routine | result |
+  |---|---|
+  | morning (launch_app, set_volume, set_dnd, set_brightness) | **4/4 AUTO** |
+  | evening (set_dnd, media_key, set_volume, set_brightness) | **4/4 AUTO** |
+  | digest (web_search, screen_query, read_ui_tree, get_volume) | **4/4 AUTO** |
+  | hostile (close_window, delete_file, run_shell) | 1/4 — **3 park** |
+
+  Realistic scheduled routines run start to finish; the parking path still has
+  real things to catch. The rule bounds the feature without gutting it.
+- **⚠ A FALSE REPORT the live harness caught, and unit tests did not.** A parked
+  step was counted as done: the run announced *"all 2 steps completed
+  (set_volume, run_shell)"* when `run_shell` had been PARKED and never ran. The
+  step was safely not executed — but the REPORT was a lie, which is exactly the
+  half-run-reported-as-success failure the routine contract forbids. Now parked
+  steps are tracked separately and reported: *"1 of 2 steps completed … SKIPPED,
+  needs your approval: step 2 (run_shell). Those did NOT run."* A parked step
+  does **not** stop the routine — the remaining AUTO steps are still wanted at
+  8am. Pinned by two tests.
+- **Never interrupts the user:** skipped (and logged) when `_busy` is held or a
+  **fullscreen app is up**. That check existed ONLY in `tests/conftest.py` —
+  guarding test runs while the product had none, so a scheduled routine would
+  have launched apps mid-race. Now `jarvis/core/desktop.py`, shared by both; a
+  skip does **not** consume the window, so the job can still run later.
+- **Never twice, never hours late:** `last_run` is stamped BEFORE execution (a
+  crash mid-run must not re-fire next tick), and anything more than
+  `grace_minutes` (60) late is missed, not replayed — 8am must not fire at 6pm.
+- **Live-proven** (`tests/harness_scheduled.py`): a real schedule fired and
+  changed the volume (readback), did not re-fire in the same minute, and parked
+  a `run_shell` step with zero prompts.
+- Kill switch `schedules.enabled` (both directions); schedules join the prompt
+  block beside routine names.
 
 ### Slice 49 — Barge-in: cut JARVIS off mid-sentence
 - **The feature:** say "hey jarvis" while it is talking or acting, or click the

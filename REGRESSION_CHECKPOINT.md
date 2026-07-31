@@ -27,7 +27,26 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (994 tests as of slice 49)
+## 1. Regression signal — test suite (1034 tests as of slice 50)
+
+### Slice 50 — Scheduled routines
+- **The invariant to protect in any refactor:** a scheduled run sets
+  `unattended=True`, and `_execute_inner` PARKS any non-AUTO step BEFORE the
+  gate — so no `confirm_request` is emitted. Pinned by
+  `test_unattended_never_emits_a_confirm_request`. If that ever regresses,
+  JARVIS is prompting a room with nobody in it and timing out into a cancel.
+- **Regression to watch:** a PARKED step must never be counted as completed.
+  The live harness caught the run claiming "all 2 steps completed" when one had
+  parked; unit tests missed it. Pinned by
+  `test_a_parked_step_is_not_counted_as_completed`.
+- **Stage 0 (re-runnable):** realistic routines resolve 4/4 AUTO through the real
+  classifiers, hostile parks 3/4. If a future tier change makes ordinary steps
+  CONFIRM, scheduling silently becomes useless — re-run
+  `scratchpad/probe_schedule_tiers.py`.
+- Guards: skipped while `_busy` or fullscreen, and a skip must NOT consume the
+  window. `last_run` stamped BEFORE execution (no double-fire).
+- `jarvis/core/desktop.py` is now the ONE definition of "screen is claimed";
+  `tests/conftest.py` imports it. Do not re-copy it.
 
 ### Slice 49 — Barge-in
 - **Live-measured:** 14.4s utterance interrupted 1.0s in stopped at **1.0s**;

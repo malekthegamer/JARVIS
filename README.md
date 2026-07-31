@@ -126,6 +126,28 @@ Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive a
 dedicated real Chrome) and, beneath it, `web.allow_actions` (let it click and
 type on your sites).
 
+### Running a routine on a schedule
+
+> *"Run work mode every weekday at 8am."*
+
+Once a routine is saved, you can give it a time. `list_schedules` shows what's
+set and when each last ran.
+
+**What it will and won't do while you're not there.** Steps that need your
+approval are **skipped, not run** — JARVIS never approves anything on your
+behalf. It'll tell you exactly which steps it skipped so you can do them
+yourself. In practice this rarely bites: opening apps, volume, brightness and
+Do Not Disturb all run fine unattended; things like deleting files or running
+shell commands are what get skipped.
+
+It also won't interrupt you. If you're mid-conversation with it, or a
+**fullscreen app or game is running**, the scheduled run is skipped rather than
+stealing your screen. And if your PC was asleep at 8am, the routine does *not*
+ambush you at 6pm — more than an hour late counts as missed.
+
+Times are your local clock. The honest edge: on the two days a year the clocks
+change, a job may run an hour off.
+
 ### Cutting it off
 
 Talking too long? Say **"hey jarvis"** while it's speaking, or click the amber
