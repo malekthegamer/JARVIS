@@ -261,6 +261,48 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 54 — Test integrity: two leaks closed, one honestly not
+The backlog named three leaks. **Two are fixed with before/after evidence; the
+third did not reproduce and its obvious fix would destroy user data.**
+
+- **(b) FIXED — the accidental alphabetical dependency.**
+  `test_extension_browser.py` called `uvicorn.run()` inside a `daemon=True`
+  thread, which can never be shut down, so it held port 8000 for the **rest of
+  the pytest process**. `test_entrypoint_smoke.py` launches the real `pythonw
+  tray_start.pyw` and needs that port — it passed only because `test_ent…`
+  sorts before `test_ext…`. Renaming either file would have broken the suite
+  for reasons nobody would connect to a rename.
+  Now uses `uvicorn.Server` + `should_exit`, releasing the port at teardown
+  (including on the extension-never-connected failure path).
+  **PROOF:** running the two files in the *reverse* order — previously
+  impossible — now gives **34 passed**. Plus `pytest_sessionfinish` fails loudly
+  if *any* test leaves the port bound, which is order-independent by design.
+- **(c) FIXED — tests were destroying real recoverable user files.**
+  MEASURED by snapshotting `data/` around a run rather than by assumption:
+  ```
+  + created  data/agent_trash/<token>/test.txt
+  - DELETED  data/agent_trash/<token>/chain-gate.txt
+  ```
+  Deleting a caged file *quarantines* it (slice 26) so it can be restored, and
+  the quarantine keeps only `TRASH_MAX_ENTRIES` (20) before purging the oldest
+  **for real**. So a long enough test run **evicts a user's recoverable file** —
+  silently breaking the undo promise with actual data loss. A second autouse
+  conftest fixture now re-points the cage per test; `_trash_root()` derives from
+  it, so both isolate together. **PROOF:** same snapshot, now `CLEAN`.
+- **(a) NOT FIXED — stated plainly.** The `scrollpad.txt` Notepad leak
+  reproduced **once** (after `test_chain_live.py`) and then would not reproduce
+  on demand — it is real but intermittent, driven by Win11 Notepad's session
+  restore. The obvious fix, clearing `…Microsoft.WindowsNotepad…/TabState`,
+  **would delete the user's own unsaved Notepad tabs** (23 files present on this
+  machine). Destroying real user data to stabilise a test is a bad trade, so it
+  is left open and documented rather than "fixed". `_kill_notepad()` already
+  runs in a `finally`; the residue is Notepad's, not the test's.
+- **Files:** `tests/test_extension_browser.py` (stoppable server),
+  `tests/conftest.py` (`pytest_sessionfinish` port check +
+  `_isolated_agent_workspace`), `tests/_ports.py` (guidance no longer describes
+  a fixed bug), `tests/test_entrypoint_smoke.py` (asserts the intent, not the
+  old wording), `tests/test_files.py` (2 pins).
+
 ### Slice 53 — `input.enabled`: the missing kill switch
 - **The gap:** shell, fs, web, search, email, vision, routines and schedules each
   had a switch. **Arbitrary mouse and keyboard — the surface that can drive any
@@ -1580,7 +1622,11 @@ back green end to end.
    type_text / press_keys / scroll, withheld from the schema AND refused at
    execute(); `media_key` deliberately excluded (fixed enum, not steerable) and
    test-pinned; reading verbs survive the switch.
-3. **Test-integrity slice** *(three known leaks, all costing real signal)*:
+3. ~~Test-integrity slice~~ **MOSTLY DONE (slice 54)** — (b) the uvicorn/port
+   ordering dependency and (c) tests destroying real quarantined user files are
+   both fixed with before/after evidence. **(a) remains open**: the Notepad
+   session-restore leak is intermittent and the obvious fix would delete the
+   user's real unsaved Notepad tabs. Original text:
    (a) `test_input.py` leaves an unsaved `scrollpad.txt` Notepad that Win11
    session-restore reopens, breaking `test_close_window_closes_notepad` in a
    later run; (b) `test_extension_browser.py` leaks a uvicorn daemon thread, so

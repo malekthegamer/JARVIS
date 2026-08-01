@@ -86,8 +86,37 @@ def pytest_runtest_teardown(item, nextitem):
             getattr(item.config, "_jarvis_pacer_rearms", 0) + 1
 
 
+def pytest_sessionfinish(session, exitstatus):
+    """SLICE 54 — order-independent leak detector for the server port.
+
+    test_extension_browser.py used to start uvicorn in a daemon thread it never
+    stopped, holding port 8000 for the rest of the process. test_entrypoint_
+    smoke.py needs that port and passed only because alphabetical collection put
+    it first — an accidental dependency that a file rename would have silently
+    broken.
+
+    That fixture now shuts its server down, and this hook makes the guarantee
+    mechanical: if ANY test leaves the port bound by the end of the run, say so
+    loudly and name the holder. Checking here rather than in a test keeps it
+    independent of collection order, which is the entire point.
+    """
+    from tests._ports import port_free, port_holder
+
+    from jarvis import config as jconfig
+    if not port_free(jconfig.SERVER_PORT):
+        session.config._jarvis_port_leak = (
+            f"PORT LEAK: {jconfig.SERVER_PORT} is still bound at session end by "
+            f"{port_holder(jconfig.SERVER_PORT)}. A test started a server and "
+            f"never stopped it; the next run's real-server tests will fail with "
+            f"a confusing error.")
+
+
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """Report the COST beside the win — never hide what pacing charged us."""
+    leak = getattr(config, "_jarvis_port_leak", None)
+    if leak:
+        terminalreporter.write_line("")
+        terminalreporter.write_line(leak, red=True)
     pacer = getattr(config, "_jarvis_pacer", None)
     if pacer is not None:
         terminalreporter.write_line("")
@@ -106,8 +135,46 @@ def _isolated_audit_log(tmp_path, monkeypatch):
     Without this, every full-suite run appends hundreds of test records —
     including live email bodies — to the REAL data/audit/ log. Splices reach
     the singleton via the module attribute (audit.audit_log), so this swap
-    always intercepts. This is deliberately the only autouse fixture in
-    conftest (a named deviation from the bare-conftest precedent)."""
+    always intercepts. One of exactly TWO autouse fixtures in conftest (a named
+    deviation from the bare-conftest precedent); the other is
+    _isolated_agent_workspace below, added by slice 54 for the same reason."""
     from jarvis.core import audit
     monkeypatch.setattr(
         audit, "audit_log", audit.AuditLog(tmp_path / "audit" / "audit.jsonl"))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_agent_workspace(tmp_path, monkeypatch):
+    """Slice 54: point the workspace cage — and therefore its QUARANTINE — at a
+    per-test temp dir.
+
+    MEASURED, not assumed. Snapshotting data/ around a run showed real user
+    state being mutated:
+
+        + created  data/agent_trash/<token>/test.txt
+        - DELETED  data/agent_trash/<token>/chain-gate.txt
+
+    Tests that write into the real cage (test_chain.py, test_confirm_
+    primitives.py, test_agent_loop.py, test_email_live.py) quarantine their
+    deletions into the REAL data/agent_trash. That directory keeps only
+    TRASH_MAX_ENTRIES (20) before `_purge_old_trash()` deletes the oldest for
+    real — so a long enough test run can EVICT A USER'S RECOVERABLE FILE. The
+    undo promise ("deleting quarantines it first, so it can be restored") is
+    exactly what breaks.
+
+    `files._trash_root()` derives from AGENT_FILES_DIR at call time, so
+    re-pointing this one attribute isolates both the cage and the trash. Every
+    consumer reads it as `files.AGENT_FILES_DIR` (module attribute), so the
+    monkeypatch always intercepts — verified by grep before relying on it.
+
+    The temp dir is deliberately NOT named "agent_files": several files already
+    define their own `tmp_workspace` fixture doing
+    `(tmp_path / "agent_files").mkdir()` with no exist_ok, so sharing the name
+    made those collide with FileExistsError. A distinct name lets both live in
+    the same tmp_path, and a test that re-points AGENT_FILES_DIR itself simply
+    wins — this fixture only supplies the default.
+    """
+    from jarvis.primitives import files
+    ws = tmp_path / "_default_agent_ws"
+    ws.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(files, "AGENT_FILES_DIR", ws)

@@ -254,8 +254,16 @@ def test_a_busy_port_fails_with_an_actionable_message():
     # owner to quit an app that is not the problem. The two causes need
     # different fixes, which is the whole point of naming the holder.
     assert str(os.getpid()) in msg, f"must name the holding pid: {msg}"
-    assert "run this file first or alone" in msg, \
-        f"self-held port must give the ordering fix, not 'quit JARVIS': {msg}"
+    # Slice 54 changed this guidance ON PURPOSE. It used to say "run this file
+    # first or alone", which was a WORKAROUND for the leaked uvicorn thread in
+    # test_extension_browser.py. That leak is fixed, so telling a future reader
+    # to reorder their run would send them chasing a bug that no longer exists.
+    # The requirement is unchanged — a self-held port must diagnose ITSELF and
+    # never tell the owner to quit an app that is not the problem.
+    assert "quit the running JARVIS" not in msg, \
+        f"self-held port must not blame the owner's app: {msg}"
+    assert "never stopped it" in msg, \
+        f"self-held port must point at the leaking fixture: {msg}"
 
 
 # ------------------------------------------------------------ venv fidelity

@@ -69,15 +69,37 @@ def ext_browser():
     settings.set("web.profile_mode", "extension", persist=False)
     settings.set("web.extension_id", ext_id, persist=False)
 
-    def serve():
-        import uvicorn
-        uvicorn.run("jarvis.server:app", host=config.SERVER_HOST,
-                    port=config.SERVER_PORT, log_level="error")
-
-    threading.Thread(target=serve, daemon=True).start()
+    # SLICE 54: a STOPPABLE server, not a fire-and-forget daemon thread.
+    #
+    # This used to be `uvicorn.run(...)` inside `threading.Thread(daemon=True)`,
+    # which can never be shut down — it held port 8000 for the REST of the pytest
+    # process. test_entrypoint_smoke.py launches the real `pythonw
+    # tray_start.pyw`, which needs that port, and only passed because
+    # alphabetical collection happens to run "test_ent..." before "test_ext...".
+    # That is an ACCIDENTAL ordering dependency: renaming either file would have
+    # broken the suite for reasons nobody would connect to a rename.
+    #
+    # uvicorn.Server exposes should_exit, so the port is released at teardown and
+    # the two files stop depending on their own alphabetical luck. Pinned by
+    # test_extension_fixture_releases_the_port.
+    import uvicorn
+    _uv_server = uvicorn.Server(uvicorn.Config(
+        "jarvis.server:app", host=config.SERVER_HOST,
+        port=config.SERVER_PORT, log_level="error"))
+    _uv_thread = threading.Thread(target=_uv_server.run, daemon=True)
+    _uv_thread.start()
     deadline = time.time() + 30
     while time.time() < deadline and _port_free(config.SERVER_PORT):
         time.sleep(0.3)
+
+    def _stop_server():
+        _uv_server.should_exit = True
+        _uv_thread.join(timeout=15)
+        # Actively wait for the OS to release the socket — a still-bound port is
+        # the whole failure mode, so teardown asserts it is really gone.
+        end = time.time() + 10
+        while time.time() < end and not _port_free(config.SERVER_PORT):
+            time.sleep(0.3)
 
     profile = Path(tempfile.mkdtemp(prefix="jarvis-ext-test-"))
     from playwright.sync_api import sync_playwright
@@ -95,6 +117,7 @@ def ext_browser():
     if not extbridge.bridge.connected():
         ctx.close(); pw.stop()
         shutil.rmtree(profile, ignore_errors=True)
+        _stop_server()          # the failure path leaked the port too
         pytest.fail(f"the extension never connected (expected id {ext_id})")
 
     from jarvis.primitives import web
@@ -107,6 +130,7 @@ def ext_browser():
         shutil.rmtree(profile, ignore_errors=True)
         settings.set("web.profile_mode", prev_mode, persist=False)
         settings.set("web.extension_id", prev_id, persist=False)
+        _stop_server()
 
 
 def _open_pages(ctx) -> list[str]:

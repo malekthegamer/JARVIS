@@ -40,15 +40,21 @@ def busy_port_message(port: int, why: str) -> str:
 
     Two genuinely different causes, so the message distinguishes them:
       * the OWNER's JARVIS is running   -> quit it
-      * a previous test file still holds it -> test_extension_browser.py starts
-        uvicorn in a daemon thread it never shuts down, so it owns the port for
-        the REST of the pytest process. Alphabetical collection puts
-        test_entrypoint_smoke.py first, which is why the full suite works; run
-        them in the other order and it will not.
+      * a previous test file still holds it -> a fixture started a server and
+        did not stop it.
+
+    SLICE 54 removed the known instance of the second cause: test_extension_
+    browser.py used to call uvicorn.run() inside a daemon thread that could
+    never be shut down, so it owned the port for the REST of the pytest process
+    and test_entrypoint_smoke.py passed only by alphabetical luck. It now uses
+    uvicorn.Server + should_exit and releases the port at teardown, and
+    conftest's pytest_sessionfinish fails loudly if anything still holds it.
+    The branch below stays as a general detector, not a description of a
+    known-live bug.
     """
     holder = port_holder(port)
-    hint = ("a previous test file in this run still holds it (test_extension_"
-            "browser.py leaks its uvicorn thread) — run this file first or alone"
+    hint = ("a fixture in this run started a server and never stopped it — "
+            "find it (conftest's session-end check names the holder)"
             if "THIS pytest process" in holder else
             "quit the running JARVIS (tray icon → Quit, or Stop-Process it)")
     return (f"port {port} is held by {holder}. {hint}, then re-run. {why}")

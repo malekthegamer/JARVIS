@@ -250,3 +250,45 @@ def test_live_write_then_read_note(ws):
     tools = [m.get("name") for m in brain.history if m.get("role") == "tool"]
     assert "write_file" in tools and "read_file" in tools, tools
     assert marker in reply, f"the reply didn't relay the file content: {reply[:200]}"
+
+
+# ---- slice 54: the workspace cage must never be the REAL one during tests ----
+
+def test_the_agent_workspace_is_isolated_from_real_user_state():
+    """MEASURED LEAK, now pinned. Snapshotting data/ around a test run showed:
+
+        + created  data/agent_trash/<token>/test.txt
+        - DELETED  data/agent_trash/<token>/chain-gate.txt
+
+    Deleting a caged file QUARANTINES it (slice 26) so it can be restored, and
+    the quarantine keeps only TRASH_MAX_ENTRIES before purging the oldest for
+    real. Tests writing into the real cage therefore push a USER'S recoverable
+    file out of the quarantine — silently breaking the undo promise with actual
+    data loss. conftest's _isolated_agent_workspace re-points the cage per test;
+    this asserts it is actually in effect.
+    """
+    from jarvis import config
+    from jarvis.primitives import files
+
+    ws = files.AGENT_FILES_DIR.resolve()
+    real_data = config.DATA_DIR.resolve()
+
+    assert ws != (real_data / "agent_files"), \
+        "tests are writing into the REAL agent workspace"
+    assert real_data not in ws.parents, \
+        f"the test workspace {ws} is inside real user data {real_data}"
+
+
+def test_the_quarantine_follows_the_isolated_workspace():
+    """_trash_root() derives from AGENT_FILES_DIR, which is the only reason
+    isolating one attribute isolates both. If that derivation is ever changed to
+    a hardcoded path, the leak returns silently — so assert the relationship,
+    not just the workspace."""
+    from jarvis import config
+    from jarvis.primitives import files
+
+    trash = files._trash_root().resolve()
+    assert trash.parent == files.AGENT_FILES_DIR.resolve().parent, \
+        "the quarantine no longer derives from AGENT_FILES_DIR"
+    assert config.DATA_DIR.resolve() not in trash.parents, \
+        f"the quarantine {trash} still points at real user data"
