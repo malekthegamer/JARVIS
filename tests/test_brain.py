@@ -567,3 +567,76 @@ def test_shared_chain_is_just_the_active_model_when_no_fallbacks():
     settings.set("brain.models.gemini", "m-only", persist=False)
     settings.set("brain.fallback_models", [], persist=False)
     assert model_chain() == ["m-only"]
+
+
+# ---- Slice 52: the fallback model must have real headroom ----
+# MEASURED 2026-08-01 by bursting each candidate and READING the 429's quotaId
+# (scratchpad/probe_fallback_candidates.py). All three passed tool calling
+# against the real 40-tool schema AND vision Q&A, so capability was never the
+# discriminator -- the quota AXIS was:
+#
+#   gemini-2.5-flash       DAILY ceiling 20      <- incumbent; tripped its DAY
+#                                                   limit before its minute one
+#   gemini-2.5-flash-lite  per-minute 10         <- daily bucket intact, but 10
+#                                                   RPM is BELOW the pacer budget
+#   gemini-3.5-flash-lite  per-minute 15         <- daily intact, RPM matches the
+#                                                   primary; CHOSEN
+#
+# "Daily intact" means the burst hit a PerMinute quotaId, i.e. the daily ceiling
+# is above the burst size (24) -- NOT that it is unlimited. The exact daily cap
+# for the lite models is unmeasured; strictly-better-than-20 is the claim.
+
+MEASURED_RPM_CAPS = {
+    "gemini-3.1-flash-lite": 15,
+    "gemini-3.5-flash-lite": 15,
+    "gemini-2.5-flash-lite": 10,
+    "gemini-2.5-flash": 15,
+}
+
+
+def test_default_fallback_model_is_not_the_daily_capped_one():
+    """A fallback exists for exhaustion. One whose OWN daily ceiling trips first
+    is decoration -- slice 51 proved gemini-2.5-flash dies after 20 requests."""
+    from jarvis.core.settings_store import DEFAULT_SETTINGS
+
+    chain = DEFAULT_SETTINGS["brain"]["fallback_models"]
+    assert "gemini-2.5-flash" not in chain, (
+        "gemini-2.5-flash has a DAILY ceiling of 20 requests (measured slice 51) "
+        "— it cannot rescue an exhausted primary")
+    assert chain == ["gemini-3.5-flash-lite"], chain
+
+
+def test_pacer_budget_fits_every_model_in_the_default_chain():
+    """THE REASON gemini-2.5-flash-lite was rejected despite passing capability.
+
+    The pacer paces every model at ONE budget. A chain member whose real RPM cap
+    is BELOW that budget gets paced too fast, 429s, and manufactures exactly the
+    false failures slice 45 existed to remove. So the invariant is mechanical:
+    every model we ship in the chain must tolerate the pacer's rate."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _pacer import DEFAULT_BUDGET_PER_MIN
+
+    from jarvis.core.settings_store import DEFAULT_SETTINGS
+
+    active = DEFAULT_SETTINGS["brain"]["models"]["gemini"]
+    for model in [active] + DEFAULT_SETTINGS["brain"]["fallback_models"]:
+        cap = MEASURED_RPM_CAPS.get(model)
+        assert cap is not None, (
+            f"{model} is in the shipped chain but its RPM cap was never "
+            f"measured — measure it before shipping it")
+        assert cap >= DEFAULT_BUDGET_PER_MIN, (
+            f"{model} caps at {cap} RPM but the test pacer runs at "
+            f"{DEFAULT_BUDGET_PER_MIN}/min — it would 429 under pacing and "
+            f"forge failures")
+
+
+def test_the_chain_actually_changes_model_between_attempts():
+    """Guard against a chain that 'falls back' to the same bucket it just
+    exhausted — that would retry a bucket already known to be dry."""
+    from jarvis.core.settings_store import DEFAULT_SETTINGS
+
+    active = DEFAULT_SETTINGS["brain"]["models"]["gemini"]
+    assert active not in DEFAULT_SETTINGS["brain"]["fallback_models"], \
+        "the fallback list must not contain the active model"

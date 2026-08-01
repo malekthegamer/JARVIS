@@ -16,13 +16,28 @@ from jarvis import config
 DEFAULT_SETTINGS: dict[str, Any] = {
     "brain": {
         "active": "gemini",
-        # Slice 44 — models to retry on when the active one is rate-limited,
-        # quota-exhausted or unreachable. MEASURED: sibling Gemini models
-        # have SEPARATE rate-limit buckets (gemini-2.5-flash answered while
-        # flash-lite was 429), which is the only reason this helps. Only
-        # models PROVEN to return correct tool calls belong here —
-        # gemini-2.0-flash could not be proven and is excluded.
-        "fallback_models": ["gemini-2.5-flash"],
+        # Models to retry on when the active one is rate-limited, quota-exhausted
+        # or unreachable. MEASURED (slice 44): sibling Gemini models have
+        # SEPARATE quota buckets, which is the only reason this helps at all.
+        #
+        # SLICE 52 REPLACED THE ENTRY HERE. It was gemini-2.5-flash, which slice
+        # 51 caught dying after 20 requests — it trips a DAILY ceiling before its
+        # per-minute one, so it could not rescue an exhausted primary, which is
+        # the whole job. Candidates were re-measured by bursting each until 429
+        # and reading the quotaId to learn WHICH axis was hit:
+        #
+        #   gemini-2.5-flash       DAILY ceiling 20    rejected — the bug
+        #   gemini-2.5-flash-lite  per-minute 10       rejected — 10 RPM is under
+        #                                              the test pacer's 12 budget,
+        #                                              so it would forge failures
+        #   gemini-3.5-flash-lite  per-minute 15       CHOSEN — daily bucket
+        #                                              survived a 24-call burst
+        #
+        # All three passed tool calling against the real 40-tool schema and real
+        # vision Q&A, so capability was never the discriminator — quota was.
+        # gemini-2.0-flash remains excluded (unproven for tool calls, slice 44).
+        # Pinned by test_pacer_budget_fits_every_model_in_the_default_chain.
+        "fallback_models": ["gemini-3.5-flash-lite"],
         "models": {
             # Verified live 2026-07-08: returns "pong". Swap here if it 404s.
             "gemini": "gemini-3.1-flash-lite",

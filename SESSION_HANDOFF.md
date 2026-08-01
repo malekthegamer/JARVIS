@@ -261,6 +261,40 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 52 — The fallback model gets real headroom
+- **The bug slice 51 found:** the shipped fallback `gemini-2.5-flash` trips a
+  **DAILY ceiling of 20 requests** before its per-minute one. A fallback exists
+  to survive exhaustion; one that dies first is decoration. This affected both
+  slice 44's brain chain and slice 51's vision Q&A chain.
+- **How candidates were measured** (`probe_fallback_candidates.py`): burst each
+  until 429, then **read the `quotaId`** — `...PerMinute...` means the daily
+  bucket is still intact, `...PerDay...` means you found the real ceiling.
+  Capability was probed FIRST (real 40-tool schema + real vision Q&A) so quota
+  was never spent on an unusable model.
+
+  | candidate | tool calls | vision Q&A | limit hit |
+  |---|---|---|---|
+  | `gemini-2.5-flash` (incumbent) | ✅ | ✅ | **DAILY 20** — the bug |
+  | `gemini-2.5-flash-lite` | ✅ | ✅ | per-minute 10 |
+  | `gemini-3.5-flash-lite` | ✅ | ✅ | per-minute 15 — **CHOSEN** |
+  | `gemini-2.0-flash` | ✖ (429, untestable) | — | still excluded (slice 44) |
+
+- **Capability was never the discriminator — quota was.** All three real
+  candidates returned a correct `set_volume` tool call against the full 40-tool
+  schema and read the 30px heading off a real screenshot.
+- **Why not `gemini-2.5-flash-lite` too, despite it passing?** Its cap is **10
+  RPM, below the test pacer's 12/min budget** — shipping it would pace it past
+  its own limit and manufacture exactly the false failures slice 45 removed.
+  That reasoning is now a mechanical test
+  (`test_pacer_budget_fits_every_model_in_the_default_chain`): any model added to
+  the chain must have a MEASURED RPM cap ≥ the pacer budget, or the test fails.
+- **Honest limit of the claim:** "daily bucket intact" means the 24-call burst
+  hit a per-minute wall first, so the daily ceiling is **above 24** — not that it
+  is large or unlimited. Strictly-better-than-20 is what was proven.
+- **Files:** `jarvis/core/settings_store.py` (the default chain + the full
+  measurement table), `tests/test_brain.py` (3 pins). No user migration needed —
+  `fallback_models` was never persisted in `data/settings.json`.
+
 ### Slice 51 — Vision inherits the brain's model fallback (Q&A path ONLY)
 - **The gap:** slice 44 built the model fallback chain for `brain.think()` only.
   `vision.py` has three Gemini call sites that never retried. Note the backlog
@@ -1507,20 +1541,14 @@ back green end to end.
 
 ### Recommended next, in order
 
-1. **The fallback MODEL itself is nearly useless for exhaustion** *(new, found
-   by slice 51; supersedes the old item 1, which is now DONE)*. `gemini-2.5-flash`
-   reported a free-tier ceiling of **20 requests** on a daily-labelled quota —
-   ~2 orders of magnitude below the primary. So both slice 44's brain chain and
-   slice 51's vision Q&A chain only rescue **per-minute bursts**; against
-   sustained exhaustion the fallback is exhausted too. Neither would have saved
-   the slice-49 gate that motivated the work. **The fix is to pick a better
-   fallback model, not to add more chains**: probe sibling models for a larger
-   free-tier daily quota and change `brain.fallback_models` (one setting, fixes
-   brain AND vision at once). Probe with a fresh bucket; note a *successful*
-   probe call proves nothing about headroom — burst it.
-   ~~Vision has NO brain fallback chain~~ — **DONE (slice 51)**, Q&A path only;
-   locate and verify are deliberately, test-pinned EXCLUDED after measuring the
-   fallback at 1/7 on localization. Do not "finish the job" — read §2 slice 51.
+1. ~~Vision has no fallback chain~~ **DONE (slice 51)** — Q&A path only; locate
+   and verify are deliberately, test-pinned EXCLUDED after measuring the fallback
+   at 1/7 on localization. Do not "finish the job" — read §2 slice 51.
+   ~~The fallback model is useless for exhaustion~~ **DONE (slice 52)** —
+   replaced `gemini-2.5-flash` (daily ceiling 20) with `gemini-3.5-flash-lite`
+   (daily bucket survives a 24-call burst, 15 RPM). Adding any further model to
+   the chain is now gated by a mechanical test: its MEASURED RPM cap must be ≥
+   the pacer budget, else it forges failures.
 2. **`input.enabled` kill switch** *(safety completeness)*. Every capability has
    one — shell, fs, web, search, email, vision, routines, schedules — **except
    mouse and keyboard**, which is the most powerful surface of all. The
