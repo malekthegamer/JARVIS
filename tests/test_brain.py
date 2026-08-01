@@ -747,3 +747,72 @@ def test_trim_still_starts_on_a_user_message_and_respects_the_cap():
 
     assert len(b.history) <= limit, f"cap breached: {len(b.history)} > {limit}"
     assert b.history[0]["role"] == "user", b.history[0]
+
+
+# ==================== slice 57 stage 4: the film-JARVIS voice ====================
+# Persona was ONE adjective ("witty") against ~90 lines of tooling rules, with no
+# tone, length or variation guidance -- so replies came out as generic-assistant
+# prose and acknowledgements repeated verbatim.
+#
+# This is ALSO a latency fix, which is why it earns budget in a 4-day plan:
+# stage 1 measured a four-sentence reply taking ~17 SECONDS to speak aloud.
+# Every sentence removed is worth far more than any millisecond saved in
+# synthesis, so brevity is a performance requirement, not a style preference.
+
+def test_the_persona_specifies_brevity_and_not_just_a_mood():
+    from jarvis.brain import BASE_SYSTEM_PROMPT
+
+    lowered = BASE_SYSTEM_PROMPT.lower()
+    assert "one sentence is your default" in lowered, \
+        "the prompt must state a concrete length target, not just 'be concise'"
+    assert "vary your acknowledgements" in lowered, \
+        "without this the model repeats the same opener every turn"
+
+
+def test_the_old_hedged_persona_lines_are_gone():
+    """'witty' asserted once and 'sir occasionally' produced neither wit nor
+    the character — the film's JARVIS says 'sir' habitually."""
+    from jarvis.brain import BASE_SYSTEM_PROMPT
+
+    lowered = BASE_SYSTEM_PROMPT.lower()
+    assert "a witty and highly capable" not in lowered
+    assert "'sir' occasionally" not in lowered
+
+
+def test_humour_is_specified_as_restraint_not_as_jokes():
+    """The failure mode of 'be funny' in a system prompt is a model that makes
+    puns. The character is dry, not comic."""
+    from jarvis.brain import BASE_SYSTEM_PROMPT
+
+    lowered = BASE_SYSTEM_PROMPT.lower()
+    assert "understatement" in lowered
+    assert "never enthusiastic" in lowered
+
+
+def test_live_replies_are_actually_short():
+    """THE MEASUREMENT, not the intention. A prompt that asks for brevity and
+    does not get it is worthless, and the cost is paid in seconds of speech.
+
+    Simple questions must come back in roughly one sentence. The bar is
+    deliberately generous (<= 30 words) so this fails only on real regression,
+    not on a model having a slightly wordy day."""
+    from jarvis import config
+    from jarvis.brain import JarvisBrain
+
+    if not config.get_api_key("gemini"):
+        pytest.skip("GEMINI_API_KEY not configured")
+
+    prompts = [
+        "what is the capital of France?",
+        "set the volume to 40 percent",
+        "what is 17 times 3?",
+    ]
+    lengths = []
+    for p in prompts:
+        b = JarvisBrain()          # fresh history: no cross-talk between prompts
+        reply = b.think(p)
+        lengths.append(len(reply.split()))
+
+    worst = max(lengths)
+    assert worst <= 30, \
+        f"replies are too long to speak comfortably: {worst} words, all={lengths}"
