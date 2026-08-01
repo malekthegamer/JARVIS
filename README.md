@@ -90,7 +90,7 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
 
 ## What it can actually do
 
-40 registered primitives, each individually tested:
+48 registered primitives, each individually tested:
 
 - **Apps & windows** — `launch_app` (Start Menu, desktop shortcuts, Steam and
   Epic libraries), `close_window`, `read_ui_tree`
@@ -105,9 +105,16 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
 - **Comms** — `send_email` (Gmail API, send-only scope)
 - **Shell** — `run_shell`
 - **Memory** — remembers facts you explicitly ask it to keep, encrypted at rest
+- **Screen** — `screen_query` ("what am I looking at?", "what does this error
+  say?") — reads your screen with a vision model
+- **Routines** — `save_routine`, `run_routine`, `list_routines`,
+  `delete_routine`: name a set of steps, then just say the name
+- **Schedules** — `schedule_routine`, `list_schedules`, `cancel_schedule`: run a
+  routine every day / weekday / week at a set time
 
 Plus: multi-step chains with a visible plan, a vision fallback for icon-only
-controls, dry-run mode (`dry run: …`), and `undo_last_action`.
+controls, dry-run mode (`dry run: …`), `undo_last_action`, and **barge-in** —
+say "hey jarvis" or press the STOP button to cut it off mid-sentence.
 
 ## Turning capabilities off
 

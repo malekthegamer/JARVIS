@@ -9,14 +9,24 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–33), grouped by area:**
+**Capability set, built slice by slice (1–50), grouped by area:**
+- **Autonomy (slices 47–50 — the newest layer):** **routines** (`save_routine` —
+  name a chain of steps, say "work mode" to replay it; steps are DATA, never
+  authority, so every one re-gates on every run), **scheduled routines**
+  (`schedule_routine` — "every weekday at 8am"; runs **unattended**, which means
+  any step needing approval is **PARKED not prompted**, and it skips rather than
+  interrupt you mid-game or mid-conversation), **barge-in** (say "hey jarvis" or
+  hit the HUD's amber STOP while it is talking — measured 14.4s → 1.0s; stops
+  speech AND further steps), and **screen-aware Q&A** (`screen_query` — "what am
+  I looking at?", reads 12px text off a real screenshot).
 - **Core loop & HUD:** voice loop (push-to-talk + wake word), a reactive HUD (orb states, transcript, Action Log, telemetry, chain plan strip), a fail-closed **CONFIRM** gate + hard **BLOCKED** tier, real **multi-step agentic chains** (visible plan, replan, retry guards).
 - **PC control:** launch/close/read-screen/click/type/press/**scroll** primitives (click supports `kind=single|double|right` — slice 29), a **vision fallback** for icon-only controls (measured accuracy + pre-click point verification so the control you approve is the control that gets clicked), **app discovery** (desktop shortcuts + Steam + Epic library URIs — not just registry App Paths), **smooth cursor motion**, and a **win32 latency fix** that cut a typical multi-step chain from 34.4 s to ~5.3 s.
 - **Wider verbs:** browser tab list/close, **caged file authoring** (write/read/search/delete in `data/agent_files/` — write is AUTO-create/CONFIRM-overwrite and undoable; slice 30), **real-filesystem access** (slices 32-33: `list_directory`/`delete_path`/`create_shortcut` + `write_path`/`read_path`/`move_path`/`rename_path`/`copy_path` ANYWHERE on the PC — deletes AND overwrites go to the Recycle Bin, every mutation CONFIRM-gated on the verbatim path, catastrophic paths BLOCKED, `fs.enabled` kill-switch), **clipboard** (get/set — AUTO, content redacted from the audit log; slice 31), volume/media/brightness, **`run_shell`** (denylist + verbatim-confirm + tree-kill), **`send_email`** (Gmail API, verbatim-confirm, caged attachments), **`set_dnd`/`get_dnd`** (real Settings toggle + readback).
 - **Memory:** DPAPI-encrypted long-term memory with **semantic (local embedding) retrieval + pinned always-on preferences**, explicit-intent writes only, forget-never-guesses.
 - **Web:** an **isolated** sandbox browser (navigate/read/fill/click, untrusted-content boundary, cross-origin + committal-click gating) plus keyless **`web_search`** — AND, as of slices 24–25, an opt-in **real-browser mode**: JARVIS can drive a dedicated real Chrome logged into the user's own accounts, first navigate+read only, now (behind a second opt-in) able to **click/type/submit** on the user's real sites with committal actions CONFIRM-gated. As of slice 27, a **click that would leave the current host** is re-gated through the same cross-origin CONFIRM as a navigate (anchor destinations resolved pre-click; JS-driven jumps flagged post-click) — closing the slice-25 residual.
 - **Trust & operability:** a **persistent audit log** (every action, including declined/BLOCKED, as DPAPI-encrypted JSONL) with a **read-only HUD viewer** (slice 28: `/audit` — an envelope-first records browser; verbatim args stay encrypted until you reveal a specific record) + a mechanical **dry-run mode** + **undo** (slice 26: `undo_last_action` walks back the newest reversible action — volume/mute/brightness/DND, a just-stored memory, a just-deleted workspace file, which now quarantines instead of unlinking; irreversible verbs are test-pinned as never-undoable); a **settings page** salvaged from the legacy app (`/settings`) covering brain/TTS/STT/wake/autostart/capability kill-switches + the new real-browser toggles, with ElevenLabs TTS and local-Whisper STT ported as working backends.
-- **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game), a measured PC-control latency harness, and hard-won test-isolation lessons (see §5 and the "known gaps" entries below) baked into `CLAUDE.md`/`HARNESS.md`.
+- **Ops discipline:** a fullscreen desktop guard (the full suite refuses to start over a game — and as of slice 50 the PRODUCT shares that check, so a scheduled routine never launches apps mid-race), a measured PC-control latency harness, **test-call pacing** (slice 45 — live Gemini calls are throttled under the per-minute cap, which took gate failures from 6-9 to 0 at a deliberate ~3 min cost), a **real-entry-point smoke test** (slice 46 — actually launches `pythonw tray_start.pyw` and asserts the HUD serves, because all five post-release bugs were "green in dev, broken on the user's machine"), and hard-won test-isolation lessons (see §5) baked into `CLAUDE.md`/`HARNESS.md`.
+- **Browser, for real (slices 39–43):** JARVIS drives **your everyday Chrome** — your profile, your logins, your tabs — through an MV3 extension bridge, because CDP is permanently blocked on the default profile (measured twice). Opens each site in a NEW tab, never hijacks a pinned tab or the HUD tab; click/type/Enter behind a second opt-in with committal actions CONFIRM-gated and naming the real site.
 
 > ## 🚀 SHIPPED — this is now a PUBLIC product, not just a local build
 >
@@ -33,22 +43,28 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 1034 collected** (slice 50). The **non-desktop gate** (desktop-driving
-tests deselected, so it runs without an idle machine) is now **712 passed / 0
-failed / 0 skipped** (slice 47) — clean since slice 45, because
-slice 45 paces live Gemini calls so quota stops forging failures (it costs ~175s
-of deliberate sleeping; the price is printed at the end of every run). **The full
-suite including desktop tests has NOT been re-run since pacing landed** — that
-needs an idle desktop and now takes longer. Before slice 45 the best full run was
-**748 passed / 6 failed / 0 skipped, all 6 live-brain/live-UIA and each re-verified
-green individually**
- (a clean single 756/0/0 is still blocked by the free-tier PER-MINUTE cap — a fresh daily bucket is NOT sufficient; see §7 item 1) (deterministic core is 100% reliable; live-model tests need a healthy Gemini quota — see §4 and §8). All this is proven live, not just unit-tested — every slice ends in a real end-to-end acceptance run, several with mechanical (not model-claimed) verification.
+**Tests: 1034 collected** (slice 50).
 
-- **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock).
+- **Deterministic gate — GREEN: `787 passed, 0 failed, 0 skipped`.** This is the
+  signal to trust for "did I break anything"; it needs no idle desktop, no
+  quota, and runs in ~85s. Run it as `-k "not live"` with the desktop-driving
+  files ignored.
+- **⚠ Full LIVE gate: NOT PASSED since slice 48.** Slices 49 and 50 shipped on
+  the deterministic gate because the free-tier **daily** quota is exhausted
+  (burst-probed at **1/5** on the primary — the "token trickle, NOT headroom"
+  case). Pacing (slice 45) fixes per-minute limits and **cannot** create daily
+  headroom. **First job on a fresh bucket: run the full live gate and confirm
+  49/50.** Best prior full run: 908 passed / 1 failed (a known Win11 Notepad
+  session-restore artefact, verified passing in isolation).
+- **Two files need port 8000 free** (`test_entrypoint_smoke.py`,
+  `test_extension_browser.py`) — **quit the running JARVIS first** or you get
+  ~23 errors that all name the fix.
+
+- **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock). Newer, all re-runnable and all of which caught something: `harness_screen_qa.py` (real-screen Q&A), `harness_routines.py` (save → run by name → CONFIRM still prompts), `harness_barge_in.py` (audio really stops: 14.4s → 1.0s), `harness_scheduled.py` (a real schedule fires; a CONFIRM step parks with zero prompts — this one caught a FALSE 'all steps completed' report), `harness_brain_chain.py` (a real 429 answered by the fallback).
 - **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
 - **All 4 spec acceptance scripts (§1.6) pass:** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email Sam ✅, #4 brightness+DND ✅ (brightness honestly unsupported on this monitor — hardware, not code). Status tracked in `REGRESSION_CHECKPOINT.md`.
 - **Manually live-verified end to end (2026-07-20):** the user ran a single hands-on session across slices 29-33 (real-FS write/read/move/rename/copy/delete/browse/shortcut, clipboard, scroll, click kinds) through the actual HUD — all passed. Only rough edge found: **`click kind='double'` is flaky in real use** (live-UIA mouse timing, not a logic bug); user called it low-priority. See §2's acceptance note and §5/§7.
-- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), inbox reading/triage, committal desktop-native automation hardening beyond what `input.py` already does. **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
+- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), a local/offline model, free-text scheduled prompts (deliberately deferred in slice 50 — scheduling is routines-only), inbox reading/triage, calendar/contacts. **`IDEAS.md` is down to one unbuilt idea (#5, local model)** — the product backlog is thin; what remains is mostly engineering integrity (see §7). **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
 
 ---
 
@@ -1408,42 +1424,83 @@ The four-stage discipline runs automatically every session — **you do not need
 
 ## 7. Suggested next slices (not yet built)
 
-All four spec §1.6 scripts pass; real-browser navigate+read AND committal actions both shipped (slices 24-25); the real-filesystem surface (browse/delete/shortcut/write/read/move/rename/copy anywhere) shipped and was **manually live-verified end to end** in slices 32-33 (see the acceptance note in §2). Spec §1.2's core verb list is now essentially complete. **The project is also
-SHIPPED (public repo, real users, v1.0.4)** — so "does a friend's install work"
-is now a first-class concern alongside new features. Pick one and plan it. In
-rough priority:
+**Where the project actually is (2026-07-31, after slice 50):** all four spec
+§1.6 scripts pass; spec §1.2's verb list is complete; the browser drives the
+user's REAL Chrome; and the autonomy arc (routines → schedules → barge-in) is
+shipped. `IDEAS.md` is now down to **one unbuilt idea (#5, local model)** — the
+product backlog is genuinely thin, and what remains is mostly *engineering
+integrity* rather than new capability. That is a good problem, but it means the
+honest recommendation is no longer "add a feature".
 
-0. ~~**`browse_key("Enter")` is UN-GATED**~~ — **CLOSED by slice 38.** Enter now
-   CONFIRMs in real-browser mode and the modal shows the focused field's
-   contents; isolated mode stays AUTO (owner decision: that browser is logged
-   out, and over-gating causes prompt fatigue). The same slice closed the
-   *blind-approval* half on the desktop side — `type_text` and submit combos
-   now carry their payload into the modal's monospace box. Remaining related
-   residuals are in §5 (`_is_terminal`'s 7-keyword match; `space` on a focused
-   web button; non-submit combos carry no payload).
-1. **A resilient/paid brain** — the free-tier `gemini-3.1-flash-lite` daily+RPM quota is the single biggest drag on the test gate (rate-limited runs at nearly every recent checkpoint, now carrying ~29 live-brain tests). **Slice 35 settled a long-standing assumption: a fresh DAILY bucket is NOT sufficient.** A full suite run on a verified-healthy bucket (burst-probe 5/5) still produced 7 live failures — the suite's clustered calls exhaust the PER-MINUTE cap inside one run, and all 7 passed when run one at a time. So "capture a clean pass on a fresh daily bucket", repeated in checkpoints since slice 20, is not actually achievable on the free tier; only billing or a fallback chain fixes it. Either enable billing on the key (zero code) or build a brain fallback chain (flash-lite → flash, the TTS-chain pattern) so a 429 doesn't stall the agent. Highest quality-of-life-per-effort item on the list.
-2. **Multi-brain (OpenAI / Claude / Ollama)** — slice 23 salvaged the settings page and left these visibly-disabled ("not ported yet"). Each needs a tool-calling adapter mapping the full primitive schema + chain loop off Gemini specifics, per-provider live tests, and **re-verification of the tiering/CONFIRM safety behavior per brain** — realistically 2–3 slices, not one.
-3. **Double-click reliability** (low priority — user call, 2026-07-20) — `click kind='double'` is confirmed flaky in real manual use, real mouse/UIA timing (§5). Single-click and right-click are solid. Not urgent; revisit only if it becomes a real friction point.
-4. **Close the slice-35 audit's deferred findings** (all verified in code, all
-   recorded in §5): gate `browse_key("Enter")` like the desktop Enter combo;
-   add an `input.enabled` kill switch (the universal actuator is the only major
-   surface without one); deterministic tier tests for the four untested
-   classifiers (`classify_type`, `classify_web_key`, `classify_create_shortcut`,
-   `classify_rename_path`); and stop live tests writing REAL user state (the
-   real memory store, the real `data/agent_files`, `taskkill /IM notepad.exe`).
-   The last group is a natural "test integrity" slice on its own.
-5. **Real-browser mode, round 3** — cross-host click re-gating shipped in slice 27. Remaining residuals: broader rich-editor `fill()` coverage beyond Claude's ProseMirror box (Slate/Draft/Lexical/CodeMirror); a HUD indicator for when real-browser mode / allow_actions is live (user deprioritized 2026-07-19); and the narrowed slice-27 JS-navigation residual (a named-benign button that navigates cross-host via JS is flagged post-click, not pre-gated — request-interception was considered and rejected as deadlock-risky).
-6. **Memory refinements, round 3** — a HUD memory-manager panel, per-memory sensitivity tags. **The "drive the ~18% paraphrase misses down" item is CLOSED as measured-and-not-safely-reachable (slice 34)** — every lever (threshold, retrieve_k, stemming, three rival embedding models) was measured and each cost more privacy than it bought recall; see §5 and `harness_memory_eval.py --verbose`. Reopen only with a materially better retrieval model or a rerank stage, and re-measure before believing it.
-7. **Vision: drive the false-refusal rate toward zero** (slice 17 left it at ~2.3%) — tune `vision.verify_pad_px`, ask for a canonical action word, or a second opinion before refusing.
-8. **Real-FS round 3 (small, optional)** — a `make_folder` verb (deferred from slice 33, same `fsaccess` core); PowerShell as a second `run_shell` backend (cmd.exe only).
-9. **Spotify via Web API — PROBED AND DEAD-ENDED (2026-07-18):** the Feb 2026 policy change requires the app owner to hold Premium for ALL Development-Mode endpoints (search and own-playlist reads included, not just playback), and this account is free; Extended Quota Mode needs a registered business + 250k MAU. Do NOT re-plan this without a Premium subscription appearing first. Script #1's GUI path remains the correct, proven mechanism.
-10. **Email widenings** (each a deliberate slice): multiple recipients/CC, attachments beyond the cage, inbox reading (a much larger privacy surface).
-11. **Web/search widenings** — the vision fallback applied in-page for canvas/JS UIs with no accessible names; browser screenshots into the HUD; multi-tab; a fallback search backend if ddgs throttling annoys.
-12. **Wake-word refinements** — a HUD wake toggle; custom "hey jarvis" sensitivity; self-trigger suppression during TTS beyond the `_busy` drop.
-13. **DND without the Settings pop** — revisit the CloudStore serialized blob for a silent path.
-14. **Desktop-native automation hardening** — beyond the browser: more robust arbitrary native-app automation (the plan for slice 25 explicitly scoped this out in favor of browser web-apps; `input.py`'s click/type/press already work on any window, but haven't had the same measurement/hardening pass as the browser primitives — see the double-click item above).
+**Carried, blocking a clean checkpoint:** the full LIVE gate has not passed since
+slice 48. Slices 49 and 50 shipped on a green DETERMINISTIC gate (787 passed)
+because the free-tier daily quota is exhausted — burst-probed at 1/5, the
+"token trickle, NOT headroom" case. **Run a full live gate first thing on a
+fresh bucket** before treating 49/50 as fully verified.
 
-Deliberate, documented deferrals (not silent gaps — each has a one-line reason on record): `drag`, `move_mouse`, horizontal scroll, `wifi` (slice 29); a real-FS `fs.enabled` kill-switch exists but no per-verb granularity. ElevenLabs/local-Whisper providers are ported (slice 23); OpenAI/Claude/Ollama brain providers still sit in `legacy/` until item 2 above.
+### Recommended next, in order
+
+1. **Vision has NO brain fallback chain** *(small, and it just bit us)*. Slice 44
+   built the model-fallback chain for `brain.think()` only; `vision.py` has
+   **three** Gemini call sites (locate, verify, screen_query) that hard-fail on a
+   429. Demonstrated in the slice-49 gate: brain calls survived on the fallback
+   model while all three `screen_query` tests failed. Reuse `_model_chain()`.
+   Honest caveat: the exhaustion that exposed it was self-inflicted by five gates
+   in a day, so this is more test-robustness than user-facing.
+2. **`input.enabled` kill switch** *(safety completeness)*. Every capability has
+   one — shell, fs, web, search, email, vision, routines, schedules — **except
+   mouse and keyboard**, which is the most powerful surface of all. The
+   `_KILL_SWITCHES` map makes this nearly mechanical.
+3. **Test-integrity slice** *(three known leaks, all costing real signal)*:
+   (a) `test_input.py` leaves an unsaved `scrollpad.txt` Notepad that Win11
+   session-restore reopens, breaking `test_close_window_closes_notepad` in a
+   later run; (b) `test_extension_browser.py` leaks a uvicorn daemon thread, so
+   `test_entrypoint_smoke.py` only works because alphabetical collection runs it
+   first — an *accidental* dependency; (c) live tests still write REAL user state
+   (the real memory store, real `data/agent_files`, `taskkill /IM notepad.exe`).
+   Slices 43/44/45/48 each shipped a state-leak bug; this is the pattern, not
+   bad luck.
+4. **The four untested classifiers** — `classify_type`, `classify_web_key`,
+   `classify_create_shortcut`, `classify_rename_path` have no deterministic tier
+   tests. Small, and tiering is the safety model.
+5. **Local model fallback / Ollama** (`IDEAS.md` #5, the last unbuilt idea).
+   **Re-scope its justification first:** the entry still half-claims it would fix
+   gate false-red, which slice 45's pacing already solved by other means. The
+   real remaining case is offline / no-key / no-quota operation.
+6. **Multi-brain (OpenAI / Claude / Ollama)** — still visibly disabled in
+   `/settings` ("not ported yet"), which is honest UI but a standing promise.
+   Each needs a tool-calling adapter for the full schema + chain loop, per-
+   provider live tests, and **re-verification of tiering/CONFIRM per brain**.
+   Realistically 2–3 slices.
+7. **Free-text scheduled prompts** — deliberately deferred in slice 50 (owner
+   scoped scheduling to saved routines). Reopening it means deciding whether
+   JARVIS may pick its own tools while nobody watches; the AUTO-only enforcement
+   already exists, so the work is small but the trust decision is not.
+8. **Calendar / Contacts / Gmail-read** — a previous JARVIS build
+   (`~/.gemini/antigravity/scratch/jarvis-desktop`, v1.2.3) has working
+   `google-api-python-client` integrations for all three. Useful as API-shape
+   reference ONLY: that codebase has **no CONFIRM/tiering model at all** (its
+   `SAFE_COMMANDS` whitelist is never even called), so anything ported must be
+   rebuilt behind our gates. Also there: a genuinely drop-in AST-based safe
+   calculator, and a proven Electron + PyInstaller packaging recipe if the
+   desktop-app question ever returns.
+9. **Lower priority / deprioritized:** `click kind='double'` flakiness (user
+   call: not worth a slice); real-browser round 3 (rich editors beyond
+   ProseMirror, a HUD indicator for real-browser mode); vision false-refusal
+   ~2.3% → 0; email widenings (multiple recipients, inbox reading — a much
+   larger privacy surface); `make_folder`; PowerShell as a second `run_shell`
+   backend.
+
+**Closed, do not re-plan without new information:** paid/resilient brain (slices
+44–45 — fallback chain shipped and pacing fixed the gate); Spotify Web API
+(policy dead-end without Premium, probed 2026-07-18); memory paraphrase recall
+(slice 34 measured every lever; each cost more privacy than it bought);
+`browse_key("Enter")` gating (slice 38); the Chrome extension bridge (41–43).
+
+Deliberate, documented deferrals (each has a one-line reason on record): `drag`,
+`move_mouse`, horizontal scroll, `wifi` (slice 29); no per-verb granularity under
+`fs.enabled`; ElevenLabs/local-Whisper are ported, OpenAI/Claude/Ollama brains
+still sit in `legacy/`.
 
 ---
 
