@@ -125,27 +125,77 @@ class WakeListener:
         return bool(self._thread and self._thread.is_alive())
 
 
-def handle_wake(listen, respond, set_idle, timeout_s: float = 5.0):
-    """Run after the wake word fires: capture ONE follow-up utterance. A real
-    utterance runs respond(text); silence/empty returns to IDLE quietly — a
-    false trigger never acts on noise. Returns the text acted on, or None.
-    Never raises."""
-    try:
-        text = listen(timeout_s)
-    except Exception:
-        text = None
-    if not text or not str(text).strip():
+def handle_wake(listen, respond, set_idle, timeout_s: float = 5.0, *,
+                follow_up_s: float = 0.0, max_turns: int = 6,
+                max_total_s: float = 90.0, on_listen_start=None):
+    """Run after the wake word fires: capture an utterance, respond, and — if a
+    follow-up window is configured — keep the conversation going without needing
+    the wake word again. Returns the last text acted on, or None. Never raises.
+
+    SLICE 57. This used to capture exactly ONE utterance and return, so every
+    single exchange required saying "hey jarvis" again. That is the difference
+    between talking to someone and operating a command line by voice, and it was
+    the biggest single reason JARVIS felt robotic.
+
+    `follow_up_s` DEFAULTS TO 0 (one turn, i.e. the old behaviour) on purpose.
+    Several existing tests inject a `listen` that returns the same text forever;
+    had the window defaulted on, those would spin to `max_turns` and the suite
+    would fail for a reason unrelated to what they test. The server passes the
+    configured value explicitly.
+
+    MIC OWNERSHIP IS A NON-ISSUE, which is what makes this cheap: `_process_frame`
+    already closes the wake mic BEFORE calling this and reopens it only after it
+    returns, so the whole loop runs in a window where the wake listener is
+    silent. Same thread, same `_busy`, no new contention.
+
+    The loop stops on: silence, barge-in, a non-IDLE state (a CONFIRM modal owns
+    its own answer and must not be raced), `max_turns`, or `max_total_s`.
+    """
+    from jarvis.core import interrupt
+    from jarvis.state import AgentState, broadcaster
+
+    interrupt.begin_conversation()
+    started = time.monotonic()
+    acted = None
+    timeout = timeout_s
+
+    for turn in range(max(1, int(max_turns))):
+        if on_listen_start is not None:
+            try:
+                on_listen_start()
+            except Exception:
+                pass          # a decorative cue must never break the loop
         try:
-            set_idle()
+            text = listen(timeout)
+        except Exception:
+            text = None
+        if not text or not str(text).strip():
+            # Silence ends the conversation, and ONLY this path idles: after a
+            # real utterance `respond` runs speak(), which owns the
+            # SPEAKING -> IDLE transition itself. Idling here too would fight it.
+            try:
+                set_idle()
+            except Exception:
+                pass
+            return acted
+        acted = str(text).strip()
+        try:
+            respond(acted)
         except Exception:
             pass
-        return None
-    text = str(text).strip()
-    try:
-        respond(text)
-    except Exception:
-        pass
-    return text
+
+        # ---- should another turn open? ----
+        if follow_up_s <= 0:
+            break
+        if interrupt.conversation_stopped():
+            break             # "stop" ends the conversation, not just the sentence
+        if broadcaster.current is not AgentState.IDLE:
+            break             # e.g. CONFIRMING — that modal owns the user's reply
+        if (time.monotonic() - started) >= max_total_s:
+            break
+        timeout = follow_up_s
+
+    return acted
 
 
 # ---- real dependencies (injected-over in tests; proven live in Stage 0/3) ----

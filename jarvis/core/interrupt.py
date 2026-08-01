@@ -27,10 +27,29 @@ chain from aborting, which is the more important half.
 """
 from __future__ import annotations
 
+import threading
+
 from jarvis.core import chain
 from jarvis.voice import playback
 
 REASON = "interrupted"
+
+# Slice 57. Barge-in must end the CONVERSATION, not merely the sentence.
+# Once a follow-up window exists, stopping JARVIS mid-reply and then having him
+# immediately open a listening window reads as being ignored. A module-level
+# Event is used rather than a lock so `request()` stays lock-free and can never
+# block on the interaction it is cancelling — the invariant this module is built
+# around.
+_conversation_stop = threading.Event()
+
+
+def begin_conversation() -> None:
+    """Called when a conversation starts, so a stale stop cannot kill it."""
+    _conversation_stop.clear()
+
+
+def conversation_stopped() -> bool:
+    return _conversation_stop.is_set()
 
 
 def request() -> bool:
@@ -43,6 +62,9 @@ def request() -> bool:
     # possible delay, and it must happen even if there is no chain at all (the
     # commonest case is JARVIS reading out a long answer with no tools running).
     interrupted = False
+    # Set FIRST and unconditionally: even when nothing is currently running, the
+    # user's "stop" must close any follow-up window that is about to open.
+    _conversation_stop.set()
     try:
         playback.stop()
     except Exception:

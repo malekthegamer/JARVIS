@@ -403,12 +403,20 @@ def _on_wake() -> None:
         return  # never stack a second interaction
     try:
         from jarvis.core.settings_store import settings as _s
+        from jarvis.voice import tones
         timeout = float(_s.get("wake.follow_up_timeout_s", 5))
         wake.handle_wake(
             listen=lambda t: voice_manager.listen(timeout=t),
             respond=_respond,
             set_idle=lambda: broadcaster.set(AgentState.IDLE),
-            timeout_s=timeout)
+            timeout_s=timeout,
+            # Slice 57: keep the conversation open so a second command needs no
+            # second wake word, and cue each capture audibly so the user is
+            # never guessing whether it is their turn.
+            follow_up_s=float(_s.get("wake.follow_up_window_s", 5)),
+            max_turns=int(_s.get("wake.max_follow_up_turns", 6)),
+            max_total_s=float(_s.get("wake.max_conversation_s", 90)),
+            on_listen_start=lambda: tones.play("listening"))
     finally:
         _busy.release()
 

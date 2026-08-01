@@ -13,6 +13,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from jarvis.core import interrupt
+from jarvis.voice import wake
 from jarvis.voice.wake import WakeListener, handle_wake
 
 
@@ -185,7 +187,15 @@ def test_server_wake_dropped_while_busy(monkeypatch):
 def test_server_wake_real_utterance_responds(monkeypatch):
     from jarvis import server
     from jarvis.voice.voice_manager import voice_manager
-    monkeypatch.setattr(voice_manager, "listen", lambda timeout=8.0: "open notepad")
+    # NAMED AMENDMENT (slice 57). This used to inject a listen() that returned
+    # "open notepad" FOREVER. That was harmless when a wake captured exactly one
+    # utterance, but the server now opens a follow-up window, so a never-silent
+    # fake conversed until max_turns and the assertion saw six replies. A real
+    # user goes quiet; the fake now does too. What the test proves — a real
+    # utterance reaches _respond, and _busy is released — is unchanged.
+    heard = ["open notepad"]
+    monkeypatch.setattr(voice_manager, "listen",
+                        lambda timeout=8.0: heard.pop(0) if heard else "")
     responded = []
     monkeypatch.setattr(server, "_respond", lambda text: responded.append(text))
     server._on_wake()
@@ -213,3 +223,126 @@ def test_start_wake_noop_when_disabled(monkeypatch):
     server.stop_wake()
     server.start_wake()
     assert server.wake_running() is False, "disabled wake must not start a listener"
+
+
+# ================= slice 57: the follow-up turn window =================
+# THE COMPLAINT IT FIXES: every single exchange required saying "hey jarvis"
+# again, because handle_wake captured exactly ONE utterance and returned. That
+# is the difference between talking to someone and operating a command line by
+# voice.
+#
+# MIC OWNERSHIP IS A NON-ISSUE, which is why this is cheap: _process_frame
+# already closes the wake mic BEFORE calling _on_wake and reopens it only after
+# that returns (wake.py:66-81). The turn loop therefore runs inside a window
+# where the wake listener is already silent -- same thread, same _busy, zero new
+# contention.
+
+def _scripted_listen(*utterances):
+    """A listen() that yields each utterance once then goes silent.
+
+    Deliberately NOT a lambda returning the same text forever: the pre-existing
+    tests do that, and with a follow-up window enabled such a fake would loop
+    until max_turns. Silence-after-script is what a real user does."""
+    seq = list(utterances)
+
+    def listen(_timeout):
+        return seq.pop(0) if seq else ""
+    return listen
+
+
+def test_follow_up_is_off_by_default_so_one_wake_is_one_turn():
+    """BACK-COMPAT GUARD. follow_up_s defaults to 0, so handle_wake behaves
+    exactly as it did before this slice. The pre-existing tests inject a listen()
+    that returns the same text forever; had the window defaulted ON they would
+    spin until max_turns and the suite would look broken for the wrong reason."""
+    said = []
+    wake.handle_wake(listen=lambda t: "open notepad", respond=said.append,
+                     set_idle=lambda: None, timeout_s=1.0)
+    assert said == ["open notepad"], said
+
+
+def test_a_second_utterance_is_acted_on_without_the_wake_word():
+    """THE FEATURE."""
+    said = []
+    wake.handle_wake(listen=_scripted_listen("what time is it", "and the date"),
+                     respond=said.append, set_idle=lambda: None,
+                     timeout_s=1.0, follow_up_s=5.0)
+    assert said == ["what time is it", "and the date"], said
+
+
+def test_silence_in_the_window_ends_the_conversation_and_idles():
+    idled = []
+    said = []
+    wake.handle_wake(listen=_scripted_listen("hello"), respond=said.append,
+                     set_idle=lambda: idled.append(True),
+                     timeout_s=1.0, follow_up_s=5.0)
+    assert said == ["hello"]
+    assert idled, "must return to IDLE when the user stops talking"
+
+
+def test_max_turns_caps_a_runaway_conversation():
+    """A room with a television in it must not hold _busy forever."""
+    said = []
+    wake.handle_wake(listen=lambda t: "still talking", respond=said.append,
+                     set_idle=lambda: None, timeout_s=1.0,
+                     follow_up_s=5.0, max_turns=3)
+    assert len(said) == 3, said
+
+
+def test_a_long_conversation_is_capped_by_wall_clock():
+    said = []
+    wake.handle_wake(listen=lambda t: "more", respond=said.append,
+                     set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0,
+                     max_turns=100, max_total_s=0.0)
+    assert len(said) == 1, "a zero budget must allow the first turn and no more"
+
+
+def test_barge_in_ends_the_conversation_not_just_the_sentence():
+    """RISK: without this, saying 'stop' cuts the sentence and JARVIS then
+    cheerfully opens a listening window, which reads as ignoring you."""
+    said = []
+
+    def respond(text):
+        said.append(text)
+        interrupt.request()          # the user cut him off mid-reply
+
+    wake.handle_wake(listen=lambda t: "keep going", respond=respond,
+                     set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)
+    assert said == ["keep going"], "a barge-in must end the conversation"
+
+
+def test_no_follow_up_window_when_a_confirm_is_on_screen():
+    """CONFIRMING owns its own answer (Approve/Cancel). Opening a speech window
+    over it would race the modal for the user's reply."""
+    from jarvis.state import AgentState, broadcaster
+    said = []
+    prev = broadcaster.current
+    try:
+        def respond(text):
+            said.append(text)
+            broadcaster.set(AgentState.CONFIRMING)
+
+        wake.handle_wake(listen=lambda t: "delete the file", respond=respond,
+                         set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)
+        assert said == ["delete the file"], said
+    finally:
+        broadcaster.set(prev)
+
+
+def test_the_listening_earcon_fires_before_every_capture():
+    """The cue must precede the FIRST listen (so you know the wake word landed)
+    and every follow-up listen (so you know it is still your turn)."""
+    cues = []
+    wake.handle_wake(listen=_scripted_listen("one", "two"),
+                     respond=lambda t: None, set_idle=lambda: None,
+                     timeout_s=1.0, follow_up_s=5.0,
+                     on_listen_start=lambda: cues.append("cue"))
+    assert len(cues) == 3, f"expected a cue before each of 3 captures, got {len(cues)}"
+
+
+def test_handle_wake_never_raises_when_a_callback_explodes():
+    """Never-raise contract: a failing interaction must not kill the listener."""
+    def boom(_t):
+        raise RuntimeError("mic died")
+    wake.handle_wake(listen=boom, respond=lambda t: None,
+                     set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)

@@ -153,6 +153,21 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "threshold": 0.5,            # Stage-0: silence 0.000, speech 0.78–0.998
         "follow_up_timeout_s": 5,    # how long to wait for the command after "hey jarvis"
         "cooldown_s": 2.0,           # collapse a burst of frames into one wake
+        # Slice 57 — the conversation window. Every exchange used to require
+        # saying "hey jarvis" again, which is the single biggest reason JARVIS
+        # felt like a command line rather than someone you talk to. After a
+        # reply, keep listening this long for a follow-up.
+        # 0 disables it and restores the old one-utterance-per-wake behaviour.
+        "follow_up_window_s": 5,
+        # Bounds, because the loop holds server._busy for its whole duration:
+        # a television in the room must not be able to starve push-to-talk,
+        # the HUD chat box, or the scheduler.
+        "max_follow_up_turns": 6,
+        "max_conversation_s": 90,
+        # Short synthesized cue when JARVIS starts listening. Measured stage 1:
+        # even a fast exchange is ~1.8s of TOTAL SILENCE before the first spoken
+        # word, so half of "it's too slow" is really "did it hear me?".
+        "earcon": True,
     },
     "web": {
         # Browser automation (slice 14) — a DEDICATED, isolated Playwright
