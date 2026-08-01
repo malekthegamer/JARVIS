@@ -572,6 +572,11 @@ def _run_delete_path(args: dict, gate_info: dict | None = None) -> str:
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
+def _run_make_folder(args: dict, gate_info: dict | None = None) -> str:
+    r = fsaccess.make_folder(str(args.get("path", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_create_shortcut(args: dict, gate_info: dict | None = None) -> str:
     r = fsaccess.create_shortcut(str(args.get("target", "")),
                                  name=str(args.get("name", "")),
@@ -1291,6 +1296,20 @@ PRIMITIVES: dict[str, dict] = {
                                                           "description": "Path or alias of the file/folder to delete"}},
                                   "required": ["path"]}},
     },
+    "make_folder": {
+        "fn": _run_make_folder,
+        "classify": fsaccess.classify_make_folder,  # BLOCKED protected / CONFIRM else
+        "schema": {"name": "make_folder",
+                   "description": ("Create a folder ANYWHERE on the PC (e.g. a new "
+                                   "folder on the Desktop), including any missing "
+                                   "parent folders. The user approves the exact path "
+                                   "first. If it already exists, that counts as done."),
+                   "parameters": {"type": "object",
+                                  "properties": {
+                                      "path": {"type": "string",
+                                               "description": "Folder to create; accepts aliases like 'desktop/Projects'"}},
+                                  "required": ["path"]}},
+    },
     "create_shortcut": {
         "fn": _run_create_shortcut,
         "classify": fsaccess.classify_create_shortcut,
@@ -1522,7 +1541,7 @@ _KILL_SWITCHES: dict[str, set[str]] = {
     # slices 32-33: real-filesystem access — the most powerful surface.
     "fs.enabled": {"list_directory", "delete_path", "create_shortcut",
                    "write_path", "read_path", "move_path", "rename_path",
-                   "copy_path"},
+                   "copy_path", "make_folder"},
     # slice 53: arbitrary mouse + keyboard. Every other capability had a switch
     # while THIS one — the surface that can drive any application on the machine
     # — had none, so "stop touching my mouse and keyboard" was the one thing

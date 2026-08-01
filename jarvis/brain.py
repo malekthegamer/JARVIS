@@ -30,8 +30,8 @@ can ALSO work with the user's real files anywhere on the PC: browse any folder
 (list_directory — accepts aliases like 'desktop'/'downloads'), read a file
 (read_path), write/create a file (write_path), move (move_path), rename
 (rename_path — give just the new name), copy (copy_path), delete (delete_path —
-it goes to the Recycle Bin), and make shortcuts (create_shortcut, default on the
-Desktop). The user approves the exact path before any change; overwrites and
+it goes to the Recycle Bin), create folders (make_folder — makes any missing
+parents too), and make shortcuts (create_shortcut, default on the Desktop). The user approves the exact path before any change; overwrites and
 deletes go to the Recycle Bin so they're recoverable; system-critical locations
 (Windows/System32, Program Files, drive roots) are refused. If you don't know
 where something is, list_directory to find it before acting.

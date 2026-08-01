@@ -267,6 +267,62 @@ def classify_delete_path(args: dict) -> dict:
                 "description": f"Delete '{raw}' (couldn't classify — confirming)."}
 
 
+def _mkdir(p: Path) -> None:
+    """The OS seam, isolated so tests can prove a BLOCKED call never reaches
+    the filesystem at all (rather than merely reporting a failure afterwards)."""
+    p.mkdir(parents=True, exist_ok=True)
+
+
+def make_folder(path: str) -> dict:
+    """Create a directory (with any missing parents) ANYWHERE on the PC.
+    {ok, message}. Never raises.
+
+    Slice 56. The fs verbs could write/read/move/rename/copy/delete/shortcut
+    anywhere but could not MAKE a folder, so JARVIS could put files on the
+    Desktop and never organise them.
+
+    An existing directory is a SUCCESS, not an error: the caller asked for the
+    folder to exist and it does. An existing FILE at that path is a failure —
+    silently succeeding there would imply a folder that isn't one.
+
+    Deliberately NOT undoable: removing a just-created folder is only safe while
+    it is empty, and undo promises restoring a previous state, not deleting.
+    """
+    p = resolve_user_path(path)
+    if p is None:
+        return {"ok": False, "message": f"Couldn't understand the path '{path}'."}
+    if p.is_file():
+        return {"ok": False,
+                "message": f"There's already a file at '{p}' — not replacing it."}
+    if p.is_dir():
+        return {"ok": True, "message": f"'{p}' already exists."}
+    try:
+        _mkdir(p)
+    except Exception as exc:
+        return {"ok": False, "message": f"Couldn't create '{p}': {exc}"}
+    return {"ok": True, "message": f"Created the folder '{p}'."}
+
+
+def classify_make_folder(args: dict) -> dict:
+    """BLOCKED into a protected tree, else CONFIRM on the verbatim resolved
+    path. Same shape as its siblings; never raises, fails closed to CONFIRM."""
+    path = str(args.get("path", ""))
+    try:
+        p = resolve_user_path(path)
+        if p is not None:
+            level, why = classify_path_risk(p)
+            if level == "blocked":
+                return {"tier": "blocked",
+                        "description": f"BLOCKED: I won't create a folder there — {why}"}
+            return {"tier": "confirm", "command": str(p),
+                    "description": f"Create the folder '{p}'."}
+        return {"tier": "confirm",
+                "description": f"Create the folder '{path}' (couldn't resolve — confirming)."}
+    except Exception:
+        return {"tier": "confirm",
+                "description": "Create a folder (couldn't classify — confirming)."}
+
+
 def classify_create_shortcut(args: dict) -> dict:
     """The DESTINATION dir is what gets written, so classify that. BLOCKED into a
     protected dir, else CONFIRM naming target + destination. Never raises."""

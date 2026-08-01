@@ -261,6 +261,33 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 56 — `make_folder`: the fs verb set is finally complete
+- **The gap:** JARVIS could write, read, move, rename, copy, delete and shortcut
+  files ANYWHERE on the PC — but could not create a directory. It could drop
+  files on your Desktop and never organise them.
+- **Same safety model as its siblings, no new machinery:** BLOCKED on protected
+  trees (the backstop), CONFIRM on the verbatim resolved path (the boundary),
+  rides `fs.enabled`, and the OS call sits behind a `_mkdir` seam so a test can
+  prove a BLOCKED call never touches the filesystem *at all* — not merely that
+  it reported failure afterwards.
+- **Two deliberate semantics:** an already-existing directory is a **success**
+  (the caller wanted the folder to exist, and it does), while an existing FILE
+  at that path is a **failure** — succeeding there would imply a folder that
+  isn't one, and the user's file is left untouched.
+- **Deliberately NOT undoable.** Removing a just-created folder is only safe
+  while it is empty, and by the time someone asks to undo they may have put
+  things in it. Undo restores a previous state; this would have to delete.
+- **Verified end-to-end through the REAL gate**, not just unit tests:
+  approved → folder + missing parents created, modal showed the verbatim
+  resolved path; **no response → CANCELLED and nothing created**;
+  `C:\Windows\System32\evil` → BLOCKED before any OS call; a repeat run →
+  "already exists".
+- **Files:** `jarvis/primitives/fsaccess.py` (`make_folder`,
+  `classify_make_folder`, `_mkdir` seam), `jarvis/primitives/__init__.py`
+  (registration + `fs.enabled`), `jarvis/brain.py` (system prompt — the model
+  cannot use a verb it is never told about), `README.md`,
+  `tests/test_fsaccess.py` (13 tests).
+
 ### Slice 55 — Tier tests for the four classifiers that had none
 - **Why it matters:** tiering IS the safety model. A classifier returning
   `auto` where it should return `confirm` removes the gate silently and nothing

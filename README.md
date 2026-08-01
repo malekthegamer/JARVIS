@@ -98,7 +98,8 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
 - **Files (sandboxed)** — `write_file`, `read_file`, `delete_file`,
   `search_files` inside `data/agent_files/` only
 - **Files (whole PC)** — `list_directory`, `read_path`, `write_path`,
-  `move_path`, `rename_path`, `copy_path`, `delete_path`, `create_shortcut`
+  `move_path`, `rename_path`, `copy_path`, `delete_path`, `make_folder`,
+  `create_shortcut`
 - **Web** — `browse_navigate`, `read_page`, `browse_click`, `browse_fill`,
   `browse_key`, `web_search`
 - **System** — volume, mute, brightness, media keys, Do Not Disturb, clipboard
@@ -123,11 +124,16 @@ model *and* refuses it if called directly:
 
 | Switch | Disables |
 |---|---|
+| `input.enabled` | `click`, `type_text`, `press_keys`, `scroll` — all mouse & keyboard control |
 | `shell.enabled` | `run_shell` |
-| `fs.enabled` | all 8 whole-PC file verbs |
+| `fs.enabled` | all 9 whole-PC file verbs |
 | `web.enabled` | all 6 browser verbs |
 | `search.enabled` | `web_search` |
 | `email.enabled` | `send_email` |
+
+`input.enabled` leaves JARVIS able to *look* (`read_ui_tree`, `screen_query`)
+and to open and close apps — it only stops it driving your mouse and keyboard.
+Media keys and volume are bounded to a fixed set and stay available.
 
 Two extra opt-ins, **off by default**: `web.profile_mode="real"` (drive a
 dedicated real Chrome) and, beneath it, `web.allow_actions` (let it click and

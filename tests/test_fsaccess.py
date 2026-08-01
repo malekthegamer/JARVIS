@@ -404,3 +404,113 @@ def test_live_write_read_rename_copy_move(tmp_path):
         assert copy_dest.exists() and renamed.exists()   # copy keeps the source
     finally:
         unsub()
+
+
+# ==================== slice 56: make_folder ====================
+# The fs verb set could write, read, move, rename, copy, delete and shortcut
+# ANYWHERE, but could not create a directory -- so JARVIS could put files on the
+# Desktop and never organise them. Same safety model as its siblings: BLOCKED on
+# protected trees (backstop), CONFIRM on the verbatim resolved path (boundary).
+#
+# Deliberately NOT undoable. Removing a just-created folder is only safe while
+# it is empty, and by the time a user asks to undo they may have put things in
+# it. The other reversible verbs restore a PREVIOUS state; this one would have
+# to delete, which is a different and riskier operation than undo promises.
+
+
+def test_make_folder_creates_a_directory(tmp_path):
+    target = tmp_path / "new folder"
+    r = fsaccess.make_folder(str(target))
+    assert r["ok"], r
+    assert target.is_dir()
+    assert str(target) in r["message"], "must name the verbatim path it made"
+
+
+def test_make_folder_creates_missing_parents(tmp_path):
+    target = tmp_path / "a" / "b" / "c"
+    assert fsaccess.make_folder(str(target))["ok"]
+    assert target.is_dir()
+
+
+def test_make_folder_on_an_existing_directory_is_ok_and_says_so(tmp_path):
+    target = tmp_path / "already"
+    target.mkdir()
+    r = fsaccess.make_folder(str(target))
+    assert r["ok"], "an existing folder is the desired end state, not an error"
+    assert "already" in r["message"].lower()
+
+
+def test_make_folder_where_a_FILE_exists_fails_cleanly(tmp_path):
+    clash = tmp_path / "notes.txt"
+    clash.write_text("real content", encoding="utf-8")
+    r = fsaccess.make_folder(str(clash))
+    assert r["ok"] is False, "must not silently succeed over a file"
+    assert clash.read_text(encoding="utf-8") == "real content", \
+        "the user's file must be untouched"
+
+
+def test_make_folder_unresolvable_path_fails_cleanly():
+    r = fsaccess.make_folder("")
+    assert r["ok"] is False and "understand" in r["message"].lower()
+
+
+def test_make_folder_never_raises(tmp_path):
+    """Never-raise contract, same as every other fs verb."""
+    for bad in (None, "", "   ", "\x00bad", str(tmp_path / "ok")):
+        out = fsaccess.make_folder(bad)
+        assert isinstance(out, dict) and "ok" in out
+
+
+# ---- the gate ----
+
+def test_make_folder_classifier_blocks_protected_trees():
+    for p in (r"C:\Windows\System32\newdir", r"C:\Windows\x", "C:\\"):
+        info = fsaccess.classify_make_folder({"path": p})
+        assert info["tier"] == "blocked", (p, info)
+
+
+def test_make_folder_classifier_confirms_and_shows_the_verbatim_path(tmp_path):
+    target = tmp_path / "projects"
+    info = fsaccess.classify_make_folder({"path": str(target)})
+    assert info["tier"] == "confirm", info
+    assert str(target) in (info.get("command") or "") + info["description"]
+
+
+def test_make_folder_is_never_auto(tmp_path):
+    """Creating a directory anywhere on the PC is never silent."""
+    for args in ({}, {"path": ""}, {"path": str(tmp_path / "x")},
+                 {"path": None}):
+        assert fsaccess.classify_make_folder(args)["tier"] in ("confirm", "blocked")
+
+
+def test_make_folder_fails_closed_when_classification_raises(monkeypatch):
+    def boom(_p):
+        raise RuntimeError("resolver exploded")
+    monkeypatch.setattr(fsaccess, "resolve_user_path", boom)
+    assert fsaccess.classify_make_folder({"path": "x"})["tier"] == "confirm"
+
+
+# ---- wiring ----
+
+def test_make_folder_is_registered_with_its_classifier():
+    assert "make_folder" in primitives.PRIMITIVES
+    assert primitives.PRIMITIVES["make_folder"]["classify"] is fsaccess.classify_make_folder
+
+
+def test_make_folder_rides_the_fs_kill_switch(monkeypatch):
+    """It reaches the real filesystem, so fs.enabled must withhold AND refuse
+    it — the slice-35 lesson: schema-withholding alone is not a boundary."""
+    real = settings.get
+    monkeypatch.setattr(settings, "get", lambda p, d=None:
+                        (False if p == "fs.enabled" else real(p, d)))
+    assert "make_folder" not in {s["name"] for s in primitives.tools_schema()}
+    assert primitives.execute("make_folder", {"path": "x"}).startswith("BLOCKED")
+
+
+def test_blocked_make_folder_never_reaches_the_filesystem(monkeypatch, tmp_path):
+    """The gate must stop it BEFORE the OS call, not report failure after."""
+    called = []
+    monkeypatch.setattr(fsaccess, "_mkdir", lambda p: called.append(p))
+    out = primitives.execute("make_folder", {"path": r"C:\Windows\System32\evil"})
+    assert out.startswith("BLOCKED"), out
+    assert not called, "a BLOCKED make_folder must never touch the filesystem"
