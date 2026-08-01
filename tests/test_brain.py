@@ -640,3 +640,110 @@ def test_the_chain_actually_changes_model_between_attempts():
     active = DEFAULT_SETTINGS["brain"]["models"]["gemini"]
     assert active not in DEFAULT_SETTINGS["brain"]["fallback_models"], \
         "the fallback list must not contain the active model"
+
+
+# ============ slice 57 stage 0: the prompt tells the truth, history survives ============
+
+def test_stale_capability_claims_are_not_in_the_prompt():
+    """THE BUG: the prompt said 'Abilities not yet wired up (file access outside
+    your workspace…)' — while the SAME prompt, ~70 lines earlier, correctly said
+    JARVIS can work with the user's real files anywhere on the PC. Slices 32-33
+    shipped that access and this clause was never updated, so the model was being
+    instructed to REFUSE a capability it has. Directly causes 'it fails or
+    refuses things it should be able to do'."""
+    from jarvis.brain import BASE_SYSTEM_PROMPT
+
+    lowered = BASE_SYSTEM_PROMPT.lower()
+    assert "file access outside your workspace" not in lowered, \
+        "the prompt still claims real-filesystem access is unwired (slices 32-33 shipped it)"
+    # The capability it DOES have must still be advertised.
+    assert "real files anywhere on the pc" in lowered
+
+
+def test_the_prompt_still_admits_what_is_genuinely_unwired():
+    """The fix must not overcorrect into claiming abilities it lacks — calendars
+    and inbox reading really are not built."""
+    from jarvis.brain import BASE_SYSTEM_PROMPT
+
+    lowered = BASE_SYSTEM_PROMPT.lower()
+    assert "calendar" in lowered and "inbox" in lowered, \
+        "JARVIS must still say it cannot do calendars / inbox reading"
+
+
+# ---- history: a long tool chain must not evict the conversation ----
+
+def _exchange(n):
+    return [{"role": "user", "content": f"user message {n}"},
+            {"role": "assistant", "content": f"assistant reply {n}"}]
+
+
+def _tool_round(i):
+    """One round as brain.py records it: an assistant tool-call turn plus its
+    tool result (brain.py:421-443)."""
+    return [{"role": "assistant", "content": "",
+             "tool_calls": [{"id": f"c{i}", "name": "read_ui_tree", "args": {}}]},
+            {"role": "tool", "tool_call_id": f"c{i}", "name": "read_ui_tree",
+             "content": "OK: some ui"}]
+
+
+def test_a_long_tool_chain_does_not_evict_the_conversation():
+    """THE BUG: history_max_messages=40 counts TOOL turns, and one 12-round chain
+    records ~24 of them. A flat tail-slice therefore threw away everything the
+    user had actually been talking about — JARVIS forgot the conversation after
+    one complex task."""
+    from jarvis.brain import JarvisBrain
+
+    b = JarvisBrain()
+    for n in range(4):
+        b.history.extend(_exchange(n))
+    for i in range(20):                      # 40 tool messages — a big chain
+        b.history.extend(_tool_round(i))
+    b.history.append({"role": "user", "content": "what were we talking about?"})
+
+    b._trim()
+
+    said = " ".join(m.get("content") or "" for m in b.history
+                    if m["role"] == "user")
+    assert "user message 0" in said or "user message 1" in said, \
+        f"the conversation was evicted by tool turns; users left: {said!r}"
+    assert "what were we talking about?" in said
+
+
+def test_trim_never_orphans_a_tool_result_from_its_tool_call():
+    """COHERENCE. Gemini 400s if a tool result appears with no preceding
+    tool_call that owns it, so trimming must drop the pair together — an
+    orphaned result is worse than a forgotten one."""
+    from jarvis.brain import JarvisBrain
+
+    b = JarvisBrain()
+    for n in range(3):
+        b.history.extend(_exchange(n))
+    for i in range(25):
+        b.history.extend(_tool_round(i))
+
+    b._trim()
+
+    offered = set()
+    for m in b.history:
+        if m["role"] == "assistant":
+            for tc in m.get("tool_calls") or []:
+                offered.add(tc["id"])
+        elif m["role"] == "tool":
+            assert m["tool_call_id"] in offered, \
+                f"orphaned tool result {m['tool_call_id']} — no preceding tool_call"
+
+
+def test_trim_still_starts_on_a_user_message_and_respects_the_cap():
+    """The two properties the old implementation did guarantee must survive."""
+    from jarvis.core.settings_store import settings
+    from jarvis.brain import JarvisBrain
+
+    limit = int(settings.get("history_max_messages", 40))
+    b = JarvisBrain()
+    for n in range(30):
+        b.history.extend(_exchange(n))
+
+    b._trim()
+
+    assert len(b.history) <= limit, f"cap breached: {len(b.history)} > {limit}"
+    assert b.history[0]["role"] == "user", b.history[0]
