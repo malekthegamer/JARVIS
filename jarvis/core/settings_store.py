@@ -194,6 +194,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "max_results": 5,
     },
     "input": {
+        # Slice 53: the kill switch for arbitrary mouse + keyboard control
+        # (click / type_text / press_keys / scroll). Opt-OUT — a safety switch
+        # that shipped off would break the product on first run. media_key is
+        # deliberately outside it; see _KILL_SWITCHES in primitives/__init__.py.
+        "enabled": True,
         # Slice 22: cosmetic eased cursor glide before clicks. Same landing
         # pixel, same click semantics; hard time cap keeps it out of the
         # latency budget (~4% of a post-slice-21 chain, worst case).

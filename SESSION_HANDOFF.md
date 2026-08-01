@@ -261,6 +261,33 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 53 — `input.enabled`: the missing kill switch
+- **The gap:** shell, fs, web, search, email, vision, routines and schedules each
+  had a switch. **Arbitrary mouse and keyboard — the surface that can drive any
+  application on the machine — had none.** "Stop touching my mouse and keyboard"
+  was the one thing the Settings page could not say.
+- **Scope, deliberately:** `click`, `type_text`, `press_keys`, `scroll`. These are
+  UNBOUNDED — `press_keys` can send any combination, `click` can hit any pixel.
+- **`media_key` is deliberately EXCLUDED and test-pinned.** It injects a
+  keystroke too, but only from a fixed enum (play/pause/next/…), so it cannot be
+  steered into arbitrary input. Bundling it would quietly make the switch mean
+  "and also no play/pause" — a different promise than the one on its label.
+- **Both halves of the boundary, per the slice-35 lesson:** the verbs are
+  withheld from `tools_schema()` *and* refused at `execute()`. Slice 35 exists
+  because withholding alone was NOT a boundary — a direct call still ran.
+- **Reading survives:** `read_ui_tree`, `screen_query`, `launch_app` and
+  `close_window` stay available with input off, pinned by a test — a switch that
+  silently gutted unrelated capability would be a worse bug than the gap.
+- **Vision-checked (§4):** DOM asserted (`#capInput` present, `data-path=
+  input.enabled`, class `cap` so settings.js persists it, checked by default,
+  non-zero bounding box) **and the screenshot inspected** — the row renders at
+  the top of Capabilities & Safety, toggle ON, hint text correct, styling
+  identical to its siblings.
+- **Files:** `jarvis/primitives/__init__.py` (`_KILL_SWITCHES` + label),
+  `jarvis/core/settings_store.py` (default `True` — opt-OUT),
+  `jarvis/static/settings.html` (toggle; `settings.js` needed no change, it binds
+  `.cap[data-path]` generically), `tests/test_primitives.py` (6 tests).
+
 ### Slice 52 — The fallback model gets real headroom
 - **The bug slice 51 found:** the shipped fallback `gemini-2.5-flash` trips a
   **DAILY ceiling of 20 requests** before its per-minute one. A fallback exists
@@ -1549,10 +1576,10 @@ back green end to end.
    (daily bucket survives a 24-call burst, 15 RPM). Adding any further model to
    the chain is now gated by a mechanical test: its MEASURED RPM cap must be ≥
    the pacer budget, else it forges failures.
-2. **`input.enabled` kill switch** *(safety completeness)*. Every capability has
-   one — shell, fs, web, search, email, vision, routines, schedules — **except
-   mouse and keyboard**, which is the most powerful surface of all. The
-   `_KILL_SWITCHES` map makes this nearly mechanical.
+2. ~~`input.enabled` kill switch~~ **DONE (slice 53)** — covers click /
+   type_text / press_keys / scroll, withheld from the schema AND refused at
+   execute(); `media_key` deliberately excluded (fixed enum, not steerable) and
+   test-pinned; reading verbs survive the switch.
 3. **Test-integrity slice** *(three known leaks, all costing real signal)*:
    (a) `test_input.py` leaves an unsaved `scrollpad.txt` Notepad that Win11
    session-restore reopens, breaking `test_close_window_closes_notepad` in a

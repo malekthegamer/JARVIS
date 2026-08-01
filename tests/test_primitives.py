@@ -413,3 +413,85 @@ def test_screen_query_execute_blocked_when_vision_disabled(monkeypatch):
     _switch_off(monkeypatch, "vision.enabled")
     out = primitives.execute("screen_query", {"question": "what am I looking at?"})
     assert out.startswith("BLOCKED"), out
+
+
+# ==================== slice 53: the input kill switch ====================
+# Every other capability had one -- shell, fs, web, search, email, vision,
+# routines, schedules -- while arbitrary mouse and keyboard control, the surface
+# that can drive ANY application on the machine, had none. "Stop touching my
+# mouse and keyboard" was the one thing the settings page could not say.
+#
+# SCOPE, deliberately: click / type_text / press_keys / scroll. Those are
+# UNBOUNDED -- press_keys can send any combination, click can hit any pixel.
+# media_key is NOT included: it injects a keystroke too, but only from a fixed
+# enum (play/pause/next/prev/stop/mute), so it cannot be steered into arbitrary
+# input. Bundling it would make the switch mean "and also no play/pause", which
+# is a different promise than the one on the label.
+
+
+def test_input_kill_switch_withholds_mouse_and_keyboard_verbs(monkeypatch):
+    """Off = the model is never even offered mouse/keyboard control."""
+    from jarvis import primitives
+
+    _switch_off(monkeypatch, "input.enabled")
+    advertised = {s["name"] for s in primitives.tools_schema()}
+    for verb in ("click", "type_text", "press_keys", "scroll"):
+        assert verb not in advertised, f"{verb} still advertised with input off"
+
+
+def test_input_kill_switch_blocks_a_direct_call(monkeypatch):
+    """THE SLICE-35 LESSON: withholding from the schema is not a boundary on its
+    own — before slice 35 a direct execute() still ran the verb. The switch must
+    refuse at the execution seam too."""
+    from jarvis import primitives
+
+    _switch_off(monkeypatch, "input.enabled")
+    for verb, args in (("click", {"target": "OK"}),
+                       ("type_text", {"text": "hello"}),
+                       ("press_keys", {"keys": "ctrl+s"}),
+                       ("scroll", {"direction": "down"})):
+        out = primitives.execute(verb, args)
+        assert out.startswith("BLOCKED"), f"{verb} was not blocked: {out}"
+
+
+def test_input_switch_names_itself_in_the_refusal(monkeypatch):
+    """A refusal the user cannot act on is a dead end — it must say which switch
+    to flip, like every other capability's message does."""
+    from jarvis import primitives
+
+    _switch_off(monkeypatch, "input.enabled")
+    out = primitives.execute("click", {"target": "OK"})
+    assert "mouse" in out.lower() or "keyboard" in out.lower(), out
+    assert "settings" in out.lower(), out
+
+
+def test_input_switch_does_not_disable_reading_the_screen(monkeypatch):
+    """Reading is not input. Turning off mouse/keyboard must still leave JARVIS
+    able to LOOK — otherwise the switch silently guts unrelated capability."""
+    from jarvis import primitives
+
+    _switch_off(monkeypatch, "input.enabled")
+    advertised = {s["name"] for s in primitives.tools_schema()}
+    for verb in ("read_ui_tree", "screen_query", "launch_app", "close_window"):
+        assert verb in advertised, \
+            f"{verb} is not mouse/keyboard input and must survive input.enabled=False"
+
+
+def test_media_key_is_deliberately_outside_the_input_switch(monkeypatch):
+    """Pinned so the scope decision is explicit rather than an oversight.
+    media_key injects a keystroke, but only from a fixed enum, so it is bounded
+    in a way press_keys is not. If this ever changes, change it ON PURPOSE."""
+    from jarvis import primitives
+
+    _switch_off(monkeypatch, "input.enabled")
+    advertised = {s["name"] for s in primitives.tools_schema()}
+    assert "media_key" in advertised, \
+        "media_key is bounded to a fixed enum and is not part of the input switch"
+
+
+def test_input_switch_defaults_to_enabled():
+    """A safety switch that ships OFF breaks the product; this one is opt-OUT."""
+    from jarvis.core.settings_store import DEFAULT_SETTINGS, settings
+
+    assert DEFAULT_SETTINGS["input"]["enabled"] is True
+    assert settings.get("input.enabled", True) is True

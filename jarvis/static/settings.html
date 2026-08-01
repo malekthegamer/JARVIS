@@ -127,6 +127,12 @@
     <div class="module">
       <h3>Capabilities &amp; safety</h3>
       <div class="row">
+        <label for="capInput">Mouse &amp; keyboard control</label>
+        <input type="checkbox" class="toggle cap" id="capInput" data-path="input.enabled">
+        <span class="hint">Off = JARVIS can still look at the screen and open apps, but
+          cannot click, type, press keys or scroll. Media keys and volume still work.</span>
+      </div>
+      <div class="row">
         <label for="capShell">Shell commands</label>
         <input type="checkbox" class="toggle cap" id="capShell" data-path="shell.enabled">
         <span class="hint">Off = run_shell is withheld from the model entirely.</span>

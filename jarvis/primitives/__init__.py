@@ -1523,6 +1523,17 @@ _KILL_SWITCHES: dict[str, set[str]] = {
     "fs.enabled": {"list_directory", "delete_path", "create_shortcut",
                    "write_path", "read_path", "move_path", "rename_path",
                    "copy_path"},
+    # slice 53: arbitrary mouse + keyboard. Every other capability had a switch
+    # while THIS one — the surface that can drive any application on the machine
+    # — had none, so "stop touching my mouse and keyboard" was the one thing
+    # Settings could not say.
+    #
+    # media_key is deliberately NOT here. It injects a keystroke too, but only
+    # from a fixed enum (play/pause/next/…), so it cannot be steered into
+    # arbitrary input the way press_keys can. Including it would quietly make
+    # this switch mean "and also no play/pause" — a different promise than its
+    # label. Pinned by test_media_key_is_deliberately_outside_the_input_switch.
+    "input.enabled": {"click", "type_text", "press_keys", "scroll"},
 }
 
 _SWITCH_LABELS = {
@@ -1534,6 +1545,7 @@ _SWITCH_LABELS = {
     "routines.enabled": "saved routines",
     "schedules.enabled": "scheduled routines",
     "fs.enabled": "real-filesystem access",
+    "input.enabled": "mouse & keyboard control",
 }
 
 
