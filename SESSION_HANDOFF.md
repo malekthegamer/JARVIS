@@ -1761,6 +1761,18 @@ product backlog is genuinely thin, and what remains is mostly *engineering
 integrity* rather than new capability. That is a good problem, but it means the
 honest recommendation is no longer "add a feature".
 
+**Gate (slice 58): 1161 passed, 1 failed, 0 skipped** in 9m43s. The one failure
+is `test_chain_live.py::test_live_multistep_chain_notepad` — the same
+intermittent live-model test that failed the slice-51 and slice-56 gates — and it
+passes in isolation. **So this is NOT a clean gate**, unlike slice 57's.
+
+An earlier slice-58 gate run failed FOUR: the same notepad pair, a live vision
+test, and `test_mic.py::test_capture_stream_opens_and_closes`. That last one was
+NOT flake — it exposed a real bug (JARVIS selecting a microphone jack with
+nothing plugged into it) which is now fixed. Worth recording as the counter-case
+to "re-run it and see": three of those four were environmental and the fourth
+was the most user-visible bug in the whole slice.
+
 **✅ CHECKPOINT: THE FIRST CLEAN GATE (slice 57, 2026-08-01).**
 
     1133 passed, 0 failed, 0 skipped   in 8m55s
