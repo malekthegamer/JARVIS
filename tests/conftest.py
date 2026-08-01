@@ -103,12 +103,20 @@ def pytest_sessionfinish(session, exitstatus):
     from tests._ports import port_free, port_holder
 
     from jarvis import config as jconfig
-    if not port_free(jconfig.SERVER_PORT):
-        session.config._jarvis_port_leak = (
-            f"PORT LEAK: {jconfig.SERVER_PORT} is still bound at session end by "
-            f"{port_holder(jconfig.SERVER_PORT)}. A test started a server and "
-            f"never stopped it; the next run's real-server tests will fail with "
-            f"a confusing error.")
+    if port_free(jconfig.SERVER_PORT):
+        return
+    holder = port_holder(jconfig.SERVER_PORT)
+    # Only OUR process holding it is a leak. The owner's own running JARVIS also
+    # binds this port, and the first version of this check accused a test of
+    # leaking whenever JARVIS happened to be running — a false alarm that would
+    # send someone hunting a bug that isn't there. port_holder() already marks
+    # the current process, so use it rather than guessing.
+    if "THIS pytest process" not in holder:
+        return
+    session.config._jarvis_port_leak = (
+        f"PORT LEAK: {jconfig.SERVER_PORT} is still bound at session end by "
+        f"{holder}. A test started a server and never stopped it; the next "
+        f"run's real-server tests will fail with a confusing error.")
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

@@ -52,6 +52,31 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "pyttsx3_rate": 180,
     },
     "stt": {
+        # ---- capture timing (slice 58) ----
+        # Reported in real use: "the listening is kind of inconsistent. Sometimes
+        # it is in listening mode for more than it needs to, and other times it
+        # will cut me off mid sentence." Before this slice NONE of these were
+        # settings — 0.8 and 15.0 were bare literals with no way to tune them.
+        #
+        # Trailing silence that declares the utterance finished. This one knob
+        # serves two opposing needs: too low clips a mid-thought pause and ships
+        # a PARTIAL sentence to STT; too high adds dead air to every turn. 0.8
+        # (the library default, and the old hardcoded value) measurably clipped
+        # this owner, who pauses to think. Raise it if you are cut off; lower it
+        # if replies feel laggy.
+        "pause_threshold": 1.2,
+        # Hard cap on one utterance. speech_recognition does NOT raise when this
+        # is hit — it breaks and returns the TRUNCATED audio with no signal — so
+        # the old 15.0 silently halved any longer request. Capture now detects
+        # and reports the cut; this is a runaway-mic backstop, not an end-pointer.
+        "phrase_time_limit": 30.0,
+        # How long to wait for speech to START before giving up (silence budget).
+        "listen_timeout": 8.0,
+        # Re-measure ambient noise at most this often. THE INCONSISTENCY FIX:
+        # calibration used to run once per device for the whole process, while
+        # dynamic_energy_threshold drifted from that stale baseline — so the same
+        # words behaved differently an hour apart. 0 disables re-calibration.
+        "recalibrate_every_s": 180.0,
         "active": "google",           # free, keyless, proven default
         "mic_device_index": None,     # None = auto-detect real mic (see jarvis.voice.capture)
         "mic_device_name": "",        # pinned by NAME too — survives index shifts
@@ -158,7 +183,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         # felt like a command line rather than someone you talk to. After a
         # reply, keep listening this long for a follow-up.
         # 0 disables it and restores the old one-utterance-per-wake behaviour.
-        "follow_up_window_s": 5,
+        #
+        # Slice 58: reduced 5 -> 3 after real use. This is the budget for the
+        # user to START speaking again, so every conversation ended with a full
+        # 5s of open-mic silence that did not exist before slice 57 — part of
+        # "sometimes it is in listening mode for more than it needs to". Kept
+        # deliberately SHORTER than follow_up_timeout_s: the first utterance
+        # after a wake word is expected, a second one is optional.
+        "follow_up_window_s": 3,
         # Bounds, because the loop holds server._busy for its whole duration:
         # a television in the room must not be able to starve push-to-talk,
         # the HUD chat box, or the scheduler.

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
+from typing import NamedTuple
 
 from jarvis.core import timing
 from jarvis.core.settings_store import settings
@@ -69,7 +71,114 @@ VIRTUAL_HINTS = (
 
 _lock = threading.Lock()
 _recognizer = None
+_recognizer_config: tuple | None = None
 _calibrated_index: int | None = None
+_last_calibrated_at: float = 0.0
+
+
+# ======================= capture timing (slice 58) =======================
+# Reported in real use: "the listening is kind of inconsistent. Sometimes it is
+# in listening mode for more than it needs to, and other times it will cut me
+# off mid sentence, and it doesn't really understand what I want."
+#
+# Three separate causes, none of which had a setting or a test before this:
+#   * calibration ran ONCE per device for the whole process, while
+#     dynamic_energy_threshold drifted from that stale baseline -> the same
+#     words behaved differently an hour apart. That is the INCONSISTENCY.
+#   * pause_threshold was a hardcoded 0.8s, which clips a mid-thought pause.
+#   * phrase_time_limit was a hardcoded 15s that truncates SILENTLY.
+
+class CaptureConfig(NamedTuple):
+    pause_threshold: float
+    phrase_time_limit: float
+    listen_timeout: float
+    recalibrate_every_s: float
+
+
+def capture_config() -> CaptureConfig:
+    """Current timing, read fresh every call so a settings change takes effect
+    without a restart."""
+    def _f(key, default):
+        try:
+            return float(settings.get(key, default))
+        except (TypeError, ValueError):
+            return default
+    return CaptureConfig(_f("stt.pause_threshold", 1.2),
+                         _f("stt.phrase_time_limit", 30.0),
+                         _f("stt.listen_timeout", 8.0),
+                         _f("stt.recalibrate_every_s", 180.0))
+
+
+def get_recognizer():
+    """The shared Recognizer, REBUILT when its settings change.
+
+    It used to be a plain singleton, so `pause_threshold` was written exactly
+    once per process — meaning a settings change could never take effect and the
+    new settings would have been a lie. Rebuilding also forces recalibration,
+    since the old energy baseline belongs to the old configuration.
+    """
+    global _recognizer, _recognizer_config, _calibrated_index
+    import speech_recognition as sr  # lazy
+
+    cfg = capture_config()
+    key = (cfg.pause_threshold,)
+    if _recognizer is None or _recognizer_config != key:
+        r = sr.Recognizer()
+        r.dynamic_energy_threshold = True
+        r.pause_threshold = cfg.pause_threshold
+        _recognizer = r
+        _recognizer_config = key
+        _calibrated_index = None      # new config -> old baseline is meaningless
+    return _recognizer
+
+
+def should_calibrate(index: int | None, now: float) -> bool:
+    """Re-measure ambient noise? A new device always does; otherwise once the
+    interval has elapsed. `recalibrate_every_s = 0` disables re-calibration for
+    a stable environment where the 0.6s pause is not worth paying."""
+    if _calibrated_index != index:
+        return True
+    interval = capture_config().recalibrate_every_s
+    if interval <= 0:
+        return False
+    return (now - _last_calibrated_at) >= interval
+
+
+def looks_truncated(audio, limit: float) -> bool:
+    """Did this capture run into `phrase_time_limit`?
+
+    speech_recognition does NOT raise there — it breaks out and returns the
+    partial audio — so a capture whose duration reaches the cap is the ONLY
+    evidence that the user was cut off mid-sentence. Never raises: a detection
+    helper must not be able to break capture itself.
+    """
+    try:
+        rate = int(getattr(audio, "sample_rate", 0))
+        width = int(getattr(audio, "sample_width", 0))
+        data = getattr(audio, "frame_data", None)
+        if not rate or not width or not data:
+            return False
+        return (len(data) / float(rate * width)) >= (limit - 0.25)
+    except Exception:
+        return False
+
+
+def _on_truncated(audio) -> None:
+    """Seam so the caller (and tests) can see a cut-off happen."""
+    print("  [mic] your sentence hit the recording limit and was cut short — "
+          "raise stt.phrase_time_limit in settings if this keeps happening")
+
+
+def note_truncation(audio, limit: float) -> bool:
+    """Report a truncated capture instead of silently handing STT half a
+    sentence, which is what produced 'it doesn't understand what I want'."""
+    if looks_truncated(audio, limit):
+        try:
+            _on_truncated(audio)
+        except Exception:
+            pass
+        return True
+    return False
 
 
 def is_probably_real_mic(name: str) -> bool:
@@ -126,27 +235,38 @@ def find_real_mic() -> tuple[int | None, str]:
     return None, "system default"
 
 
-def listen_once(timeout: float = 8.0, phrase_time_limit: float = 15.0):
-    """Capture one utterance. Returns sr.AudioData or None (timeout / device issue)."""
-    global _recognizer, _calibrated_index
+def listen_once(timeout: float | None = None, phrase_time_limit: float | None = None):
+    """Capture one utterance. Returns sr.AudioData or None (timeout / device issue).
+
+    Slice 58: timing now comes from settings (`stt.*`) rather than hardcoded
+    literals, ambient noise is re-measured periodically instead of once per
+    process, and a `phrase_time_limit` truncation is REPORTED rather than
+    silently shipping half a sentence to STT.
+    """
+    global _calibrated_index, _last_calibrated_at
     require_audio_stdlib()
     import speech_recognition as sr  # lazy
 
+    cfg = capture_config()
+    if timeout is None:
+        timeout = cfg.listen_timeout
+    if phrase_time_limit is None:
+        phrase_time_limit = cfg.phrase_time_limit
+
     with _lock:
-        if _recognizer is None:
-            _recognizer = sr.Recognizer()
-            _recognizer.dynamic_energy_threshold = True
-            _recognizer.pause_threshold = 0.8
+        recognizer = get_recognizer()
 
         index, _name = find_real_mic()
         try:
             # NOTE: no sample_rate argument — device default only (lesson #1).
             with sr.Microphone(device_index=index) as source:
-                if _calibrated_index != index:
-                    _recognizer.adjust_for_ambient_noise(source, duration=0.6)
+                if should_calibrate(index, time.monotonic()):
+                    recognizer.adjust_for_ambient_noise(source, duration=0.6)
                     _calibrated_index = index
-                audio = _recognizer.listen(source, timeout=timeout,
-                                           phrase_time_limit=phrase_time_limit)
+                    _last_calibrated_at = time.monotonic()
+                audio = recognizer.listen(source, timeout=timeout,
+                                          phrase_time_limit=phrase_time_limit)
+                note_truncation(audio, phrase_time_limit)
                 # Slice 57: `listen` returns ~pause_threshold (0.8s) AFTER the
                 # user actually stopped talking. The harness subtracts that and
                 # SAYS SO rather than quietly flattering the number.
