@@ -495,3 +495,135 @@ def test_input_switch_defaults_to_enabled():
 
     assert DEFAULT_SETTINGS["input"]["enabled"] is True
     assert settings.get("input.enabled", True) is True
+
+
+# ============ slice 58: per-action confirm control (confirm.auto_approve) ============
+# REPORTED IN REAL USE: "some actions don't actually need a confirm screen…
+# stuff like saving the file to my desktop… it should be at least a setting that
+# users can enable, that certain actions need a confirm screen and other actions
+# they can choose whether it requires a confirm or not."
+#
+# Structured on the _KILL_SWITCHES pattern: ONE list, consulted in ONE place
+# (_decide_tier), so the setting can never drift from what actually executes.
+#
+# Three hard limits, each tested below:
+#   * BLOCKED is never downgradable — a protected path stays refused.
+#   * run_shell / send_email are never downgradable — arbitrary code execution
+#     and a message that cannot be unsent.
+#   * A classifier can mark a SPECIFIC invocation non-downgradable, so enabling
+#     "save files without asking" silently auto-approves CREATING a file but
+#     still confirms OVERWRITING one.
+
+
+def _auto_approve(monkeypatch, *verbs):
+    from jarvis.core.settings_store import settings
+    real = settings.get
+    monkeypatch.setattr(settings, "get", lambda p, d=None:
+                        (list(verbs) if p == "confirm.auto_approve" else real(p, d)))
+
+
+def test_by_default_nothing_is_downgraded():
+    """The setting ships EMPTY. Today's behaviour is unchanged until the user
+    chooses otherwise — a safety relaxation must never arrive by surprise."""
+    from jarvis.core.settings_store import DEFAULT_SETTINGS
+
+    assert DEFAULT_SETTINGS["confirm"]["auto_approve"] == []
+
+
+def test_a_downgraded_verb_runs_without_the_gate(monkeypatch, tmp_path):
+    """THE FEATURE."""
+    from jarvis import primitives
+
+    _auto_approve(monkeypatch, "make_folder")
+    target = tmp_path / "no-prompt"
+    out = primitives.execute("make_folder", {"path": str(target)})
+    assert out.startswith("OK"), out
+    assert target.is_dir(), "the folder should have been created with no prompt"
+
+
+def test_a_verb_not_on_the_list_still_confirms(monkeypatch):
+    from jarvis import primitives
+
+    _auto_approve(monkeypatch, "make_folder")
+    info = primitives._decide_tier(primitives.PRIMITIVES["delete_path"],
+                                   {"path": r"C:\Users\someone\notes.txt"})
+    assert info[0] == "confirm", info
+
+
+def test_BLOCKED_is_never_downgradable(monkeypatch):
+    """The denylist is the backstop, not a preference. Downgrading a verb must
+    not turn a refusal into an action."""
+    from jarvis import primitives
+
+    _auto_approve(monkeypatch, "make_folder", "delete_path", "write_path")
+    tier, _desc, _info = primitives._decide_tier(
+        primitives.PRIMITIVES["make_folder"], {"path": r"C:\Windows\System32\x"})
+    assert tier == "blocked", tier
+
+
+def test_run_shell_and_send_email_cannot_be_downgraded(monkeypatch):
+    """Both are irreversible with unbounded blast radius: arbitrary code
+    execution, and a message that cannot be unsent. Listing them is not enough
+    to disarm them — that is deliberate, and it is stated in the settings UI."""
+    from jarvis import primitives
+
+    _auto_approve(monkeypatch, "run_shell", "send_email")
+    assert "run_shell" in primitives.NEVER_AUTO_APPROVE
+    assert "send_email" in primitives.NEVER_AUTO_APPROVE
+
+    tier, _d, _i = primitives._decide_tier(primitives.PRIMITIVES["run_shell"],
+                                           {"command": "echo hello"})
+    assert tier == "confirm", "run_shell must gate even when listed"
+
+
+def test_a_classifier_can_veto_the_downgrade_for_one_invocation(monkeypatch):
+    """The point of `downgradable`: 'save files without asking' should mean
+    CREATE, not OVERWRITE. The classifier knows which this call is; the setting
+    only expresses the preference."""
+    from jarvis import primitives
+
+    _auto_approve(monkeypatch, "_fake_verb")
+    prim = {"classify": lambda a: {"tier": "confirm", "description": "d",
+                                   "downgradable": False}}
+    assert primitives._decide_tier(prim, {}, "_fake_verb")[0] == "confirm"
+
+    prim_ok = {"classify": lambda a: {"tier": "confirm", "description": "d"}}
+    assert primitives._decide_tier(prim_ok, {}, "_fake_verb")[0] == "auto", \
+        "absent 'downgradable' should default to allowing the downgrade"
+
+
+def test_write_path_creating_is_downgradable_but_overwriting_is_not(tmp_path):
+    """THE SPECIFIC COMPLAINT: 'saving the file to my desktop' should be able to
+    stop asking. Overwriting an existing file is a different act and keeps its
+    gate even then — the same split files.classify_write_file has always had."""
+    from jarvis.primitives import fsaccess
+
+    fresh = fsaccess.classify_write_path({"path": str(tmp_path / "new.txt")})
+    assert fresh["tier"] == "confirm", "unchanged by default"
+    assert fresh.get("downgradable") is True
+
+    existing = tmp_path / "old.txt"
+    existing.write_text("real content", encoding="utf-8")
+    over = fsaccess.classify_write_path({"path": str(existing)})
+    assert over["tier"] == "confirm"
+    assert over.get("downgradable") is False, \
+        "overwriting must keep its gate even when the user downgrades write_path"
+
+
+def test_the_audit_log_records_that_the_user_downgraded_it(monkeypatch, tmp_path):
+    """A relaxed gate must still leave an HONEST record. A step that ran AUTO
+    because the user downgraded it must not look identical to one that was
+    always AUTO."""
+    from jarvis import primitives
+    from jarvis.core import audit
+
+    seen = []
+    monkeypatch.setattr(audit.audit_log, "record",
+                        lambda **kw: seen.append(kw))
+    _auto_approve(monkeypatch, "make_folder")
+    primitives.execute("make_folder", {"path": str(tmp_path / "audited")})
+
+    assert seen, "nothing was audited"
+    gates = [r.get("gate") for r in seen]
+    assert any(g and "override" in str(g) for g in gates), \
+        f"the user override must be visible in the audit record, got {gates}"

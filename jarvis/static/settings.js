@@ -43,6 +43,11 @@
       el.checked = !!getPath(s, el.dataset.path);
     }
     $("confirmTimeout").value = s.confirm.timeout_s;
+    // Slice 58: which CONFIRM actions the user has chosen to auto-approve.
+    const approved = new Set((s.confirm && s.confirm.auto_approve) || []);
+    for (const el of document.querySelectorAll(".okverb")) {
+      el.checked = approved.has(el.dataset.verb);
+    }
     $("smoothCursor").checked = !!s.input.smooth_cursor;
     $("realBrowser").checked = (s.web && s.web.profile_mode === "real");
     $("allowActions").checked = !!(s.web && s.web.allow_actions);
@@ -136,7 +141,11 @@
       },
       wake: { enabled: $("wakeEnabled").checked, threshold: Number($("wakeThreshold").value) },
       autostart: $("autostart").checked,
-      confirm: { timeout_s: Number($("confirmTimeout").value) },
+      confirm: {
+        timeout_s: Number($("confirmTimeout").value),
+        auto_approve: [...document.querySelectorAll(".okverb")]
+          .filter((el) => el.checked).map((el) => el.dataset.verb),
+      },
       input: { smooth_cursor: $("smoothCursor").checked },
       ...caps,
     };

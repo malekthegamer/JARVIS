@@ -1687,8 +1687,13 @@ def _execute_inner(name: str, args: dict, outcome: dict) -> str:
         return _dry_run_narration(name, prim, args, outcome)
     gate_info = None
     try:
-        tier, description, gate_info = _decide_tier(prim, args)
+        tier, description, gate_info = _decide_tier(prim, args, name)
         outcome["tier"] = tier
+        if (gate_info or {}).get("user_downgraded"):
+            # A relaxed gate must still leave an HONEST record: a step that ran
+            # AUTO because the user downgraded it must not be indistinguishable
+            # in the audit log from one that was always AUTO.
+            outcome["gate"] = "auto (user override)"
         if tier == "blocked":
             # The spec's third tier: refused outright. NEVER gates (no
             # approvable modal) and NEVER runs — the command dies here.
@@ -1802,13 +1807,61 @@ def _audit_record(name: str, args: dict, outcome: dict, result: str) -> str:
     return result
 
 
-def _decide_tier(prim: dict, args: dict) -> tuple[str, str | None, dict | None]:
+# Slice 58 — verbs the user may NEVER downgrade to AUTO, whatever
+# confirm.auto_approve says.
+#
+# Both are irreversible with unbounded blast radius: run_shell is arbitrary code
+# execution, and a sent email cannot be unsent. Everything else on the confirm
+# tier is recoverable (Recycle Bin, quarantine, undo) or bounded in scope, so it
+# is the user's call. This list is small ON PURPOSE — it is a refusal to make
+# two specific footguns available, not a general veto over the user's machine —
+# and the Settings page says so rather than silently ignoring the toggle.
+NEVER_AUTO_APPROVE = frozenset({"run_shell", "send_email"})
+
+
+def _user_downgraded(name: str, info: dict | None) -> bool:
+    """Has the user asked for this verb to run without confirmation?
+
+    Three gates, all of which must pass:
+      1. the verb is listed in `confirm.auto_approve` (default: empty),
+      2. it is not in NEVER_AUTO_APPROVE,
+      3. the classifier has not vetoed THIS invocation via `downgradable: False`
+         — which is how "save files without asking" means CREATE a file but
+         still confirm OVERWRITING one.
+
+    Never raises; any error means no downgrade.
+    """
+    try:
+        if name in NEVER_AUTO_APPROVE:
+            return False
+        allowed = settings.get("confirm.auto_approve", []) or []
+        if name not in allowed:
+            return False
+        return bool((info or {}).get("downgradable", True))
+    except Exception:
+        return False
+
+
+def _decide_tier(prim: dict, args: dict,
+                 name: str = "") -> tuple[str, str | None, dict | None]:
     """Return (tier, description, gate_info). Classification failure fails
-    closed (confirm)."""
+    closed (confirm).
+
+    Slice 58 added the ONE place a user preference may relax a tier. It lives
+    here, rather than at the call site, for the same reason _KILL_SWITCHES has a
+    single source of truth: two copies of a safety rule drift, and the drifting
+    one is always the one that still executes. BLOCKED is never reachable from
+    here — the downgrade only ever turns "confirm" into "auto".
+    """
     if "classify" in prim:
         try:
             info = prim["classify"](args)
-            return info.get("tier", "confirm"), info.get("description"), info
+            tier = info.get("tier", "confirm")
+            if tier == "confirm" and _user_downgraded(name, info):
+                info = dict(info)
+                info["user_downgraded"] = True
+                return "auto", info.get("description"), info
+            return tier, info.get("description"), info
         except Exception:
             return "confirm", "an action that could not be classified", None
     tier = prim.get("tier", "auto")
@@ -1818,6 +1871,8 @@ def _decide_tier(prim: dict, args: dict) -> tuple[str, str | None, dict | None]:
             description = prim["describe"](args)
         except Exception:
             description = None
+    if tier == "confirm" and _user_downgraded(name, None):
+        return "auto", description, {"user_downgraded": True}
     return tier, description, None
 
 

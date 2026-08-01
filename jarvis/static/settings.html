@@ -196,6 +196,76 @@
       </div>
     </div>
 
+    <!-- ---------- Which actions ask first (slice 58) ---------- -->
+    <div class="module">
+      <h3>Which actions ask first</h3>
+      <p class="hint" style="margin:0 0 14px">
+        These normally show a confirmation. Tick one to let JARVIS just do it.
+        <b>Blocked actions stay blocked either way</b> — system folders, drive
+        roots and denylisted commands are refused no matter what is set here.
+      </p>
+
+      <div class="row">
+        <label for="ok_write_path">Save a file anywhere</label>
+        <input type="checkbox" class="toggle okverb" id="ok_write_path" data-verb="write_path">
+        <span class="hint">Creating a new file stops asking. <b>Overwriting an existing
+          file still asks</b> — that one destroys something.</span>
+      </div>
+      <div class="row">
+        <label for="ok_make_folder">Create a folder</label>
+        <input type="checkbox" class="toggle okverb" id="ok_make_folder" data-verb="make_folder">
+      </div>
+      <div class="row">
+        <label for="ok_create_shortcut">Make a shortcut</label>
+        <input type="checkbox" class="toggle okverb" id="ok_create_shortcut" data-verb="create_shortcut">
+      </div>
+      <div class="row">
+        <label for="ok_copy_path">Copy a file</label>
+        <input type="checkbox" class="toggle okverb" id="ok_copy_path" data-verb="copy_path">
+        <span class="hint">The original is untouched by a copy.</span>
+      </div>
+      <div class="row">
+        <label for="ok_browse_navigate">Open a different website</label>
+        <input type="checkbox" class="toggle okverb" id="ok_browse_navigate" data-verb="browse_navigate">
+        <span class="hint">A site <i>you</i> name is already opened without asking.
+          This also stops asking for sites JARVIS finds on a page.</span>
+      </div>
+      <div class="row">
+        <label for="ok_close_window">Close a window</label>
+        <input type="checkbox" class="toggle okverb" id="ok_close_window" data-verb="close_window">
+      </div>
+      <div class="row">
+        <label for="ok_close_tabs">Close browser tabs</label>
+        <input type="checkbox" class="toggle okverb" id="ok_close_tabs" data-verb="close_tabs">
+      </div>
+      <div class="row">
+        <label for="ok_press_keys">Press a key combo</label>
+        <input type="checkbox" class="toggle okverb" id="ok_press_keys" data-verb="press_keys">
+        <span class="hint">Includes Ctrl+S, Enter, Alt+F4 and Delete.</span>
+      </div>
+
+      <div class="row">
+        <label>Moving &amp; deleting</label>
+        <span class="hint">Recoverable, so you may switch these off too.</span>
+      </div>
+      <div class="row">
+        <label for="ok_move_path">Move or rename a file</label>
+        <input type="checkbox" class="toggle okverb" id="ok_move_path" data-verb="move_path">
+      </div>
+      <div class="row">
+        <label for="ok_delete_path">Delete a file</label>
+        <input type="checkbox" class="toggle okverb" id="ok_delete_path" data-verb="delete_path">
+        <span class="hint">Goes to the Recycle Bin, so it can be restored.</span>
+      </div>
+
+      <div class="row">
+        <label>Always ask</label>
+        <span class="hint"><b>Running shell commands</b> and <b>sending email</b> cannot be
+          switched off here. Shell commands can do anything to this PC, and an email
+          cannot be unsent — neither is recoverable, so both always ask.</span>
+      </div>
+    </div>
+
   </div>
 
   <div class="savebar">

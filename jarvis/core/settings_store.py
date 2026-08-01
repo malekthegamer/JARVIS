@@ -85,6 +85,23 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     },
     "confirm": {
         "timeout_s": 30,  # no answer within this window -> action cancelled
+        # Slice 58 — verbs the user has chosen to run WITHOUT confirmation.
+        # Requested from real use: "some actions don't actually need a confirm
+        # screen… it should be at least a setting."
+        #
+        # EMPTY BY DEFAULT: today's behaviour is unchanged until the user opts
+        # in, because a safety relaxation must never arrive by surprise.
+        #
+        # Three limits are enforced in primitives._user_downgraded():
+        #   * BLOCKED is never downgradable (the denylist is a backstop, not a
+        #     preference) — listing a verb cannot turn a refusal into an action;
+        #   * run_shell and send_email are in NEVER_AUTO_APPROVE and ignore this
+        #     list entirely — arbitrary code execution, and a message that
+        #     cannot be unsent;
+        #   * a classifier may veto a single invocation, so enabling write_path
+        #     stops it asking to CREATE a file while still confirming an
+        #     OVERWRITE.
+        "auto_approve": [],
     },
     "vision": {
         # Vision FALLBACK for click targeting — only runs when the fast text

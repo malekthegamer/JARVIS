@@ -515,9 +515,17 @@ def classify_write_path(args: dict) -> dict:
         if p is None:
             return {"tier": "confirm", "command": raw,
                     "description": f"Write '{raw}' (couldn't resolve — confirming)."}
-        verb = "Overwrite" if p.exists() else "Create"
-        note = " (the current version goes to the Recycle Bin)" if p.exists() else ""
+        exists = p.exists()
+        verb = "Overwrite" if exists else "Create"
+        note = " (the current version goes to the Recycle Bin)" if exists else ""
+        # Slice 58: both still CONFIRM by default, but they are not the same
+        # act. Creating a file destroys nothing; overwriting one does. So if the
+        # user puts write_path in confirm.auto_approve ("stop asking when I save
+        # a file"), only the CREATE case is downgraded — an overwrite keeps its
+        # gate. This is the split files.classify_write_file has always had, and
+        # _classify_save_routine cites; write_path simply never got it.
         return {"tier": "confirm", "command": str(p),
+                "downgradable": not exists,
                 "description": f"{verb} this file on your PC{note}: {p}"}
     except Exception:
         return {"tier": "confirm", "command": raw,
