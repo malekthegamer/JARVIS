@@ -314,9 +314,9 @@ read and "hey jarvis" cannot interrupt. It only fires when `_busy` is held by a
 wiring by calling `server._on_wake()` directly, so the live path was never
 covered. **The HUD STOP button does work.** Verified by code reading, not live test.
 
-**Gate:** 915 passed / 0 failed / 0 skipped with the six desktop-driving modules
-excluded — the conftest fullscreen guard refused the full run (the owner was back
-at the machine). **The full gate still owes a run on an idle desktop.**
+**Gate: 1133 passed / 0 failed / 0 skipped — the project's FIRST clean gate.**
+(An earlier partial run of 915 excluded the six desktop-driving modules because
+the fullscreen guard refused; the full run went green once the desktop was idle.)
 
 ### Slice 56 — `make_folder`: the fs verb set is finally complete
 - **The gap:** JARVIS could write, read, move, rename, copy, delete and shortcut
@@ -1706,20 +1706,26 @@ product backlog is genuinely thin, and what remains is mostly *engineering
 integrity* rather than new capability. That is a good problem, but it means the
 honest recommendation is no longer "add a feature".
 
-**Checkpoint status (updated slice 56):** the full gate was run twice at the
-end of the 52-56 batch. Final run: **1097 passed, 1 failed, 0 skipped** in
-8m45s (86 Gemini calls, 195.6s paced). The one failure is
-`test_chain_live.py::test_live_multistep_chain_notepad` — the SAME test that
-failed the slice-51 gate, and it passes in isolation both times. Documented
-live-model flake under pacing pressure, not a regression. **Still not a clean
-0-failure gate; do not record one until a full run comes back green end to end.**
+**✅ CHECKPOINT: THE FIRST CLEAN GATE (slice 57, 2026-08-01).**
 
-The FIRST of those two runs failed `test_wake.py::test_no_detection_never_calls_
-stt_or_writes_audio` — a regression I introduced in slice 54 and the gate caught:
-the new autouse workspace fixture created a dir inside every test's `tmp_path`,
-and that test asserts `tmp_path` is EMPTY to prove no audio is persisted before
-the wake word fires. Fixed by moving the workspace to `tmp_path_factory` rather
-than by weakening a real privacy assertion. Lesson recorded in the fixture.
+    1133 passed, 0 failed, 0 skipped   in 8m55s
+    quota pacer: 83 Gemini calls, slept 220.4s across 21 waits
+
+**This is the first fully green end-to-end run in the project's history.** Every
+prior checkpoint carried at least one failure — usually
+`test_live_multistep_chain_notepad`, the intermittent live-model test — and this
+file has said since slice 51 "do not record a clean gate until a full run comes
+back green end to end". It now has. Conditions that made it reproducible, worth
+copying: an idle desktop (the conftest fullscreen guard refused two earlier
+attempts — VS Code in F11 fullscreen reads as `QUNS_BUSY`), JARVIS quit so port
+8000 was free, and a burst-probed 5/5 quota on both models before starting.
+
+Slices 52-57 are therefore fully verified, including the two that previously
+shipped on a partial gate.
+
+**Previous (slice 56):** 1097 passed, 1 failed, 0 skipped — the one failure was
+`test_chain_live.py::test_live_multistep_chain_notepad`, which passed in
+isolation. It passed in the full run this time.
 
 **Previous (slice 51):** the full LIVE gate finally ran on a
 fresh bucket — **1044 passed, 2 failed, 0 skipped** in 9m02s (83 Gemini calls,
