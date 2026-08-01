@@ -2,6 +2,7 @@
 The first-run default."""
 from __future__ import annotations
 
+from jarvis.core import timing
 from jarvis.core.errors import ProviderError
 from jarvis.providers.registry import register
 from jarvis.providers.stt.base import STTProvider
@@ -16,7 +17,8 @@ class GoogleSTTProvider(STTProvider):
         import speech_recognition as sr  # lazy
         recognizer = sr.Recognizer()
         try:
-            return recognizer.recognize_google(audio)
+            with timing.span("stt"):
+                return recognizer.recognize_google(audio)
         except sr.UnknownValueError:
             return None  # unintelligible — not an error, just loop back
         except sr.RequestError as exc:

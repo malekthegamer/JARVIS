@@ -8,6 +8,8 @@ from __future__ import annotations
 import io
 import threading
 
+from jarvis.core import timing
+
 _lock = threading.Lock()
 _stop_flag = threading.Event()
 
@@ -22,6 +24,9 @@ def play_bytes(data: bytes, block: bool = True) -> None:
             pygame.mixer.init()
         pygame.mixer.music.load(io.BytesIO(data))
         pygame.mixer.music.play()
+        # THE mouth-to-ear marker (slice 57): the instant sound actually starts.
+        # No-op unless JARVIS_VOICE_TIMING=1.
+        timing.mark("first_audio")
         if block:
             clock = pygame.time.Clock()
             while pygame.mixer.music.get_busy():

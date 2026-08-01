@@ -9,6 +9,7 @@ pyttsx3 — so the skeleton always has a voice.
 """
 from __future__ import annotations
 
+from jarvis.core import timing
 from jarvis.core.errors import ProviderError
 from jarvis.core.settings_store import settings
 from jarvis.providers import registry
@@ -88,7 +89,8 @@ class VoiceManager:
                 if provider is None:
                     continue
                 try:
-                    provider.speak(text)
+                    with timing.span(f"tts:{name}"):
+                        provider.speak(text)
                     return
                 except ProviderError as exc:
                     print(f"  [tts] {exc.friendly()}")

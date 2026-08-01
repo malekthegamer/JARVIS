@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 
-from jarvis.core import chain
+from jarvis.core import chain, timing
 from jarvis.core.errors import ProviderError
 from jarvis.core.memory import memory_store
 from jarvis.core.model_chain import TRANSIENT_KINDS, model_chain
@@ -371,7 +371,7 @@ class JarvisBrain:
 
     # ---------- the one call every interface uses ----------
     def think(self, user_message: str, dry_run: bool = False) -> str:
-        with self._lock:
+        with self._lock, timing.span("think"):
             broadcaster.set(AgentState.THINKING)
             # One chain per interaction; ground truth for the HUD. dry_run
             # rides the tracker (slice 18) — primitives.execute() enforces it

@@ -18,6 +18,7 @@ from __future__ import annotations
 import sys
 import threading
 
+from jarvis.core import timing
 from jarvis.core.settings_store import settings
 
 # --- the Python 3.12 contract -------------------------------------------------
@@ -144,8 +145,13 @@ def listen_once(timeout: float = 8.0, phrase_time_limit: float = 15.0):
                 if _calibrated_index != index:
                     _recognizer.adjust_for_ambient_noise(source, duration=0.6)
                     _calibrated_index = index
-                return _recognizer.listen(source, timeout=timeout,
-                                          phrase_time_limit=phrase_time_limit)
+                audio = _recognizer.listen(source, timeout=timeout,
+                                           phrase_time_limit=phrase_time_limit)
+                # Slice 57: `listen` returns ~pause_threshold (0.8s) AFTER the
+                # user actually stopped talking. The harness subtracts that and
+                # SAYS SO rather than quietly flattering the number.
+                timing.mark("speech_end")
+                return audio
         except sr.WaitTimeoutError:
             return None  # silence — caller just listens again
         except OSError as exc:
