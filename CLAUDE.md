@@ -114,9 +114,12 @@ python -m pytest tests/ -q
   and must own port 8000: `test_entrypoint_smoke.py` (slice 46 — launches the
   actual `pythonw tray_start.pyw` user path) and `test_extension_browser.py`.
   With JARVIS running you get ~18 errors, each naming the holder and the fix.
-  Note the implicit ordering: `test_extension_browser.py` leaks its uvicorn
-  daemon thread for the rest of the process, so `test_entrypoint_smoke.py` only
-  works because alphabetical collection runs it first.
+  **Slice 54 removed the old ordering trap** — `test_extension_browser.py` used
+  to leak its uvicorn daemon thread for the rest of the process, so
+  `test_entrypoint_smoke.py` only worked because alphabetical collection ran it
+  first. It now uses `uvicorn.Server` + `should_exit` and releases the port at
+  teardown; the two files pass in either order, and `pytest_sessionfinish` fails
+  loudly (naming the holder) if any test leaves the port bound.
 - **Announce full-suite runs and get an idle desktop (~8 min)** — the live-UIA
   tests steal focus (the user may be gaming; busy desktops also flake those
   tests). Mechanical backstop: conftest refuses to start a desktop-driving run
