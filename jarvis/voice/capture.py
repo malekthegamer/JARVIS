@@ -67,6 +67,15 @@ VIRTUAL_HINTS = (
     "voicemeet", "vb-audio", "cable", "virtual", "stereo mix", "loopback",
     "audiorelay", "steam streaming", "wave link", "sound mapper", "primary sound",
     "output", "speakers", "wo mic", "voicemod",  # phone-mic / voice-changer apps
+    # A LINE-IN JACK IS NOT A MICROPHONE (slice 58, found by the gate on the
+    # owner's real machine). "Line In (Realtek HD Audio Line input)" matched the
+    # 'realtek' hint and therefore RANKED FIRST — above his actual earphone mic.
+    # Nothing is plugged into that jack, so the stream never opens and voice
+    # input silently does not work. Whether it wins depends on device
+    # enumeration, so it can flip between runs, which is indistinguishable from
+    # "the listening is inconsistent". Anyone genuinely recording from line-in
+    # can still pin it with stt.mic_device_index.
+    "line in", "line input", "line-in",
 )
 
 _lock = threading.Lock()
@@ -181,6 +190,36 @@ def note_truncation(audio, limit: float) -> bool:
     return False
 
 
+_open_cache: dict[int, bool] = {}
+
+
+def _can_open(index: int | None) -> bool:
+    """Does this device actually yield a capture stream?
+
+    Cached: probing costs a device open, and find_real_mic() runs on every
+    listen. Cleared by forget_device_probe() whenever a capture fails, so a
+    re-plugged headset is re-discovered rather than being written off forever.
+    Never raises — an un-probeable device simply reads as unusable.
+    """
+    if index in _open_cache:
+        return _open_cache[index]
+    ok = False
+    try:
+        import speech_recognition as sr
+        with sr.Microphone(device_index=index) as source:
+            ok = source.stream is not None
+    except Exception:
+        ok = False
+    _open_cache[index] = ok
+    return ok
+
+
+def forget_device_probe() -> None:
+    """Drop cached open-probes so devices are re-evaluated (called when a
+    capture fails, and whenever the mic pin changes)."""
+    _open_cache.clear()
+
+
 def is_probably_real_mic(name: str) -> bool:
     lower = name.lower()
     return any(h in lower for h in REAL_MIC_HINTS) and not any(h in lower for h in VIRTUAL_HINTS)
@@ -229,10 +268,24 @@ def find_real_mic() -> tuple[int | None, str]:
         lower = name.lower()
         rank = 0 if "realtek" in lower else (1 if "headset" in lower else 2)
         ranked.append((rank, idx, name))
-    if ranked:
-        _rank, idx, name = min(ranked)
-        return idx, name
-    return None, "system default"
+    if not ranked:
+        return None, "system default"
+
+    # A NAME IS A GUESS; OPENING IS GROUND TRUTH (slice 58). Found on the owner's
+    # real machine: the top-ranked "Microphone (Realtek HD Audio Mic input)" is
+    # an EMPTY onboard jack — nothing plugged in — so it never opens, while his
+    # actual Samsung earphone mic sat lower in the ranking and was never tried.
+    # The result is JARVIS silently having no microphone at all, and which
+    # device wins depends on enumeration, so it can change between runs. That is
+    # indistinguishable from "the listening is inconsistent".
+    for _rank, idx, name in sorted(ranked):
+        if _can_open(idx):
+            return idx, name
+    # Nothing opened (every mic busy, or a transient device error): fall back to
+    # the ranked favourite rather than "system default", so behaviour degrades to
+    # exactly what it was before this probe existed.
+    _rank, idx, name = min(ranked)
+    return idx, name
 
 
 def listen_once(timeout: float | None = None, phrase_time_limit: float | None = None):
@@ -277,6 +330,7 @@ def listen_once(timeout: float | None = None, phrase_time_limit: float | None = 
         except OSError as exc:
             print(f"  [mic] device problem ({exc}) — re-detecting on next attempt")
             _calibrated_index = None
+            forget_device_probe()   # a re-plugged device must be re-discovered
             return None
         except Exception as exc:
             print(f"  [mic] capture failed ({exc}) — retrying")

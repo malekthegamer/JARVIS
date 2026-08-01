@@ -174,3 +174,28 @@ def test_the_follow_up_window_is_shorter_than_the_first_turn():
     wake = DEFAULT_SETTINGS["wake"]
     assert wake["follow_up_window_s"] < wake["follow_up_timeout_s"], \
         "the optional follow-up must not wait as long as the expected first turn"
+
+
+# ---------------- device selection: a line-in jack is not a microphone ----------------
+
+def test_a_line_in_jack_is_not_treated_as_a_microphone():
+    """FOUND BY THE GATE, on the owner's real machine: find_real_mic() picked
+    'Line In (Realtek HD Audio Line input)' — index 44 — over his actual
+    earphone microphone, because the ranking prefers 'realtek' and nothing
+    excluded a line-input jack.
+
+    Nothing is plugged into that jack, so the stream never opens and voice input
+    silently does not work at all. Worse, whether it is picked depends on device
+    enumeration, so it can flip between runs — which is indistinguishable from
+    "the listening is inconsistent". A user who genuinely records from line-in
+    can still pin it with stt.mic_device_index."""
+    assert capture.is_probably_real_mic("Line In (Realtek HD Audio Line input)") is False
+    assert capture.is_probably_real_mic("Line Input (Realtek HD Audio)") is False
+
+
+def test_real_microphones_are_still_accepted():
+    """The exclusion must not be so broad that it rejects actual mics."""
+    for good in ("Microphone (Samsung USB C Earphones)",
+                 "Microphone (Realtek HD Audio)",
+                 "Headset Microphone (Bluetooth)"):
+        assert capture.is_probably_real_mic(good) is True, good
