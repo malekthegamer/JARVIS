@@ -144,7 +144,7 @@ def _isolated_audit_log(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _isolated_agent_workspace(tmp_path, monkeypatch):
+def _isolated_agent_workspace(tmp_path_factory, monkeypatch):
     """Slice 54: point the workspace cage — and therefore its QUARANTINE — at a
     per-test temp dir.
 
@@ -167,14 +167,21 @@ def _isolated_agent_workspace(tmp_path, monkeypatch):
     consumer reads it as `files.AGENT_FILES_DIR` (module attribute), so the
     monkeypatch always intercepts — verified by grep before relying on it.
 
-    The temp dir is deliberately NOT named "agent_files": several files already
-    define their own `tmp_workspace` fixture doing
-    `(tmp_path / "agent_files").mkdir()` with no exist_ok, so sharing the name
-    made those collide with FileExistsError. A distinct name lets both live in
-    the same tmp_path, and a test that re-points AGENT_FILES_DIR itself simply
-    wins — this fixture only supplies the default.
+    Uses tmp_path_factory, NOT tmp_path, and that is load-bearing in two ways:
+
+      * `tmp_path / "agent_files"` collided with the several files that define
+        their own `tmp_workspace` fixture doing `.mkdir()` with no exist_ok.
+      * More importantly, creating ANY directory inside a test's own tmp_path
+        breaks tests that assert tmp_path is EMPTY. The full gate caught exactly
+        that: test_wake.py::test_no_detection_never_calls_stt_or_writes_audio
+        asserts `list(tmp_path.iterdir()) == []` to prove no audio is persisted
+        before the wake word fires — a real privacy guarantee that must not be
+        weakened to accommodate a fixture. An autouse fixture has no business
+        putting anything in a directory the test under it may reason about.
+
+    A test that re-points AGENT_FILES_DIR itself simply wins; this only supplies
+    the default.
     """
     from jarvis.primitives import files
-    ws = tmp_path / "_default_agent_ws"
-    ws.mkdir(parents=True, exist_ok=True)
+    ws = tmp_path_factory.mktemp("agent_ws")
     monkeypatch.setattr(files, "AGENT_FILES_DIR", ws)

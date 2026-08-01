@@ -1649,7 +1649,22 @@ product backlog is genuinely thin, and what remains is mostly *engineering
 integrity* rather than new capability. That is a good problem, but it means the
 honest recommendation is no longer "add a feature".
 
-**Checkpoint status (updated slice 51):** the full LIVE gate finally ran on a
+**Checkpoint status (updated slice 56):** the full gate was run twice at the
+end of the 52-56 batch. Final run: **1097 passed, 1 failed, 0 skipped** in
+8m45s (86 Gemini calls, 195.6s paced). The one failure is
+`test_chain_live.py::test_live_multistep_chain_notepad` — the SAME test that
+failed the slice-51 gate, and it passes in isolation both times. Documented
+live-model flake under pacing pressure, not a regression. **Still not a clean
+0-failure gate; do not record one until a full run comes back green end to end.**
+
+The FIRST of those two runs failed `test_wake.py::test_no_detection_never_calls_
+stt_or_writes_audio` — a regression I introduced in slice 54 and the gate caught:
+the new autouse workspace fixture created a dir inside every test's `tmp_path`,
+and that test asserts `tmp_path` is EMPTY to prove no audio is persisted before
+the wake word fires. Fixed by moving the workspace to `tmp_path_factory` rather
+than by weakening a real privacy assertion. Lesson recorded in the fixture.
+
+**Previous (slice 51):** the full LIVE gate finally ran on a
 fresh bucket — **1044 passed, 2 failed, 0 skipped** in 9m02s (83 Gemini calls,
 174.9s slept by the pacer). The two failures were `test_chain_live.py::
 test_live_multistep_chain_notepad` and `test_email_live.py::
