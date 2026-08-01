@@ -261,6 +261,61 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 58 — What real use exposed: listening, and over-confirmation
+The owner used it for a day and reported two things. **Neither was on any
+backlog**, and one of them turned out to be a bug rather than a preference.
+
+**"The listening is kind of inconsistent."** The operative word was *inconsistent*,
+and there were three causes in a capture path that had **zero settings and zero
+tests**:
+- **Ambient calibration ran ONCE per device for the whole process**, while
+  `dynamic_energy_threshold` drifted from that stale baseline — so the same words
+  behaved differently an hour apart. Now re-measured on an interval
+  (`stt.recalibrate_every_s`, default 180s).
+- **`pause_threshold` was a hardcoded 0.8s** serving two opposite needs: low
+  enough to clip a mid-thought pause and ship a PARTIAL sentence to STT, high
+  enough to add dead air to every turn. Now a setting, default **1.2s** (this
+  owner pauses to think).
+- **`phrase_time_limit` was a hardcoded 15s that truncates SILENTLY.** Verified
+  in the library: `timeout` raises `WaitTimeoutError`, but `phrase_time_limit`
+  just **breaks and returns the partial audio** — no exception, no signal. Any
+  request over 15s was quietly halved. Default 30s, **and the cut is now
+  detected and reported.**
+- Slice 57's follow-up window went 5s → 3s; it was adding a mandatory trailing
+  open-mic silence to every conversation.
+
+**"Opening Gmail asked me to confirm."** ⚠ **This was a MIS-TIER, not a
+preference.** `classify_navigate`'s own docstring called the host comparison *"an
+honest proxy for user-named vs model-discovered"* — a proxy, and here it was
+wrong. The gate exists to catch the model following a link **it** found on a page;
+a site the user named is not a surprise. `brain.think()` now records the user's
+verbatim message on the ChainTracker (where `dry_run` and `unattended` already
+ride for the same reason) and a destination the user named is AUTO. **The
+injection case is untouched and now test-pinned:** a host the user never
+mentioned still confirms. Matching is on host LABELS not substring ("devil" must
+not exempt evil.example), with a short alias map for names that differ from their
+domain — found by watching my own first implementation fail its own test, since
+"gmail" appears nowhere in "mail.google.com".
+
+**"It should be a setting."** `confirm.auto_approve`, **empty by default**, on the
+`_KILL_SWITCHES` pattern (one list, one consumption point, no drift). Three hard
+limits: **BLOCKED is never downgradable**; **`run_shell` and `send_email` are in
+`NEVER_AUTO_APPROVE`** and ignore the list (arbitrary code execution, and a
+message that cannot be unsent) with the UI saying so rather than silently
+ignoring a toggle; and **a classifier can veto one invocation** — which is how
+"stop asking when I save a file" means CREATE but still confirms OVERWRITE.
+`classify_write_path` had no AUTO branch at all while its workspace twin
+`files.classify_write_file` has always had that split. The audit log records
+`gate="auto (user override)"`.
+
+**The vision check earned its keep twice.** The screenshot caught two bugs the
+passing DOM assertions went straight past: the new toggles rendered as raw white
+checkboxes (missing the `toggle` class), and my module boundary swallowed "Smooth
+cursor motion" out of Capabilities & safety. The check *itself* then leaked —
+it ticked a box, saved, and left the gate relaxed in the real `settings.json`;
+restoring the file was not enough because the running server caches settings, so
+it now unticks through the same path and asserts the gate is back.
+
 ### Slice 57 — Making it feel alive: silence, turn-taking, and a voice
 Driven by the owner's actual daily complaints (**robotic / too slow / misfires**)
 rather than by the backlog, which was written from the code's point of view.
