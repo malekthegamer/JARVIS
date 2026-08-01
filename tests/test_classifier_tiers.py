@@ -160,13 +160,13 @@ def test_rename_traversal_reaching_a_protected_tree_is_blocked():
     carrying ../.. escapes the source's directory. classify_path_risk resolves
     before judging, so the destination is caught on its REAL location.
 
-    The depth here is deliberate: C:\\Users\\malek + ..\\.. lands exactly on
+    The depth here is deliberate: C:\\Users\\<name> + ..\\.. lands exactly on
     C:\\, so the traversal genuinely reaches C:\\Windows\\System32. An earlier
     draft of this test used tmp_path and four ..'s, which resolved to
     AppData\\Local\\Windows\\System32 — not protected, so 'confirm' was the
     CORRECT answer and the test was wrong, not the code."""
     info = fsaccess.classify_rename_path(
-        {"path": r"C:\Users\malek\notes.txt",
+        {"path": r"C:\Users\someone\notes.txt",
          "new_name": r"..\..\Windows\System32\evil.dll"})
     assert info["tier"] == "blocked", \
         f"a traversal reaching a protected dir must block: {info}"
@@ -178,7 +178,7 @@ def test_rename_execution_refuses_a_path_like_new_name():
     traversal cannot execute even if a classifier were ever weakened."""
     for bad in (r"..\..\Windows\System32\evil.dll", "sub/dir/x.txt",
                 r"sub\x.txt", ".."):
-        r = fsaccess.rename_path(r"C:\Users\malek\notes.txt", bad)
+        r = fsaccess.rename_path(r"C:\Users\someone\notes.txt", bad)
         assert r["ok"] is False, f"{bad!r} must be refused: {r}"
         assert "just a new name" in r["message"], r
 
