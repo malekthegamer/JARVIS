@@ -526,3 +526,44 @@ def test_fallback_is_surfaced_to_the_hud(monkeypatch):
         assert ev.get("brain_is_fallback") is False
     finally:
         jarvis_brain.last_model, jarvis_brain.last_model_was_fallback = prev, prev_flag
+
+
+# ---- Slice 51: the chain order has ONE definition (shared with vision) ----
+
+def test_brain_and_vision_share_one_model_chain():
+    """Two copies of the chain would fork the config contract: the same
+    brain.fallback_models setting could silently mean different things in
+    brain.py and vision.py. One definition, both import it."""
+    from jarvis.brain import JarvisBrain
+    from jarvis.core.model_chain import model_chain
+    from jarvis.core.settings_store import settings
+
+    settings.set("brain.models.gemini", "m-primary", persist=False)
+    settings.set("brain.fallback_models", ["m-backup", "m-third"], persist=False)
+
+    assert model_chain() == ["m-primary", "m-backup", "m-third"]
+    assert JarvisBrain()._model_chain() == model_chain(), \
+        "brain must delegate to the shared chain, not keep its own copy"
+
+
+def test_shared_chain_dedupes_and_preserves_order():
+    """A fallback list that repeats the active model must not make us call the
+    same model twice — that burns quota on a bucket we already know is dry."""
+    from jarvis.core.model_chain import model_chain
+    from jarvis.core.settings_store import settings
+
+    settings.set("brain.models.gemini", "m-primary", persist=False)
+    settings.set("brain.fallback_models", ["m-primary", "m-backup", "m-backup"],
+                 persist=False)
+    assert model_chain() == ["m-primary", "m-backup"]
+
+
+def test_shared_chain_is_just_the_active_model_when_no_fallbacks():
+    """An empty fallback list must yield today's exact behaviour: one model,
+    one call, no retry."""
+    from jarvis.core.model_chain import model_chain
+    from jarvis.core.settings_store import settings
+
+    settings.set("brain.models.gemini", "m-only", persist=False)
+    settings.set("brain.fallback_models", [], persist=False)
+    assert model_chain() == ["m-only"]

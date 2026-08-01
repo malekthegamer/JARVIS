@@ -597,3 +597,220 @@ def test_live_screen_query_admits_when_the_answer_is_not_on_screen(monkeypatch):
                  ("no ", "not ", "n't", "cannot", "can't", "unable", "isn't",
                   "does not", "nothing"))
     assert admits, f"must admit the answer isn't on screen, said: {r['answer']}"
+
+
+# ==================== slice 51: model fallback, Q&A path ONLY ====================
+# STAGE 0 MEASUREMENT (the reason this slice is narrow). Against a synthetic
+# toolbar with known rects, gemini-2.5-flash scored:
+#     screen Q&A (prose)      4/4   - indistinguishable from the primary
+#     localization (locate)   1/7   - counting ONLY calls that returned
+#                                     coordinates; x roughly right, y
+#                                     consistently BELOW the control, with one
+#                                     exact hit, so it reads as sloppiness rather
+#                                     than a fixable coordinate transform
+# The raw tally looked like 1/12, but 5 of those returned nothing because they
+# were 429s (see the daily-cap note below) -- that is model UNAVAILABILITY, not
+# model INACCURACY, and conflating them would have overstated the evidence.
+# The primary scored 4/4 locate on the same image, so the image is not the
+# problem. A locate fallback would therefore convert an honest "the vision model
+# was unavailable" into A CLICK IN THE WRONG PLACE - brain.py's exact warning
+# that "uptime bought by quietly downgrading the model would be a correctness
+# risk disguised as reliability". So: Q&A chains, locate and verify do NOT.
+# The last two tests here PIN that exclusion so it cannot be silently "finished".
+#
+# KNOWN CEILING, measured the hard way. After ~20 probe calls, gemini-2.5-flash
+# returned 429 with quotaId GenerateRequestsPerDayPerProjectPerModel-FreeTier,
+# quotaValue 20 -- i.e. a free-tier ceiling of 20 requests on a DAILY-labelled
+# quota, roughly two orders of magnitude below the primary's. (It served calls
+# again later in the same session, so the exact window semantics are NOT
+# confirmed; the ceiling being far lower than the primary's is the load-bearing
+# fact, not the precise reset behaviour.)
+#
+# Consequence, stated honestly: this chain rescues the PER-MINUTE burst case.
+# Against sustained exhaustion the fallback runs out almost immediately too --
+# so it would NOT have saved the slice-49 gate that motivated the work. The same
+# ceiling applies to slice 44's already-shipped brain chain, which was only ever
+# measured on the per-minute axis.
+#
+# There is deliberately NO live test here: one would depend on that tiny bucket
+# and false-red on any day the gate runs more than a few times -- the exact
+# "false red trains you to ignore red" failure this repo has fought for slices.
+
+
+@pytest.fixture(autouse=True)
+def _restore_vision_model_settings():
+    """LEAK GUARD, written in the same edit as the first test that mutates these
+    (the repo has shipped this bug in four separate slices). The tests below
+    point brain.models.gemini at fake names like 'm-primary'; without restoring,
+    every LIVE test later in the same process would call a nonexistent model."""
+    from jarvis.core.settings_store import settings
+    keys = ("brain.models.gemini", "brain.fallback_models")
+    saved = {k: settings.get(k) for k in keys}
+    yield
+    for k, v in saved.items():
+        settings.set(k, v, persist=False)
+
+
+class _FakeGeminiModels:
+    def __init__(self, plan):
+        self.plan = plan          # model name -> answer str | Exception to raise
+        self.calls = []
+
+    def generate_content(self, model=None, contents=None, config=None):
+        self.calls.append(model)
+        out = self.plan.get(model, RuntimeError(f"unplanned model {model!r}"))
+        if isinstance(out, Exception):
+            raise out
+        return type("_Resp", (), {"text": out})()
+
+
+class _FakeGeminiClient:
+    def __init__(self, plan):
+        self.models = _FakeGeminiModels(plan)
+
+
+def _install_fake_gemini(monkeypatch, plan, chain=("m-primary", "m-backup")):
+    """Swap the SDK client out from under vision. Returns the fake so a test can
+    assert WHICH models were called, and in what order."""
+    from jarvis.core.settings_store import settings
+    settings.set("brain.models.gemini", chain[0], persist=False)
+    settings.set("brain.fallback_models", list(chain[1:]), persist=False)
+    monkeypatch.setattr(jv.config, "get_api_key", lambda name: "fake-key")
+    client = _FakeGeminiClient(plan)
+    monkeypatch.setattr(jv, "_cached_client", client)
+    monkeypatch.setattr(jv, "_cached_key", "fake-key")
+    return client
+
+
+_RATE_LIMIT = RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded for model")
+_BAD_REQUEST = RuntimeError("400 INVALID_ARGUMENT: malformed contents")
+
+_FAKE_LOCATE_JSON = (
+    '{"found": true, "box": [0, 0, 100, 100], "label": "x",'
+    ' "risk": "safe", "confidence": 0.9}'
+)
+_FAKE_VERIFY_JSON = '{"actual_label": "save", "matches": true}'
+
+
+def test_screen_qa_retries_next_model_on_rate_limit(monkeypatch):
+    """The whole point of the slice: a 429 on the primary must not become
+    'the vision model was unavailable' when a sibling bucket can answer."""
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": _RATE_LIMIT,
+        "m-backup": "a spreadsheet is open",
+    })
+    assert jv._call_gemini_qa(b"png", "what is this?") == "a spreadsheet is open"
+    assert c.models.calls == ["m-primary", "m-backup"], c.models.calls
+
+
+def test_screen_qa_uses_primary_when_it_succeeds(monkeypatch):
+    """A healthy primary must never trigger a second call - the fallback is a
+    measured DOWNGRADE, so it may only ever run after a real failure."""
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": "a code editor",
+        "m-backup": "WRONG - must not be reached",
+    })
+    assert jv._call_gemini_qa(b"png", "what is this?") == "a code editor"
+    assert c.models.calls == ["m-primary"], c.models.calls
+
+
+def test_screen_qa_does_not_retry_on_a_non_transient_error(monkeypatch):
+    """A malformed request fails identically on every model. Retrying it would
+    burn quota and bury the real error."""
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": _BAD_REQUEST,
+        "m-backup": "must not be reached",
+    })
+    assert jv._call_gemini_qa(b"png", "what is this?") is None
+    assert c.models.calls == ["m-primary"], c.models.calls
+
+
+def test_screen_qa_returns_none_when_the_whole_chain_is_rate_limited(monkeypatch):
+    """The never-raise contract survives the retry loop: exhausting the chain
+    still returns None, so answer_about_screen still fails closed."""
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": _RATE_LIMIT, "m-backup": _RATE_LIMIT})
+    assert jv._call_gemini_qa(b"png", "what is this?") is None
+    assert c.models.calls == ["m-primary", "m-backup"]
+
+    monkeypatch.setattr(jv.screen, "capture_screen", lambda monitor=0: _fake_screen())
+    r = jv.answer_about_screen("what am I looking at?")
+    assert r["ok"] is False and "unavailable" in r["reason"], r
+
+
+def test_screen_qa_with_no_fallbacks_makes_exactly_one_call(monkeypatch):
+    """An empty fallback list must reproduce pre-slice-51 behaviour exactly."""
+    c = _install_fake_gemini(monkeypatch, {"m-only": _RATE_LIMIT}, chain=("m-only",))
+    assert jv._call_gemini_qa(b"png", "what is this?") is None
+    assert c.models.calls == ["m-only"], c.models.calls
+
+
+def test_locate_does_NOT_fall_back_to_another_model(monkeypatch):
+    """PINNED EXCLUSION (Stage 0: fallback localization 1/12). locate's output
+    gets CLICKED. Failing honestly beats clicking the wrong control, so a 429
+    here must stop at the primary - deliberately, not by omission."""
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": _RATE_LIMIT,
+        "m-backup": _FAKE_LOCATE_JSON,
+    })
+    assert jv._call_gemini(b"png", "the save button") is None
+    assert c.models.calls == ["m-primary"], \
+        "locate must NOT retry on a sibling model - it would click the wrong place"
+
+
+def test_verify_does_NOT_fall_back_to_another_model(monkeypatch):
+    """PINNED EXCLUSION. The pre-click verifier is fail-closed by design and only
+    runs after a successful locate; chaining it buys almost nothing and would
+    weaken the one gate standing between a bad point and a real click."""
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": _RATE_LIMIT,
+        "m-backup": _FAKE_VERIFY_JSON,
+    })
+    assert jv._call_verify_json(b"png", "save the file") is None
+    assert c.models.calls == ["m-primary"], \
+        "pre-click verify must NOT retry on a sibling model"
+
+
+def test_the_REAL_sdk_429_is_treated_as_transient(monkeypatch):
+    """The seam that would break silently. Every other test here raises a plain
+    RuntimeError('429 ...'), which proves the classifier's STRING matching but
+    NOT that the actual SDK exception is classified as transient. If google-genai
+    changed its exception type, the chain would quietly stop retrying and every
+    mock-based test would still pass. So: build the genuine
+    google.genai.errors.ClientError and drive the real chain with it."""
+    from google.genai import errors
+
+    from jarvis.core.errors import classify_exception
+
+    real_429 = errors.ClientError(429, {"error": {
+        "code": 429,
+        "message": ("You exceeded your current quota. Quota exceeded for metric: "
+                    "generate_content_free_tier_requests, limit: 20"),
+        "status": "RESOURCE_EXHAUSTED"}}, None)
+
+    assert classify_exception(real_429, "Gemini").kind in ("rate_limit", "quota_exceeded"), \
+        "the real SDK 429 must classify as transient or the chain never engages"
+
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": real_429,
+        "m-backup": "a browser window",
+    })
+    assert jv._call_gemini_qa(b"png", "what is this?") == "a browser window"
+    assert c.models.calls == ["m-primary", "m-backup"], c.models.calls
+
+
+def test_a_real_sdk_400_does_not_burn_the_chain(monkeypatch):
+    """The other half: a genuine client error must stop at the primary."""
+    from google.genai import errors
+
+    real_400 = errors.ClientError(400, {"error": {
+        "code": 400,
+        "message": "Invalid value at 'contents'",
+        "status": "INVALID_ARGUMENT"}}, None)
+
+    c = _install_fake_gemini(monkeypatch, {
+        "m-primary": real_400,
+        "m-backup": "must not be reached",
+    })
+    assert jv._call_gemini_qa(b"png", "what is this?") is None
+    assert c.models.calls == ["m-primary"], c.models.calls

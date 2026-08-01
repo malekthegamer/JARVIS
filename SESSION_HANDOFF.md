@@ -261,6 +261,69 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 51 — Vision inherits the brain's model fallback (Q&A path ONLY)
+- **The gap:** slice 44 built the model fallback chain for `brain.think()` only.
+  `vision.py` has three Gemini call sites that never retried. Note the backlog
+  said they "hard-fail on 429" — **not true**: each wraps `except Exception:
+  return None` and the callers already report honestly (`locate_and_classify`
+  distinguishes *"the vision model was unavailable"* from *"couldn't find it on
+  screen"*). The real defect was narrower: giving up after one model when a
+  sibling with a separate quota bucket could answer.
+- **Stage 0 inverted the plan.** The approved plan chained all three call sites.
+  Measured against a synthetic toolbar with known rects, `gemini-2.5-flash`:
+
+  | call shape | primary `3.1-flash-lite` | fallback `2.5-flash` |
+  |---|---|---|
+  | screen Q&A (prose) | 4/4 | **4/4** |
+  | localization (locate) | 4/4 | **1/7** |
+  | verify accept / refuse | 2/2 / 2/2 | 1/2 / **2/2** |
+  | confabulation | 0 | 0 |
+
+  So **only the Q&A path chains.** `locate` feeds a point that gets CLICKED — a
+  fallback there would trade an honest *"vision model unavailable"* for a click
+  in the WRONG PLACE, which is `brain.py`'s own "correctness risk disguised as
+  reliability". `verify` is fail-closed by design and only runs after a
+  successful locate, so chaining it buys ~nothing. **Both exclusions are pinned
+  by tests** (`test_locate_does_NOT_fall_back_to_another_model`,
+  `test_verify_does_NOT_fall_back_to_another_model`) so they cannot be silently
+  "finished" by a future session reading the old backlog entry.
+- **An overclaim I had to walk back:** I first recorded localization as 1/12.
+  Five of those calls returned nothing because they were **429s**, not misses —
+  model UNAVAILABILITY, not INACCURACY. The honest figure is 1/7 (calls that
+  actually returned coordinates). Same conclusion, weaker evidence than stated.
+- **THE FINDING THAT OUTLIVES THIS SLICE — the fallback model has a tiny
+  ceiling.** After ~20 probe calls `gemini-2.5-flash` returned 429 with
+  `quotaId=GenerateRequestsPerDayPerProjectPerModel-FreeTier, quotaValue=20`.
+  It served calls again later the same session, so the exact window semantics
+  are unconfirmed — but the ceiling is ~2 orders of magnitude below the
+  primary's. **Therefore the chain rescues the PER-MINUTE burst case only.**
+  Against sustained exhaustion the fallback dies almost immediately too, which
+  means **it would NOT have saved the slice-49 gate that motivated this work.**
+  The same ceiling applies to **slice 44's already-shipped brain chain**, which
+  was only ever measured on the per-minute axis. See §7 item 1.
+- **Files:** NEW `jarvis/core/model_chain.py` (one definition of the chain order
+  + `TRANSIENT_KINDS`; depends only on settings, so vision never imports brain —
+  that edge would be a cycle). `brain.py` `_model_chain()` now delegates.
+  `vision.py` gains `_generate_with_chain(call)`, used by `_call_gemini_qa` only.
+- **No live test, deliberately.** One would depend on that 20-call bucket and
+  false-red whenever the gate runs a few times — the exact "false red trains you
+  to ignore red" failure this repo has fought for slices. Replaced with a
+  deterministic test that builds the **real** `google.genai.errors.ClientError`
+  and drives the chain with it: the other tests raise `RuntimeError("429 ...")`,
+  which proves the classifier's string matching but NOT that the actual SDK
+  exception is transient — if google-genai changed its exception type the chain
+  would silently stop retrying and every mock-based test would still pass.
+
+**How to test this slice**
+1. Deterministic, no quota, ~0.2s:
+   `python -m pytest tests/test_vision.py -k "screen_qa or does_NOT_fall_back or sdk" -q`
+   → 9 passed, "quota pacer: 0 Gemini calls".
+2. Shared-chain extraction: `python -m pytest tests/test_brain.py -q` → 33 passed.
+3. By hand: set `brain.models.gemini` to a bogus-but-transient condition is hard
+   to stage, so instead trust the pinned tests and watch for the console line
+   `[vision] <model> unavailable (rate_limit) — falling back to <next>` during a
+   burst of "what am I looking at?" questions.
+
 ### Slice 50 — Scheduled routines: JARVIS acts without being asked
 - **The feature:** *"run work mode every weekday at 8am"*. `schedule_routine` /
   `list_schedules` / `cancel_schedule`, stored DPAPI-encrypted in
@@ -1432,21 +1495,32 @@ product backlog is genuinely thin, and what remains is mostly *engineering
 integrity* rather than new capability. That is a good problem, but it means the
 honest recommendation is no longer "add a feature".
 
-**Carried, blocking a clean checkpoint:** the full LIVE gate has not passed since
-slice 48. Slices 49 and 50 shipped on a green DETERMINISTIC gate (787 passed)
-because the free-tier daily quota is exhausted — burst-probed at 1/5, the
-"token trickle, NOT headroom" case. **Run a full live gate first thing on a
-fresh bucket** before treating 49/50 as fully verified.
+**Checkpoint status (updated slice 51):** the full LIVE gate finally ran on a
+fresh bucket — **1044 passed, 2 failed, 0 skipped** in 9m02s (83 Gemini calls,
+174.9s slept by the pacer). The two failures were `test_chain_live.py::
+test_live_multistep_chain_notepad` and `test_email_live.py::
+test_live_script3_invoice_chain`; **both pass in isolation**, which is the
+documented live-model flake pattern under pacing pressure, not a regression.
+That materially clears the slice 49/50 verification debt carried above. It is
+still **not a clean 0-failure gate** — do not record one until a full run comes
+back green end to end.
 
 ### Recommended next, in order
 
-1. **Vision has NO brain fallback chain** *(small, and it just bit us)*. Slice 44
-   built the model-fallback chain for `brain.think()` only; `vision.py` has
-   **three** Gemini call sites (locate, verify, screen_query) that hard-fail on a
-   429. Demonstrated in the slice-49 gate: brain calls survived on the fallback
-   model while all three `screen_query` tests failed. Reuse `_model_chain()`.
-   Honest caveat: the exhaustion that exposed it was self-inflicted by five gates
-   in a day, so this is more test-robustness than user-facing.
+1. **The fallback MODEL itself is nearly useless for exhaustion** *(new, found
+   by slice 51; supersedes the old item 1, which is now DONE)*. `gemini-2.5-flash`
+   reported a free-tier ceiling of **20 requests** on a daily-labelled quota —
+   ~2 orders of magnitude below the primary. So both slice 44's brain chain and
+   slice 51's vision Q&A chain only rescue **per-minute bursts**; against
+   sustained exhaustion the fallback is exhausted too. Neither would have saved
+   the slice-49 gate that motivated the work. **The fix is to pick a better
+   fallback model, not to add more chains**: probe sibling models for a larger
+   free-tier daily quota and change `brain.fallback_models` (one setting, fixes
+   brain AND vision at once). Probe with a fresh bucket; note a *successful*
+   probe call proves nothing about headroom — burst it.
+   ~~Vision has NO brain fallback chain~~ — **DONE (slice 51)**, Q&A path only;
+   locate and verify are deliberately, test-pinned EXCLUDED after measuring the
+   fallback at 1/7 on localization. Do not "finish the job" — read §2 slice 51.
 2. **`input.enabled` kill switch** *(safety completeness)*. Every capability has
    one — shell, fs, web, search, email, vision, routines, schedules — **except
    mouse and keyboard**, which is the most powerful surface of all. The

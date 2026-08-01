@@ -13,6 +13,7 @@ import threading
 from jarvis.core import chain
 from jarvis.core.errors import ProviderError
 from jarvis.core.memory import memory_store
+from jarvis.core.model_chain import TRANSIENT_KINDS, model_chain
 from jarvis.core.undo import UndoEntry, undo_stack
 from jarvis.core.settings_store import settings
 from jarvis.providers import registry
@@ -219,7 +220,10 @@ def _accepts_model_arg(provider) -> bool:
         return False
 
 
-_TRANSIENT_KINDS = ("rate_limit", "quota_exceeded", "connection")
+# Slice 51 moved both of these to jarvis.core.model_chain so vision can share
+# them. Re-exported under the old name: this module's callers and tests already
+# reference _TRANSIENT_KINDS, and the values must stay literally identical.
+_TRANSIENT_KINDS = TRANSIENT_KINDS
 
 
 class JarvisBrain:
@@ -236,21 +240,19 @@ class JarvisBrain:
 
     # ---------- brain resilience (slice 44) ----------
     def _model_chain(self) -> list[str]:
-        """Active model first, then the configured fallbacks — deduped, order
-        preserved. Same shape as voice_manager._fallback_chain().
+        """The shared chain (jarvis.core.model_chain), kept as a method so the
+        existing call sites and tests are unchanged.
 
-        MEASURED (Stage 0): the primary caps at ~15 RPM, and gemini-2.5-flash
-        ANSWERED while the primary was 429 — sibling models have SEPARATE
-        buckets, which is the only reason a model-level chain helps. Both were
-        also proven to return correct tool calls against all 40 real tool
-        declarations; gemini-2.0-flash could not be proven and is deliberately
-        NOT in the default chain."""
-        active = settings.get("brain.models.gemini", "gemini-3.1-flash-lite")
-        chain = [active]
-        for extra in (settings.get("brain.fallback_models", []) or []):
-            if extra and extra not in chain:
-                chain.append(extra)
-        return chain
+        MEASURED (slice 44, Stage 0): gemini-2.5-flash ANSWERED while the
+        primary was 429 — separate quota buckets — AND returned correct tool
+        calls against all 40 real tool declarations. gemini-2.0-flash could not
+        be proven and is deliberately NOT in the default chain.
+
+        Note that "proven for tool calls" is NOT "proven for vision": slice 51
+        measured the same fallback at 1/12 on visual localization, which is why
+        vision chains only its Q&A path. See jarvis/primitives/vision.py.
+        """
+        return model_chain()
 
     def _generate_with_fallback(self, prompt: str, tools):
         """One model turn, retried down the chain on TRANSIENT failures only.

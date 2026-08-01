@@ -57,6 +57,8 @@ import json
 import re
 
 from jarvis import config
+from jarvis.core.errors import classify_exception
+from jarvis.core.model_chain import TRANSIENT_KINDS, model_chain
 from jarvis.core.settings_store import settings
 from jarvis.primitives import screen
 
@@ -218,7 +220,16 @@ def _call_gemini(png_bytes: bytes, description: str) -> str | None:
     """Structured-JSON multimodal call. Returns the JSON text, or None on any
     failure (missing key, network, SDK error). Reuses the gemini key/timeout
     pattern; a separate cached client since this is a different call shape than
-    the tool-calling brain."""
+    the tool-calling brain.
+
+    *** NO MODEL FALLBACK HERE, DELIBERATELY (slice 51). ***
+    This call's output becomes a POINT THAT GETS CLICKED. Slice 51 measured the
+    fallback model at 1/7 on localization against 4/4 for the primary on the
+    same image — x roughly right, y consistently below the control. Chaining
+    here would trade an honest "the vision model was unavailable" for a click in
+    the WRONG PLACE, which is brain.py's "correctness risk disguised as
+    reliability" exactly. Failing closed is the correct behaviour, not a gap.
+    Pinned by test_locate_does_NOT_fall_back_to_another_model."""
     global _cached_client, _cached_key
     key = config.get_api_key("gemini")
     if not key:
@@ -321,7 +332,13 @@ def _crop_around_point(img, point_img_xy, pad: int) -> tuple[int, int, int, int]
 
 
 def _call_verify_json(png_bytes: bytes, approved_label: str) -> dict | None:
-    """The grounded crop re-read (mocked in tests). None on any failure."""
+    """The grounded crop re-read (mocked in tests). None on any failure.
+
+    *** NO MODEL FALLBACK HERE, DELIBERATELY (slice 51). *** This is the last
+    gate between a bad point and a real click, and it is fail-closed by design:
+    None means "don't click". It also only runs AFTER a successful locate, which
+    does not chain — so a chain here would almost never engage anyway. Pinned by
+    test_verify_does_NOT_fall_back_to_another_model."""
     key = config.get_api_key("gemini")
     if not key:
         return None
@@ -522,6 +539,34 @@ _QA_PROMPT = (
 )
 
 
+def _generate_with_chain(call):
+    """Run `call(model)` down the shared model chain, retrying ONLY on transient
+    failures. Returns the first success.
+
+    Bounded: each model is tried at most once. A NON-transient error (bad
+    request, bad key) is re-raised immediately — it would fail identically on
+    every model, so retrying would only burn quota and bury the real error. If
+    every model is transiently unavailable the FIRST error is re-raised, so the
+    caller still sees the honest reason.
+
+    *** Q&A PATH ONLY — see the exclusion note above _call_gemini. ***
+    """
+    first: Exception | None = None
+    chain = model_chain()
+    for index, model in enumerate(chain):
+        try:
+            return call(model)
+        except Exception as exc:
+            kind = classify_exception(exc, "Gemini vision").kind
+            if kind not in TRANSIENT_KINDS:
+                raise
+            first = first or exc
+            if index + 1 < len(chain):
+                print(f"  [vision] {model} unavailable ({kind}) — "
+                      f"falling back to {chain[index + 1]}")
+    raise first if first is not None else RuntimeError("empty model chain")
+
+
 def _call_gemini_qa(png_bytes: bytes, question: str) -> str | None:
     """Free-text multimodal call. Returns the answer text, or None on any
     failure (missing key, network, SDK error).
@@ -530,10 +575,15 @@ def _call_gemini_qa(png_bytes: bytes, question: str) -> str | None:
     locked to a response_schema for structured locate/verify results, and this
     one must return prose. Shares the cached client and key handling.
 
-    Note: this is a THIRD Gemini call site. Slice 45's test pacer wraps
-    google.genai.models.Models.generate_content, so it is paced automatically.
-    Slice 44's model fallback chain covers brain.think() ONLY, so a 429 here is
-    still a hard failure — a known, unchanged gap, not one this slice widens.
+    Slice 51: this is the ONE vision call site that retries down the model
+    chain. It is the safe place to do it — the output is prose the user reads,
+    with no coordinates and nothing clickable, so a slightly weaker answer is a
+    quality cost, never a wrong action. Measured: the fallback matched the
+    primary 4/4 here, but scored 1/7 on localization, which is why the other two
+    call sites deliberately do NOT chain.
+
+    Slice 45's test pacer wraps google.genai.models.Models.generate_content, so
+    every model in the chain is paced automatically.
     """
     global _cached_client, _cached_key
     key = config.get_api_key("gemini")
@@ -545,14 +595,13 @@ def _call_gemini_qa(png_bytes: bytes, question: str) -> str | None:
         if _cached_client is None or _cached_key != key:
             _cached_client = genai.Client(api_key=key, http_options={"timeout": 30_000})
             _cached_key = key
-        model = settings.get("brain.models.gemini", "gemini-3.1-flash-lite")
-        resp = _cached_client.models.generate_content(
-            model=model,
-            contents=[
-                types.Part.from_bytes(data=png_bytes, mime_type="image/png"),
-                types.Part.from_text(text=_QA_PROMPT.format(question=question)),
-            ],
-        )
+        parts = [
+            types.Part.from_bytes(data=png_bytes, mime_type="image/png"),
+            types.Part.from_text(text=_QA_PROMPT.format(question=question)),
+        ]
+        resp = _generate_with_chain(
+            lambda model: _cached_client.models.generate_content(
+                model=model, contents=parts))
         return resp.text
     except Exception:
         return None
