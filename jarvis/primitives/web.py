@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -665,6 +666,59 @@ def _site_host() -> str:
         return ""
 
 
+_HOST_NOISE = {"www", "com", "org", "net", "co", "uk", "io", "app", "mail",
+               "google", "gov", "edu"}
+
+# Spoken names that do not appear in their own hostname. Deliberately SHORT and
+# not exhaustive: this is a convenience for the handful of sites people call
+# something other than their domain, not a general allowlist. An unlisted site
+# simply keeps the confirmation, which is the safe direction to be wrong in.
+_HOST_ALIASES = {
+    "gmail": ("mail.google.com", "gmail.com"),
+    "twitter": ("x.com", "twitter.com"),
+    "gdrive": ("drive.google.com",),
+}
+
+
+def _user_named_host(target_host: str) -> bool:
+    """Did the user name this destination in their own words THIS turn?
+
+    Slice 58, from real use: "when I told them to open Gmail, it asked me to
+    confirm… He's just opening the tab." He was right. The cross-host gate calls
+    itself "an honest proxy for 'user-named vs model-discovered'" — a PROXY, and
+    here it was wrong. The gate exists to catch the model following a link IT
+    found on a page (the prompt-injection case); a site the user asked for by
+    name is not a surprise to them.
+
+    Ground truth is the user's verbatim message, carried on the live chain.
+    Matching is on host LABELS, not naive substring: 'evil.example' must not be
+    waved through because the user typed "devil". Generic labels (www, com,
+    mail, google…) are ignored, so "check my mail" cannot exempt mail.evil.com.
+
+    Fails CLOSED — no chain, no message, or any error means no exemption.
+    """
+    try:
+        from jarvis.core import chain
+        tracker = chain.current()
+        said = (getattr(tracker, "user_message", "") or "").lower() if tracker else ""
+        if not said:
+            return False
+        # Tokenize the user's words the same way we split the hostname, so a
+        # match means "this label appeared as a word", not "these letters occur".
+        words = set(re.split(r"[^a-z0-9]+", said))
+        host = str(target_host or "").lower()
+
+        # A spoken name that differs from the hostname ("gmail" -> mail.google.com).
+        for spoken, hosts in _HOST_ALIASES.items():
+            if spoken in words and host in hosts:
+                return True
+
+        labels = [p for p in host.split(".") if p and p not in _HOST_NOISE]
+        return any(label in words for label in labels)
+    except Exception:
+        return False
+
+
 def _cross_host(target_url: str) -> str | None:
     """The destination HOST when navigating to `target_url` would leave the
     current page's host — else None. Shared by classify_navigate and
@@ -1031,10 +1085,17 @@ def web_search(query: str, count: int | None = None) -> dict:
 # ---------------------------------------------------------------- classify + run
 
 def classify_navigate(args: dict) -> dict:
-    """Scheme allowlist (http/https only → else BLOCKED) + cross-origin CONFIRM.
-    The current page's host vs. the target host is an honest proxy for
-    'user-named vs. model-discovered' — a jump to a new host gets a checkpoint
-    with the verbatim URL. Never raises."""
+    """Scheme allowlist (http/https only → else BLOCKED) + cross-origin CONFIRM,
+    UNLESS the user named the destination themselves.
+
+    The host comparison is a proxy for 'user-named vs. model-discovered', and
+    slice 58 fixed the case where the proxy is wrong: asked to "open Gmail" this
+    confirmed, because JARVIS had read a page first and gmail was therefore
+    "cross-host". Nothing was there to review — the user had just named it. The
+    gate's real target is the model following a link IT found on a page, and
+    that case is untouched: a host the user never mentioned still confirms.
+
+    Never raises."""
     try:
         url = str(args.get("url", "") or "").strip()
         parsed = urlparse(url)
@@ -1044,6 +1105,9 @@ def classify_navigate(args: dict) -> dict:
                     "description": f"BLOCKED: only http/https URLs are allowed "
                                    f"(refusing '{url}')."}
         dest_host = _cross_host(url)  # shared with classify_web_click
+        if dest_host and _user_named_host(dest_host):
+            return {"tier": "auto",
+                    "description": f"Navigate to {url} (you asked for this site)"}
         if dest_host:
             return {"tier": "confirm", "command": url,
                     "description": f"Navigate to a different site ({dest_host}) "

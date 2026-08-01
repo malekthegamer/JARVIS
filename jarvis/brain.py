@@ -394,6 +394,11 @@ class JarvisBrain:
             # rides the tracker (slice 18) — primitives.execute() enforces it
             # mechanically, and think()'s finally clears it with the chain.
             tracker = chain.start(dry_run=dry_run)
+            # Slice 58: ground truth for "did the USER name this destination?".
+            # classify_navigate used the current page's host as a proxy for
+            # user-named vs model-discovered; the proxy was wrong whenever the
+            # user plainly asked for a site by name.
+            tracker.user_message = user_message or ""
             status = "error"  # anything that escapes _think_inner ends the chain honestly
             try:
                 reply = self._think_inner(user_message, dry_run=dry_run)

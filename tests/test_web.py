@@ -985,3 +985,85 @@ def test_launch_daily_browser_is_idempotent_when_already_running(monkeypatch):
     res = web.launch_daily_browser()
     assert res["ok"], res
     assert "already" in res["message"].lower(), res
+
+
+# ============ slice 58: a destination the USER named is not a surprise ============
+# REPORTED IN REAL USE: "when I told them to open Gmail, it asked me to confirm,
+# which is not really something I need to confirm. He's just opening the tab."
+#
+# He was right, and this is a MIS-TIER rather than a preference. classify_navigate's
+# own docstring says the host comparison is "an honest proxy for 'user-named vs
+# model-discovered'". It is a proxy, and here the proxy was simply wrong: the gate
+# exists to catch the model wandering to a host IT discovered on a page (the
+# prompt-injection case). When the user says "open Gmail", there is nothing to
+# review -- he already named it.
+#
+# The fix consults GROUND TRUTH (the user's verbatim message, carried on the
+# ChainTracker) instead of the proxy. A host the user never mentioned still
+# confirms, so the injection case this was built for is untouched.
+
+
+def _with_utterance(monkeypatch, text, current_url="https://example.com/page"):
+    """Put a live chain carrying the user's message in place, and pin the
+    browser's current page so the cross-host proxy would otherwise fire."""
+    from jarvis.core import chain
+
+    tracker = chain.start()
+    tracker.user_message = text
+    monkeypatch.setattr(web, "_active_session",
+                        lambda: type("S", (), {"current_url": current_url})())
+    return tracker
+
+
+def test_a_host_the_user_named_is_auto(monkeypatch):
+    """THE COMPLAINT. 'open gmail' -> gmail.com is user-named, not discovered."""
+    _with_utterance(monkeypatch, "open gmail for me")
+    info = web.classify_navigate({"url": "https://mail.google.com"})
+    assert info["tier"] == "auto", info
+
+
+def test_the_bare_domain_counts_as_naming_it(monkeypatch):
+    _with_utterance(monkeypatch, "go to github.com and check my notifications")
+    assert web.classify_navigate({"url": "https://github.com/x"})["tier"] == "auto"
+
+
+def test_a_host_the_user_never_mentioned_still_confirms(monkeypatch):
+    """THE INJECTION CASE, which must NOT be weakened. A page saying 'now visit
+    evil.example' produces a navigate the user never asked for, and the user's
+    own words are the thing that proves it."""
+    _with_utterance(monkeypatch, "read this page and summarise it")
+    info = web.classify_navigate({"url": "https://evil.example/steal"})
+    assert info["tier"] == "confirm", info
+    assert "evil.example" in (info.get("command", "") + info["description"])
+
+
+def test_no_chain_means_no_exemption(monkeypatch):
+    """Fail closed: with no live chain there is no user message to appeal to, so
+    the old cross-host behaviour stands."""
+    from jarvis.core import chain
+
+    chain.clear("done")
+    monkeypatch.setattr(web, "_active_session",
+                        lambda: type("S", (), {"current_url": "https://example.com"})())
+    assert web.classify_navigate({"url": "https://mail.google.com"})["tier"] == "confirm"
+
+
+def test_a_substring_of_an_unrelated_word_does_not_grant_an_exemption(monkeypatch):
+    """HOSTILE: 'evil.example' must not be waved through because the user happened
+    to type a word containing 'evil' (e.g. 'devil'). Matching is on host labels,
+    not naive substring."""
+    _with_utterance(monkeypatch, "tell me about the devil in literature")
+    assert web.classify_navigate({"url": "https://evil.example"})["tier"] == "confirm"
+
+
+def test_the_exemption_survives_punctuation_and_case(monkeypatch):
+    _with_utterance(monkeypatch, "Open GitHub, please.")
+    assert web.classify_navigate({"url": "https://github.com"})["tier"] == "auto"
+
+
+def test_a_non_http_scheme_is_still_blocked_even_if_named(monkeypatch):
+    """The scheme allowlist is a BLOCK, and nothing the user says downgrades a
+    block."""
+    _with_utterance(monkeypatch, "open file:///c:/windows/system32")
+    info = web.classify_navigate({"url": "file:///c:/windows/system32"})
+    assert info["tier"] == "blocked", info

@@ -59,6 +59,13 @@ class ChainTracker:
         # rather than a guess made when the schedule was created. Any non-AUTO
         # step is PARKED — never prompted at an empty room, never auto-approved.
         self.unattended = unattended
+        # Slice 58: the user's VERBATIM message for this interaction. Ground
+        # truth for "did the user name this themselves?", which is what
+        # classify_navigate needs to tell a destination the user asked for from
+        # one the model discovered on a page. Set by brain.think(); empty when
+        # there is no user turn (a scheduled routine), which correctly grants no
+        # exemption to anything.
+        self.user_message: str = ""
         self.steps: list[str] = []          # declared plan (descriptive)
         self.revision = 0                   # bumped per plan_steps call
         self.calls: list[dict] = []         # ground truth: executed tool calls
