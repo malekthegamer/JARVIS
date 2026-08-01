@@ -261,6 +261,30 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 55 — Tier tests for the four classifiers that had none
+- **Why it matters:** tiering IS the safety model. A classifier returning
+  `auto` where it should return `confirm` removes the gate silently and nothing
+  else in the stack notices. These four decide their tier from ARGUMENTS at run
+  time and had zero deterministic coverage.
+- **28 tests, no desktop / network / model** — every seam monkeypatched, so the
+  module stays out of conftest's `_DESKTOP_DRIVING_MODULES`.
+- **What is now pinned:** typing into a terminal CONFIRMs (and carries the
+  verbatim payload — slice 38's point); `Enter` on the user's real accounts
+  CONFIRMs and shows what it submits while navigation keys stay AUTO (prompt
+  fatigue is its own safety problem); `Enter` stays AUTO in the isolated
+  logged-out browser as a deliberate owner decision; shortcut/rename into a
+  protected tree BLOCKs; neither fs classifier can ever return `auto`; all four
+  fail closed to `confirm` when their resolver raises; and every one returns a
+  valid tier on garbage input (an unknown tier string is the dangerous case).
+- **A test I got wrong, and the correction.** The traversal test first used
+  `tmp_path` with four `..`s and asserted BLOCKED. It returned `confirm` — and
+  `confirm` was *correct*: from a deep pytest temp dir that traversal resolves
+  to `AppData\Local\Windows\System32`, which is not protected. **The test was
+  wrong, not the code.** Rewritten with a known-depth path that genuinely
+  reaches `C:\Windows\System32` (blocked), plus a second test pinning the
+  independent execution-layer guard: `rename_path()` refuses any `new_name`
+  containing a separator or `..` outright. Two layers, both now pinned.
+
 ### Slice 54 — Test integrity: two leaks closed, one honestly not
 The backlog named three leaks. **Two are fixed with before/after evidence; the
 third did not reproduce and its obvious fix would destroy user data.**
@@ -1635,9 +1659,8 @@ back green end to end.
    (the real memory store, real `data/agent_files`, `taskkill /IM notepad.exe`).
    Slices 43/44/45/48 each shipped a state-leak bug; this is the pattern, not
    bad luck.
-4. **The four untested classifiers** — `classify_type`, `classify_web_key`,
-   `classify_create_shortcut`, `classify_rename_path` have no deterministic tier
-   tests. Small, and tiering is the safety model.
+4. ~~The four untested classifiers~~ **DONE (slice 55)** — 28 deterministic
+   tests in `tests/test_classifier_tiers.py`, no desktop/network/model.
 5. **Local model fallback / Ollama** (`IDEAS.md` #5, the last unbuilt idea).
    **Re-scope its justification first:** the entry still half-claims it would fix
    gate false-red, which slice 45's pacing already solved by other means. The
