@@ -261,6 +261,63 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 57 — Making it feel alive: silence, turn-taking, and a voice
+Driven by the owner's actual daily complaints (**robotic / too slow / misfires**)
+rather than by the backlog, which was written from the code's point of view.
+**The central finding: the slowness and the roboticness were the same bug** — a
+strictly sequential pipeline with no audible feedback anywhere.
+
+- **Stage 0 — two free fixes with outsized impact.** The system prompt told the
+  model *"Abilities not yet wired up (file access outside your workspace…)"*
+  while the SAME prompt said it could work with real files anywhere — stale since
+  slices 32-33, so **JARVIS was instructed to refuse a capability it has**. And
+  `_trim()` capped history at 40 messages *counting tool turns*, so one 12-round
+  chain evicted the conversation (demonstrated: after a big chain the only
+  surviving user message was the newest). Tool rounds are now shed first, oldest
+  first, in whole `tool_call`+results groups — an orphaned result 400s Gemini.
+- **Stage 1 — the mouth-to-ear number this project never had.**
+  `jarvis/core/timing.py` (`span`/`mark`, OFF unless `JARVIS_VOICE_TIMING=1`, so
+  it works in REAL use not just a harness) + `tests/harness_voice_latency.py`.
+  Marked at `pygame.mixer.music.play` — the instant sound actually starts.
+- **⚠ Stage 1 CANCELLED Stage 2, which was the point of measuring first.**
+
+  | reply | time-to-first-audio |
+  |---|---|
+  | "Done, sir." | 656ms |
+  | four sentences | **781ms** |
+
+  Synthesis is a roughly FIXED ~700-850ms network round trip, **not proportional
+  to text**. So sentence-level streaming — a day's work plus barge-in regression
+  risk — would have saved ~400ms on long replies and ~nothing on short ones.
+  Cut, with the owner's approval. **Do not rebuild it without re-measuring.**
+- **Stage 3 — the follow-up window + earcons.** `handle_wake` captured exactly
+  ONE utterance, so every exchange needed "hey jarvis" again. Now a bounded turn
+  loop (5s window, ≤6 turns, ≤90s — the loop holds `_busy`, so a television in
+  the room must not starve push-to-talk). **Mic ownership turned out to be a
+  non-issue**: `_process_frame` already closes the wake mic before `_on_wake` and
+  reopens after, so the loop runs inside an already-silent window. Barge-in now
+  ends the CONVERSATION, not just the sentence. Earcons are synthesized WAV bytes
+  in pure Python — no assets, no dependency — guarded by `is_playing()` because
+  they share pygame's single channel and would truncate speech.
+- **Stage 4 — the film-JARVIS voice, and the biggest latency win of the slice.**
+  Persona was one adjective against 90 lines of tool rules. Measured before/after
+  on the same prompts: **median 10.0 → 4.5 words, total 40 → 19 (-52%)**. The
+  factual answers are byte-identical; the entire saving is filler ("Is there
+  anything else I can assist you with?"). At the measured ~3 words/sec that is
+  **~1.8s less speech per exchange — about 4× what streaming would have bought.**
+
+**🔴 Known bug, found while planning, NOT fixed:** voice barge-in is unreachable
+in the normal flow. `wake.py:66-81` closes the mic, calls `_on_wake()`
+**synchronously**, and reopens only after — so during think→speak no frames are
+read and "hey jarvis" cannot interrupt. It only fires when `_busy` is held by a
+*different* trigger (PTT/chat/scheduler); `test_interrupt.py:197` proves the
+wiring by calling `server._on_wake()` directly, so the live path was never
+covered. **The HUD STOP button does work.** Verified by code reading, not live test.
+
+**Gate:** 915 passed / 0 failed / 0 skipped with the six desktop-driving modules
+excluded — the conftest fullscreen guard refused the full run (the owner was back
+at the machine). **The full gate still owes a run on an idle desktop.**
+
 ### Slice 56 — `make_folder`: the fs verb set is finally complete
 - **The gap:** JARVIS could write, read, move, rename, copy, delete and shortcut
   files ANYWHERE on the PC — but could not create a directory. It could drop
