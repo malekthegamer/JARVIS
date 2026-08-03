@@ -90,7 +90,7 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
 
 ## What it can actually do
 
-48 registered primitives, each individually tested:
+49 registered primitives, each individually tested:
 
 - **Apps & windows** — `launch_app` (Start Menu, desktop shortcuts, Steam and
   Epic libraries), `close_window`, `read_ui_tree`
@@ -114,8 +114,11 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
   routine every day / weekday / week at a set time
 
 Plus: multi-step chains with a visible plan, a vision fallback for icon-only
-controls, dry-run mode (`dry run: …`), `undo_last_action`, and **barge-in** —
-say "hey jarvis" or press the STOP button to cut it off mid-sentence.
+controls, dry-run mode (`dry run: …`), `undo_last_action`, a follow-up window
+after a wake-word reply so you don't need to say "hey jarvis" again for a
+second thing, and **barge-in** — press the STOP button to cut it off
+mid-sentence (see "Cutting it off" below for the honest limits of the
+wake-word version of that).
 
 ## Turning capabilities off
 
@@ -163,19 +166,28 @@ change, a job may run an hour off.
 
 ### Cutting it off
 
-Talking too long? Say **"hey jarvis"** while it's speaking, or click the amber
-**■ STOP** button in the HUD. It stops talking immediately and runs no further
-steps.
+Talking too long? Click the amber **■ STOP** button in the HUD. It stops
+talking immediately and runs no further steps.
 
 **What stop does and doesn't do:** it prevents whatever comes *next*. It cannot
-un-do something already done — if it already clicked the button, that click
+un-do something already done — if it already clicked a button, that click
 happened. JARVIS will tell you honestly which steps finished and which didn't.
 
-The wake word only interrupts while JARVIS is actually speaking or acting; a
-confirmation prompt is left alone, since that already has its own Cancel button.
-Tested: JARVIS's own voice scores well below the wake threshold, so it won't
-interrupt itself — but a noisy room could trigger a stop you didn't mean. That
-only ever *prevents* work, never causes any.
+**Saying "hey jarvis" to interrupt only works some of the time, honestly stated:**
+while JARVIS is thinking or speaking as a *result of* a wake-word-triggered
+interaction, its own wake-word listener has its microphone closed for that
+whole stretch — so it cannot hear a second "hey jarvis" to cut itself off. The
+wake word *can* interrupt if something else has your attention at the moment
+(push-to-talk, typing in the HUD), just not the most common case of "hey
+jarvis" → reply → "hey jarvis" again. **The STOP button always works** and is
+the reliable way to interrupt. This is a known limitation, not a documentation
+gap — see `SESSION_HANDOFF.md` for the exact mechanism.
+
+A confirmation prompt is left alone by any interrupt path, since that already
+has its own Cancel button. Tested: JARVIS's own voice scores well below the
+wake threshold, so it won't interrupt itself — but a noisy room could trigger a
+stop you didn't mean via whichever path is listening. That only ever
+*prevents* work, never causes any.
 
 ### Routines — teach it "work mode"
 
@@ -224,9 +236,13 @@ separate step that still goes through the normal confirmation gate.
 
 On a free key you may see *"Gemini is rate-limiting us."* JARVIS retries the
 request on a second model before giving up — `brain.fallback_models` in
-`data/settings.json` (default `["gemini-2.5-flash"]`, which has a **separate**
-rate-limit bucket from the primary). When a fallback answers, that is stated
-rather than hidden, because a different model can behave differently.
+`data/settings.json` (default `["gemini-3.5-flash-lite"]`, which has a
+**separate** rate-limit bucket from the primary). When a fallback answers,
+that is stated rather than hidden, because a different model can behave
+differently. (An earlier default, `gemini-2.5-flash`, turned out to have a
+free-tier ceiling of only 20 requests **per day** — it could die before it
+ever got the chance to rescue anything, so it was replaced after being
+measured.)
 
 Honest limits: it retries **only** transient failures — a bad API key still fails
 immediately instead of being masked by a slower answer. And it does not make the
@@ -298,15 +314,19 @@ Everything optional degrades to a clear message. Nothing crashes if it's absent.
 python -m pytest tests/ -q
 ```
 
-756 tests. Heads-up before running the full suite: it drives a **real desktop**
+1162 tests. Heads-up before running the full suite: it drives a **real desktop**
 (launching and closing Notepad and Chrome — keep the desktop idle for ~8 min),
 briefly toggles Do Not Disturb, and the live tests need a `GEMINI_API_KEY`.
 The live email test sends mail to whatever `TEST_SELF_EMAIL` is set to.
 
-Some tests currently write real local state (the real memory store, the real
-`data/agent_files`) and run `taskkill /IM notepad.exe` — so close unsaved
-Notepad windows first. This is a known rough edge, tracked in
-`SESSION_HANDOFF.md` §5.
+One known rough edge remains: `test_input.py` can leave an unsaved
+`scrollpad.txt` Notepad window that Windows 11's own session-restore reopens,
+which can intermittently fail a later Notepad-closing test. Close unsaved
+Notepad windows before a full run if you hit this. (Tests writing into real
+local state — the memory store, `data/agent_files` — were fixed; this is the
+one that's left, tracked in `SESSION_HANDOFF.md` §5, and the fix would mean
+deleting the user's own real unsaved Notepad tabs, which is a worse trade than
+the flake.)
 
 The free Gemini tier rate-limits clustered live calls, so a handful of
 live-brain tests may fail in a full run and pass when re-run individually.

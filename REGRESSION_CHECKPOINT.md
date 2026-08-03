@@ -5,7 +5,14 @@
 > script whose verdict *improves* (Blocked → Runnable) means its primitives
 > have landed and it can be promoted to a real acceptance test.
 
-**Checkpoint date:** 2026-07-20 (after Slice 33 — real-FS write/move/rename/copy)
+**Checkpoint date:** 2026-07-20 (after Slice 33 — real-FS write/move/rename/copy).
+**This is a FROZEN historical snapshot** — the detailed per-slice test-suite
+breakdown below was captured through slice 33 and was not maintained slice by
+slice afterward. **For current gate status, test count, and the most recent
+run's honest failure breakdown, read `SESSION_HANDOFF.md` §0 and §7 instead** —
+that file IS kept current every slice. This document's enduring value is
+section 2 (the four spec §1.6 scripts' status + evidence trail), which is
+still accurate and unchanged as of slice 58.
 **Tip commit at capture:** see `git log -1` (Slice 33)
 **Scope:** full suite (deterministic + live/model + live-email + live-DND +
 live-web + live-search) + the four-script status table below, each verdict backed
@@ -27,7 +34,8 @@ dry-run chain proving no Notepad appeared).
 
 ---
 
-## 1. Regression signal — test suite (1034 tests as of slice 50)
+## 1. Regression signal — test suite (frozen at slice 33's 716; **1162 as of
+slice 58 — see SESSION_HANDOFF.md, not this section, for anything current**)
 
 ### Slice 50 — Scheduled routines
 - **The invariant to protect in any refactor:** a scheduled run sets
@@ -1279,7 +1287,11 @@ turn the suite red; re-drive them live when their primitives change.
 
 ```powershell
 cd e:\J.A.R.V.I.S
-python -m pytest tests/ -q   # expect: 716 passed, 0 failed, 0 skipped (~4-8 min)
+python -m pytest tests/ -q   # expect ~1162 collected as of slice 58 (was 716 at
+                             # this file's slice-33 capture; see SESSION_HANDOFF.md
+                             # for the current number and the most recent gate's
+                             # actual result — 0 failed, 0 skipped is the bar
+                             # (slice 57 was the first slice to actually hit it)
                              # (on a throttled day the live-MODEL tests rotate
                              # failures — re-run each alone before suspecting
                              # a regression; deterministic core must be green)

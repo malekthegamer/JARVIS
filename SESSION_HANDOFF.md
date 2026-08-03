@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-07-25, after **Slice 38 (close the CONFIRM payload gap — commit steps now show WHAT, not just WHERE)**. See `git log --oneline` for the full slice history. (The header had been stale at "Slice 33" through slices 34–37 and the v1.0.1–v1.0.4 run; corrected here.)
+> Last updated: 2026-08-01, after **Slice 58 (real-use fixes: listening consistency, a navigate mis-tier, per-action confirm control, and a mic-selection bug)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
 
 ---
 
@@ -9,7 +9,24 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–50), grouped by area:**
+**Capability set, built slice by slice (1–58), grouped by area:**
+- **Real-use hardening (slices 57-58 — the newest layer, driven by actually
+  using it rather than by a backlog):** persona rewrite to a genuinely
+  brief/dry "film-JARVIS" voice (measured **-52% words spoken**, which beat a
+  cut streaming-TTS stage on latency); a bounded conversation follow-up window
+  (no "hey jarvis" needed between turns) + earcons (so silence never means
+  "did it hear me?"); an opt-in voice-latency recorder
+  (`JARVIS_VOICE_TIMING=1`) that gave the project its first real mouth-to-ear
+  number; capture timing made **consistent** (periodic re-calibration instead
+  of once-per-process, tunable pause/phrase-limit settings, silent-truncation
+  now reported) and **correct** (mic selection now PROBES devices instead of
+  trusting their name — a line-in jack with nothing plugged in was ranking
+  above the real microphone); a genuine mis-tier fixed (navigating to a site
+  the USER named, e.g. "open Gmail", no longer confirms — the cross-host gate
+  was using host-match as a *proxy* for "user-named vs model-discovered" and
+  the proxy was wrong); and a per-verb `confirm.auto_approve` setting (default
+  empty) so CONFIRM can be relaxed for reversible actions while `run_shell`/
+  `send_email`/BLOCKED stay non-negotiable.
 - **Autonomy (slices 47–50 — the newest layer):** **routines** (`save_routine` —
   name a chain of steps, say "work mode" to replay it; steps are DATA, never
   authority, so every one re-gates on every run), **scheduled routines**
@@ -43,28 +60,34 @@ You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent
 > one class: *verified in the dev environment, broken in the user's.* See the
 > "v1.0.1–v1.0.4" section below. Read that before shipping anything else.
 
-**Tests: 1034 collected** (slice 50).
+**Tests: 1162 collected** (slice 58).
 
-- **Deterministic gate — GREEN: `787 passed, 0 failed, 0 skipped`.** This is the
-  signal to trust for "did I break anything"; it needs no idle desktop, no
-  quota, and runs in ~85s. Run it as `-k "not live"` with the desktop-driving
-  files ignored.
-- **⚠ Full LIVE gate: NOT PASSED since slice 48.** Slices 49 and 50 shipped on
-  the deterministic gate because the free-tier **daily** quota is exhausted
-  (burst-probed at **1/5** on the primary — the "token trickle, NOT headroom"
-  case). Pacing (slice 45) fixes per-minute limits and **cannot** create daily
-  headroom. **First job on a fresh bucket: run the full live gate and confirm
-  49/50.** Best prior full run: 908 passed / 1 failed (a known Win11 Notepad
-  session-restore artefact, verified passing in isolation).
+- **Slice 57 produced the project's FIRST clean end-to-end gate ever:
+  `1133 passed, 0 failed, 0 skipped`** (8m55s, idle desktop, JARVIS quit, quota
+  burst-probed 5/5 beforehand — see §7 for the exact conditions, they matter).
+- **Slice 58's own gate was NOT clean**: `1161 passed, 1 failed, 0 skipped` —
+  the one failure is the same intermittent `test_live_multistep_chain_notepad`
+  that has recurred across several gates and passes in isolation. Recorded
+  honestly as not-clean rather than rounded up. An earlier slice-58 run failed
+  4 tests; 3 were environmental and the 4th (`test_mic.py`) was a REAL bug
+  (mic selection), now fixed — the counter-case to "just re-run it," worth
+  remembering.
 - **Two files need port 8000 free** (`test_entrypoint_smoke.py`,
-  `test_extension_browser.py`) — **quit the running JARVIS first** or you get
-  ~23 errors that all name the fix.
+  `test_extension_browser.py`) — **quit the running JARVIS first**. Slice 54
+  closed the old *ordering* trap (the two used to only pass in alphabetical
+  order because one leaked a daemon thread); `pytest_sessionfinish` now fails
+  loudly and names the holder if anything leaves the port bound.
+- **Never run two full live suites back-to-back** — the free-tier Gemini
+  **daily** quota exhausts and live tests fail in clusters; pacing (slice 45)
+  fixes per-minute limits only and cannot create daily headroom. Burst-probe
+  5 rapid calls before believing quota is back — one success is a token
+  trickle, not headroom.
 
 - **Two durable measurement harnesses exist for vision** (numbers you can re-run, not vibes): `tests/harness_vision_eval.py` (localization / confabulation / unsafe-AUTO) and `tests/harness_click_verify_eval.py` (catch / **false-refusal** / wrong-click). Plus `tests/harness_memory_eval.py` (retrieval recall) and `tests/harness_latency_eval.py` (per-seam wall-clock). Newer, all re-runnable and all of which caught something: `harness_screen_qa.py` (real-screen Q&A), `harness_routines.py` (save → run by name → CONFIRM still prompts), `harness_barge_in.py` (audio really stops: 14.4s → 1.0s), `harness_scheduled.py` (a real schedule fires; a CONFIRM step parks with zero prompts — this one caught a FALSE 'all steps completed' report), `harness_brain_chain.py` (a real 429 answered by the fallback).
-- **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`. Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
+- **Live app right now:** `python run.py` serves the HUD at `http://127.0.0.1:8000` (push-to-talk); `/settings` is the settings page (gear icon in the HUD header). **`python -m jarvis.tray`** runs server + tray icon (Open HUD / toggle wake word / Quit). Brain = Gemini `gemini-3.1-flash-lite`, fallback `gemini-3.5-flash-lite` (slice 52 — the original fallback, `gemini-2.5-flash`, had a 20-request/DAY ceiling and was replaced after being measured useless for exhaustion). Configured secrets: `GEMINI_API_KEY`, `TEST_SELF_EMAIL`, Gmail OAuth artifacts under `data/email/`. Wake word needs no key (openWakeWord is local).
 - **All 4 spec acceptance scripts (§1.6) pass:** #1 Spotify→Discover Weekly ✅, #2 close tabs except YouTube ✅, #3 find invoice→email Sam ✅, #4 brightness+DND ✅ (brightness honestly unsupported on this monitor — hardware, not code). Status tracked in `REGRESSION_CHECKPOINT.md`.
-- **Manually live-verified end to end (2026-07-20):** the user ran a single hands-on session across slices 29-33 (real-FS write/read/move/rename/copy/delete/browse/shortcut, clipboard, scroll, click kinds) through the actual HUD — all passed. Only rough edge found: **`click kind='double'` is flaky in real use** (live-UIA mouse timing, not a logic bug); user called it low-priority. See §2's acceptance note and §5/§7.
-- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), a local/offline model, free-text scheduled prompts (deliberately deferred in slice 50 — scheduling is routines-only), inbox reading/triage, calendar/contacts. **`IDEAS.md` is down to one unbuilt idea (#5, local model)** — the product backlog is thin; what remains is mostly engineering integrity (see §7). **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
+- **Manually live-verified end to end — TWICE now, and both times found real bugs code review missed.** (2026-07-20) across slices 29-33 (real-FS write/read/move/rename/copy/delete/browse/shortcut, clipboard, scroll, click kinds) — all passed except **`click kind='double'` is flaky in real use** (live-UIA mouse timing, not a logic bug; user called it low-priority). (2026-08-01, slice 58) a full day of actual daily use surfaced three things no test suite had: microphone selection picking an empty line-in jack over the real mic (device *names* lie; the fix now probes that the stream actually opens), a navigate CONFIRM firing on a site the user had plainly just named ("open Gmail"), and inconsistent listening caused by ambient-noise calibration running exactly once per process. **Lesson worth repeating: schedule real usage, not just gates — it finds a different class of bug than tests do.** See §2's acceptance notes and §5/§7.
+- **Not built yet:** multi-brain (OpenAI/Claude/Ollama — visibly disabled in settings, "not ported yet"), a local/offline model, free-text scheduled prompts (deliberately deferred in slice 50 — scheduling is routines-only), inbox reading/triage, calendar/contacts. **`IDEAS.md` is down to one unbuilt idea (#5, local model)** — the product backlog is thin; what remains is mostly engineering integrity plus whatever the next round of real use turns up (see §7). **Spotify Web API was probed (2026-07-18) and is a policy dead-end without Premium** — Feb 2026 dev-mode rules require the app owner to hold Premium for ALL endpoints; script #1 stays on its proven GUI path. See §7.
 
 ---
 
@@ -1389,6 +1412,10 @@ e:\J.A.R.V.I.S\
       confirmations.py      ← fail-closed CONFIRM gate; optional verbatim `command` field (slice 9)
       chain.py              ← ChainTracker: plan/step/chain_end, retry breaker, failure budget, args+note
                               + chain_id (audit grouping) + dry_run flag (slice 18)
+                              + unattended flag (slice 50, scheduled runs — non-AUTO steps PARK)
+                              + user_message (slice 58, the verbatim ask — ground truth for
+                              "did the user name this themselves", currently read by
+                              web.classify_navigate's user-named-host exemption)
       audit.py              ← slice 18: AuditLog (durable JSONL, plaintext envelope +
                               DPAPI payload, rotation-never-delete) + dump CLI
                               (python -m jarvis.core.audit); records live in data/audit/
@@ -1408,11 +1435,47 @@ e:\J.A.R.V.I.S\
                               delete_file and remember; popped by undo_last_action
       dpapi.py                ← win32crypt protect/unprotect + available()
       autostart.py            ← slice 23: HKCU Run key -> tray_start.pyw (Windows startup toggle)
-      settings_store.py       ← DEFAULT_SETTINGS + hot-reload
+      settings_store.py       ← DEFAULT_SETTINGS + hot-reload. confirm.auto_approve
+                              (slice 58): per-verb tier downgrade, empty by default, enforced
+                              in ONE place (primitives._decide_tier), BLOCKED/run_shell/
+                              send_email never downgradable regardless of this list
       errors.py               ← ProviderError + classify_exception
+      model_chain.py          ← slice 51-52: ONE shared Gemini fallback-chain definition +
+                              TRANSIENT_KINDS, used by both brain.py and vision.py so the
+                              two never disagree on what "retry the next model" means
+      timing.py               ← slice 57: opt-in voice-latency recorder (span/mark), a
+                              no-op unless JARVIS_VOICE_TIMING=1 — usable in real operation,
+                              not just a harness; the mouth-to-ear number this project
+                              never had before
+      interrupt.py             ← slice 49: the ONE barge-in cancel path (stop audio + abort
+                              the chain), shared by every trigger; slice 57 added a
+                              conversation-level stop Event so barge-in ends the WHOLE
+                              follow-up conversation, not just the current sentence
+      desktop.py               ← SCREEN_CLAIMED_STATES + notification_state(): one shared
+                              "is the screen claimed" check used by BOTH the test-suite
+                              fullscreen guard and the product (a scheduled routine must
+                              never launch apps mid-game either)
+      extbridge.py             ← slice 41: the WebSocket bridge to the Chrome extension
+                              driving the user's REAL everyday browser (see web.py)
+      routines.py              ← slice 48: saved chains (`save_routine`/`run_routine`), DPAPI-
+                              encrypted at data/routines.bin. Stores STEPS not authority —
+                              run_routine replays each step through execute(), so every one
+                              re-hits the kill switch/tier/CONFIRM exactly as if freshly asked
+      schedules.py             ← slice 50: `schedule_routine`, DPAPI-encrypted at
+                              data/schedules.bin. Fires unattended — any non-AUTO step is
+                              PARKED (never prompted at an empty room), ground-truthed at
+                              RUN time via ChainTracker.unattended, not decided when scheduled
     primitives/               ← the "verbs" + the executor
       __init__.py              ← PRIMITIVES registry + execute() (tier: auto|confirm|blocked) + _gate
                               + tools_schema (real-mode/kill-switch withholding, slices 22-25)
+                              _KILL_SWITCHES (slice 35, +input.enabled slice 53): ONE map
+                              consumed by BOTH tools_schema (withhold) and _disabled_by_switch
+                              (refuse execute) — the two can never drift apart
+                              _decide_tier / NEVER_AUTO_APPROVE (slice 58): confirm.auto_approve
+                              can downgrade CONFIRM→AUTO for a user-chosen verb list (default
+                              empty); BLOCKED is never reachable from here; run_shell/send_email
+                              ignore the list entirely (irreversible, unbounded blast radius);
+                              a classifier can veto ONE invocation via `downgradable: False`
       screen.py ui_tree.py apps.py files.py windows.py input.py vision.py   (slices 2–5)
                               ui_tree/windows/input window RESOLUTION is win32-fast (slice 21):
                               _win32_windows()/find_window() → hwnd → pywinauto wrap
@@ -1432,6 +1495,12 @@ e:\J.A.R.V.I.S\
                               create_shortcut(WScript.Shell). CONFIRM-on-verbatim-path is the boundary
                               slice 33: write_path/read_path/move_path/rename_path/copy_path (shutil +
                               _place() helper; overwrite/clobber recycles prior version first — recoverable)
+                              slice 56: make_folder — same BLOCKED/CONFIRM model, _mkdir seam so a
+                              BLOCKED call is provably never reached; NOT undoable (removing a
+                              folder is only safe while empty, and by undo-time it may not be)
+                              slice 58: classify_write_path reports `downgradable` (True only when
+                              CREATING, never when OVERWRITING) so confirm.auto_approve can silently
+                              approve "save a new file" while still confirming an overwrite
       app_discovery.py        ← slice 22: desktop .lnk/.url + Steam (vdf/acf) + Epic (*.item)
                               discovery fallback after apps.py's fast ladder misses
       tabs.py                 ← list_tabs (AUTO) / close_tabs (CONFIRM)          (slice 8)
@@ -1451,20 +1520,47 @@ e:\J.A.R.V.I.S\
                               + CROSS-HOST CLICK GATE (slice 27): find_clickable surfaces the anchor
                               href, shared _cross_host() re-gates a click that leaves the host
                               (both modes), JS jumps flagged post-click in session.click()
+                              + USER-NAMED NAVIGATION (slice 58): classify_navigate's cross-host
+                              CONFIRM is a PROXY for "user-named vs model-discovered", and the
+                              proxy was wrong whenever the user just asked for a site by name
+                              ("open Gmail" confirmed only because JARVIS had read a page first).
+                              _user_named_host() checks the ChainTracker's verbatim user_message
+                              (label-match, not substring — "devil" ≠ "evil.example"; short alias
+                              map for names that differ from their domain, e.g. gmail→
+                              mail.google.com) and grants AUTO only when the user said it THIS
+                              turn. The prompt-injection case this gate exists for is untouched
+                              and test-pinned: a host the user never mentioned still confirms.
     providers/                ← self-registering: brain/gemini, stt/google+local_whisper,
                               tts/edge_tts+pyttsx3+elevenlabs (whisper+elevenlabs ported slice 23)
-    voice/                    ← capture.py (HARD-WON, DO NOT rewrite), playback.py, voice_manager.py
-                              wake.py ← WakeListener "hey jarvis" (openWakeWord) + handle_wake (slice 13)
+    voice/                    ← capture.py (HARD-WON, DO NOT rewrite — slice 58 added
+                              settings-driven pause_threshold/phrase_time_limit/listen_timeout,
+                              periodic re-calibration instead of once-per-process, silent-
+                              truncation detection, and probe-before-trust mic selection —
+                              a NAME is a guess, opening the device is ground truth),
+                              playback.py, voice_manager.py
+                              wake.py ← WakeListener "hey jarvis" (openWakeWord) + handle_wake
+                              (slice 13). Slice 57: handle_wake grew a bounded follow-up-turn
+                              loop (follow_up_s, defaults to 0 = old one-utterance behaviour;
+                              max_turns; max_total_s) so a conversation doesn't need "hey
+                              jarvis" before every reply; mic ownership is a non-issue because
+                              the wake mic is ALREADY closed for the whole think→speak cycle.
+                              tones.py ← slice 57: earcons as synthesized WAV bytes (no asset
+                              files, no dependency) — a rise on "listening", so the user is
+                              never guessing whether JARVIS heard them
     tray.py                   ← system-tray app (pystray): Open HUD / toggle wake / Quit (slice 13)
                               launch: python -m jarvis.tray  (runs server + tray; run.py unchanged)
     static/                    ← the HUD (vanilla JS): index.html, hud.css, hud.js, orb.js, fonts/
                               chain strip, Action Log + telemetry panels, monospace shell-confirm box
                               settings.{html,css,js} ← the /settings page (slice 23, gear in HUD header;
-                              real-Chrome + allow_actions toggles added slices 24-25)
+                              real-Chrome + allow_actions toggles added slices 24-25; input.enabled
+                              capability toggle slice 53; "Which actions ask first" panel slice 58 —
+                              per-verb confirm.auto_approve toggles, grouped by reversibility, with
+                              run_shell/send_email honestly shown as never-downgradable rather than
+                              silently omitted)
                               audit.{html,css,js} ← the /audit viewer (slice 28, 🗎 in HUD header;
                               read-only records browser, envelope-first + reveal-on-demand)
 
-  tests/                      ← 756 tests. pytest. Live/model tests gated on GEMINI_API_KEY
+  tests/                      ← 1162 tests (slice 58). pytest. Live/model tests gated on GEMINI_API_KEY
                               (+ TEST_SELF_EMAIL & the Gmail token for email-live). test_system
                               includes a live DND toggle (real Settings UI, restored after).
                               Wake/tray + deterministic web/search tests use fakes / local
@@ -1525,6 +1621,27 @@ e:\J.A.R.V.I.S\
                               write/read/move/rename/copy, gated live (shortcut/delete/refuse-System32
                               + write/read/rename/copy)
     test_tts.py test_mic.py test_smoke.py conftest.py
+    test_timing.py ← slice 57: the opt-in voice-latency recorder (span/mark), no-op
+                              unless JARVIS_VOICE_TIMING=1
+    test_tones.py ← slice 57: earcon WAV generation (valid PCM, short, distinct rise/fall,
+                              never-raise) + play() never interrupting speech (shared channel)
+    harness_voice_latency.py ← slice 57: the mouth-to-ear harness — measured that
+                              time-to-first-audio is a roughly FIXED ~700-850ms network round
+                              trip regardless of reply length, which is why streaming TTS was
+                              cut (measured ~400ms win on long replies only) in favour of the
+                              persona rewrite (measured -52% words spoken)
+    test_classifier_tiers.py ← slice 55: 28 deterministic tier tests for the four
+                              classifiers that had none (classify_type/web_key/
+                              create_shortcut/rename_path), no desktop/network/model
+    test_capture_timing.py ← slice 58: pause_threshold/phrase_time_limit/listen_timeout
+                              are settings now (were bare literals); periodic recalibration
+                              instead of once-per-process; silent-truncation detection;
+                              a line-in jack is not a microphone; probe-before-trust device
+                              selection (a NAME is a guess, opening the stream is ground truth)
+    conftest.py's pytest_sessionfinish ← slice 54: order-independent port-leak detector
+                              (only flags OUR process holding port 8000, not the owner's
+                              already-running JARVIS — that false-positive was itself a
+                              slice-58 fix)
 ```
 
 ### Request lifecycle
@@ -1601,21 +1718,32 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   — run A `1 failed`, run B `712 passed / 0 failed`; the test also passed alone
   (1/1) and as a whole file (20/20). Do not "fix" the classifier in response to
   this without reproducing it twice.
-- **Brain fallback chain (slice 44) — what it does and does NOT fix.** A transient
-  brain failure walks a bounded model chain, and that is **live-proven** to rescue
-  real 429s. But it does **NOT** clear the gate's clustered live failures, and the
-  numbers say why: 6 failures before → **7 after**, with the chain engaging 9
-  times and rescuing only 3. The other 6 exhausted BOTH models, because the suite
-  bursts past the combined ~30 RPM of the two buckets. **A 429 needs ~22s to
-  clear** (measured), which is too long to wait on a user-facing path — so a
-  backoff retry was deliberately NOT built. Conclusion: the clustered-failure
-  problem is **test pacing**, not brain resilience; fixing it means spacing the
-  suite's live calls, not adding more models. Also: the chain covers
-  `brain.think()` only — **the vision path is a separate Gemini call site with no
-  fallback** (`the vision model was unavailable` is still a hard live failure).
-  Depth is 1 by design: only `gemini-2.5-flash` was PROVEN on tool-calling parity,
-  and an unproven model in the chain would break agent chains worse than a clean
-  failure.
+- **Brain fallback chain (slice 44) — what it does and does NOT fix; UPDATED
+  slices 51-52.** A transient brain failure walks a bounded model chain, and
+  that is **live-proven** to rescue real 429s. But it does **NOT** clear the
+  gate's clustered live failures, and the numbers say why: 6 failures before →
+  **7 after**, with the chain engaging 9 times and rescuing only 3. **A 429
+  needs ~22s to clear** (measured), too long to wait on a user-facing path — a
+  backoff retry was deliberately NOT built. The clustered-failure problem was
+  **test pacing** (fixed slice 45), not brain resilience.
+  - **The fallback MODEL itself was wrong, and slice 52 replaced it.**
+    `gemini-2.5-flash` (the original fallback) turned out to have a free-tier
+    ceiling of just **20 requests/DAY** — it died before it could rescue
+    anything. Measured by bursting candidates and reading the 429's `quotaId`
+    (which axis — per-minute or per-day — was actually hit): now
+    `gemini-3.5-flash-lite` (15 RPM, daily bucket survived a 24-call burst).
+    Any future addition to the chain is gated by a mechanical test — its
+    measured RPM cap must be ≥ the pacer budget, or it forges gate failures.
+  - ~~**The vision path is a separate Gemini call site with no fallback.**~~ —
+    **PARTIALLY CLOSED (slice 51).** Vision's screen-Q&A path (`screen_query`)
+    now shares the same chain. **Locate and verify remain deliberately
+    EXCLUDED, test-pinned, and should NOT be "finished"**: slice 51 measured
+    the fallback model at 1/7 on visual localization vs 4/4 for the primary on
+    an identical image — chaining a click-producing call would trade an honest
+    "vision model unavailable" for a click in the wrong place, which is worse.
+    Verify is fail-closed by design and only runs after a successful locate, so
+    chaining it buys almost nothing. Read slice 51's entry above before
+    touching this.
 - **Double-click (`click kind='double'`, slice 29) is confirmed flaky in real manual use (user-observed, 2026-07-20)** — the same live-UIA/mouse-timing class as (1) above, not a tiering/logic bug (the deterministic `kind` dispatch + `classify_click` tests are all green; `_click_xy` correctly maps `kind` to `pydirectinput`/`pyautogui` `doubleClick`). Single-click and right-click were solid in the same session. **User call: low priority, not worth a dedicated slice right now** — leave as a known rough edge. If it's ever revisited: likely candidates are the OS double-click-speed timing window (`pydirectinput`/`pyautogui`'s synthetic double-click may fire faster/slower than Windows' registered threshold) or needing a fresh point-verify between the two clicks rather than one shared resolve.
 - **Undo (slice 26):** the stack is in-memory and process-scoped — a restart
   forgets what was undoable (same posture as the chain tracker, documented not
@@ -1707,28 +1835,35 @@ python -m pytest tests/test_memory.py tests/test_shell.py -q   # inner loop: tou
   too — kept consistent deliberately). The desktop record is in-memory and
   process-scoped (a restart forgets, same posture as the undo stack) with a
   120s TTL, because a stale payload would actively mislead.
-- **Open findings from the slice-35 safety audit (verified in code, NOT yet
-  fixed — each deferred deliberately, not overlooked):**
+- **Open findings from the slice-35 safety audit** (verified in code; most now
+  closed — kept here so the audit's history is legible, not because they're
+  still open):
   - ~~**`browse_key("Enter")` is AUTO**~~ — **CLOSED by slice 38** (CONFIRM in
     real-browser mode, carrying the focused field's contents; isolated stays
     AUTO by owner decision).
-  - **No `input.enabled` kill switch.** `click`/`type_text`/`press_keys`/
-    `scroll` is the universal actuator (it drives any window, including an open
-    terminal or the signed-in real browser) and is the only major surface with
-    no switch — shell/email/web/search/fs/memory/audit/vision all have one. The
-    `input` settings section already exists, so the seam is free.
-  - **Four registered classifiers have ZERO deterministic tier test:**
-    `classify_type`, `classify_web_key`, `classify_create_shortcut`,
-    `classify_rename_path`. Tier classification is the safety-critical part;
-    each is a small table-driven test.
-  - **Live tests write REAL user state.** ~17 live `think()` call sites use the
-    real `memory_store` (a model-called `remember` persists into the user's own
-    memory, and real memories get injected into test prompts = nondeterminism);
-    5 test files write the real `data/agent_files` instead of `tmp_path` (one
-    really deletes); several run `taskkill /IM notepad.exe /F`, killing the
-    USER's Notepad windows with unsaved work (`test_tabs.py` already shows the
-    right pattern: kill by PID). `test_search.py`'s autouse settings fixture
-    has no teardown at all.
+  - ~~**No `input.enabled` kill switch.**~~ — **CLOSED by slice 53.** Covers
+    `click`/`type_text`/`press_keys`/`scroll`, withheld from the schema AND
+    refused at `execute()`; `media_key` deliberately excluded (fixed enum, not
+    steerable) and test-pinned; reading verbs (`read_ui_tree`, `screen_query`,
+    `launch_app`, `close_window`) survive the switch.
+  - ~~**Four registered classifiers have ZERO deterministic tier test.**~~ —
+    **CLOSED by slice 55.** `classify_type`, `classify_web_key`,
+    `classify_create_shortcut`, `classify_rename_path` now have 28 deterministic
+    tests in `tests/test_classifier_tiers.py`, no desktop/network/model.
+  - **Live tests write REAL user state — MOSTLY CLOSED (slice 54), one item
+    remains.** `test_extension_browser.py`'s leaked uvicorn thread (an
+    *accidental* ordering dependency on `test_entrypoint_smoke.py`) is fixed —
+    it now uses `uvicorn.Server`+`should_exit` and the two files pass in either
+    order; `pytest_sessionfinish` fails loudly if any test still leaves the port
+    bound. Tests writing into the real `data/agent_files`/`data/agent_trash`
+    (silently evicting a user's genuinely recoverable quarantined file) are also
+    fixed — a second autouse conftest fixture re-points the cage per test.
+    **Still open:** `test_input.py` can leave an unsaved `scrollpad.txt` Notepad
+    that Win11 session-restore reopens, intermittently breaking
+    `test_close_window_closes_notepad` in a later run. The obvious fix (clearing
+    Notepad's `TabState`) would delete the user's own real unsaved tabs, so it
+    stays open rather than "fixed" at the cost of real data. Re-run the named
+    test in isolation if it fails — this is the known cause.
 - **Recurring test-isolation lesson (slices 24-25):** `data/settings.json` can have `web.profile_mode="real"` persisted from live testing/actual use. Any test that classifies web clicks or drives the browser MUST pin `web.profile_mode="isolated"` + `web.allow_actions=False` in an autouse fixture, or it will see BLOCKED instead of the tier it expects. `test_web.py`, `test_web_live.py`, `test_search.py`, `test_search_live.py` all do this — follow the same pattern for any new web-adjacent test file.
 
 ---
@@ -1753,13 +1888,18 @@ The four-stage discipline runs automatically every session — **you do not need
 
 ## 7. Suggested next slices (not yet built)
 
-**Where the project actually is (2026-07-31, after slice 50):** all four spec
-§1.6 scripts pass; spec §1.2's verb list is complete; the browser drives the
-user's REAL Chrome; and the autonomy arc (routines → schedules → barge-in) is
-shipped. `IDEAS.md` is now down to **one unbuilt idea (#5, local model)** — the
-product backlog is genuinely thin, and what remains is mostly *engineering
-integrity* rather than new capability. That is a good problem, but it means the
-honest recommendation is no longer "add a feature".
+**Where the project actually is (2026-08-01, after slice 58):** all four spec
+§1.6 scripts pass; spec §1.2's verb list is complete (including `make_folder`,
+slice 56); the browser drives the user's REAL Chrome; the autonomy arc
+(routines → schedules → barge-in) is shipped; and slices 57-58 shifted the
+work from *capability* to *how it feels to actually use* — streaming-vs-persona
+latency tradeoffs (measured, not guessed), a follow-up conversation window,
+earcons, and three real-use bugs the owner found by using it for a day (mic
+selection, a navigate mis-tier, inconsistent listening). `IDEAS.md` is down to
+**one unbuilt idea (#5, local model)** — the product backlog is genuinely thin,
+and what remains is mostly *engineering integrity* plus whatever the next round
+of real use surfaces. That is a good problem, but it means the honest
+recommendation is no longer "add a feature" — it's "use it and report back".
 
 **Gate (slice 58): 1161 passed, 1 failed, 0 skipped** in 9m43s. The one failure
 is `test_chain_live.py::test_live_multistep_chain_notepad` — the same
@@ -1858,8 +1998,9 @@ back green end to end.
    call: not worth a slice); real-browser round 3 (rich editors beyond
    ProseMirror, a HUD indicator for real-browser mode); vision false-refusal
    ~2.3% → 0; email widenings (multiple recipients, inbox reading — a much
-   larger privacy surface); `make_folder`; PowerShell as a second `run_shell`
-   backend.
+   larger privacy surface); PowerShell as a second `run_shell` backend.
+   ~~`make_folder`~~ **DONE (slice 56)** — this list went stale on that point for
+   a while; it is now checked as part of every doc pass, not just remembered.
 
 **Closed, do not re-plan without new information:** paid/resilient brain (slices
 44–45 — fallback chain shipped and pacing fixed the gate); Spotify Web API
@@ -1883,6 +2024,6 @@ still sit in `legacy/`.
    When work is release-worthy: commit → `git push` → `gh release create vX.Y.Z
    --latest --notes ...` (gh is authenticated as `malekthegamer`).
 1. Read `JARVIS_Spec_v1.md`, this file, and `CLAUDE.md` (the discipline is already in force).
-2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **756** (deterministic core always green). Keep the desktop idle during the run (live-UIA input tests) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely.
+2. `git log --oneline -30` for the slice history; `python -m pytest tests/ -q` to confirm **1162 collected** (deterministic core always green; live/model tests need `GEMINI_API_KEY`). Burst-probe quota (5 rapid calls) before the run if it's been a heavy day. Keep the desktop idle during the run (live-UIA input tests; the conftest fullscreen guard refuses to start if it isn't — note that VS Code in F11 fullscreen also reads as "claimed", not just games) — and if real-browser mode is on in `data/settings.json`, expect JARVIS's dedicated Chrome to open/close during the run too. **Live-MODEL tests need a healthy daily Gemini bucket AND pace under the per-minute cap** — on a heavily-used day they rate-limit and rotate failures (see `REGRESSION_CHECKPOINT.md` §1); re-run any live failure in isolation before treating it as a regression, don't run full live suites back-to-back, and capture a clean 0-failed pass on a fresh daily bucket. A paid-tier key removes this entirely. **Slice 57 achieved the project's first-ever clean gate** (1133/0/0) — that is the bar, not "1 known flake is fine".
 3. Skim `REGRESSION_CHECKPOINT.md` for the 4 acceptance scripts' live status (all passing) and the most recent gate run's honest failure breakdown.
 4. Ask the user which slice is next (or they'll tell you), then plan it in plan mode. If the new slice depends on an unverified mechanism, probe it first (see §6).
