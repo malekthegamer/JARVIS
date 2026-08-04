@@ -1067,3 +1067,104 @@ def test_a_non_http_scheme_is_still_blocked_even_if_named(monkeypatch):
     _with_utterance(monkeypatch, "open file:///c:/windows/system32")
     info = web.classify_navigate({"url": "file:///c:/windows/system32"})
     assert info["tier"] == "blocked", info
+
+
+# ========== slice 59: closing the cross-host bypass I shipped in slice 58 ==========
+# MEASURED REGRESSION. Slice 58's "don't confirm a site the user named himself"
+# exemption matched ANY hostname label against the user's words. That defeats the
+# gate it sits in front of, because the destination URL is frequently supplied by
+# the MODEL from page content -- so an injected page picks a hostname whose label
+# matches a word the user was likely to say. All seven of these were measured
+# returning "auto" before this fix:
+#
+#   'summarise this page about AI'  -> evil.ai            BYPASSED
+#   'open the login page'           -> login.attacker.com BYPASSED
+#   'find me docs for python'       -> docs.evil.com      BYPASSED
+#   'read the news'                 -> news.com           BYPASSED
+#   'shop for headphones'           -> shop.com           BYPASSED
+#   'check my drive'                -> drive.evil.com     BYPASSED
+#   'what does support say'         -> support.evil.com   BYPASSED
+#
+# Two things were wrong. Matching ANY label meant owning one domain granted
+# unlimited exempt hostnames (docs./login./drive./support. of it). And matching
+# generic English words meant the attacker only had to guess a common noun.
+#
+# The fix matches the REGISTRABLE DOMAIN's primary label only -- subdomains and
+# TLD discarded -- and refuses generic words outright.
+
+_MEASURED_BYPASSES = [
+    ("summarise this page about AI", "https://evil.ai/steal"),
+    ("open the login page", "https://login.attacker.com"),
+    ("find me docs for python", "https://docs.evil.com"),
+    ("read the news", "https://news.com/x"),
+    ("shop for headphones", "https://shop.com"),
+    ("check my drive", "https://drive.evil.com"),
+    ("what does support say", "https://support.evil.com"),
+]
+
+
+@pytest.mark.parametrize("said,url", _MEASURED_BYPASSES)
+def test_the_measured_gate_bypasses_are_closed(monkeypatch, said, url):
+    """Every one of these returned 'auto' before the fix. Table is verbatim from
+    the run that found the regression, so it can never silently come back."""
+    _with_utterance(monkeypatch, said)
+    info = web.classify_navigate({"url": url})
+    assert info["tier"] == "confirm", f"{said!r} -> {url} escaped the gate: {info}"
+
+
+def test_a_subdomain_cannot_inherit_the_exemption(monkeypatch):
+    """THE CORE OF THE BUG: owning evil.com must not yield unlimited exempt
+    hostnames. Even naming the registrable domain does not exempt an arbitrary
+    subdomain of a DIFFERENT domain."""
+    _with_utterance(monkeypatch, "go to github.com")
+    for host in ("https://github.com.evil.com", "https://evil.com/github",
+                 "https://github.evil.com"):
+        assert web.classify_navigate({"url": host})["tier"] == "confirm", host
+
+
+def test_generic_words_never_grant_an_exemption(monkeypatch):
+    """A label that is an ordinary English noun is not evidence the user meant
+    THAT site — it is the cheapest thing for an attacker to guess."""
+    for word in ("mail", "docs", "login", "search", "store", "help", "video"):
+        _with_utterance(monkeypatch, f"open the {word} thing")
+        got = web.classify_navigate({"url": f"https://{word}.com"})["tier"]
+        assert got == "confirm", f"generic word {word!r} granted an exemption"
+
+
+def test_a_real_site_the_user_named_still_skips_the_confirm(monkeypatch):
+    """The feature must still work — this is what the owner asked for."""
+    for said, url in (("open gmail for me", "https://mail.google.com"),
+                      ("go to github.com", "https://github.com/x"),
+                      ("open youtube", "https://youtube.com/feed"),
+                      ("check reddit", "https://www.reddit.com/r/x")):
+        _with_utterance(monkeypatch, said)
+        got = web.classify_navigate({"url": url})["tier"]
+        assert got == "auto", f"{said!r} -> {url} should not confirm, got {got}"
+
+
+def test_multi_part_tlds_resolve_to_the_right_label(monkeypatch):
+    """co.uk and friends must not make the TLD look like the domain: for
+    evil.co.uk the registrable label is 'evil', not 'co'."""
+    _with_utterance(monkeypatch, "open the co site")
+    assert web.classify_navigate({"url": "https://evil.co.uk"})["tier"] == "confirm"
+
+    _with_utterance(monkeypatch, "open mycompany")
+    assert web.classify_navigate(
+        {"url": "https://shop.mycompany.co.uk"})["tier"] == "auto"
+
+
+def test_registrable_label_extraction():
+    """The pure helper, tested directly — subdomains and TLDs discarded."""
+    cases = {
+        "evil.ai": "evil",
+        "docs.evil.com": "evil",
+        "login.attacker.com": "attacker",
+        "mail.google.com": "google",
+        "github.com": "github",
+        "www.reddit.com": "reddit",
+        "shop.mycompany.co.uk": "mycompany",
+        "evil.co.uk": "evil",
+        "localhost": "localhost",
+    }
+    for host, expected in cases.items():
+        assert web._registrable_label(host) == expected, host

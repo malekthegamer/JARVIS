@@ -669,6 +669,61 @@ def _site_host() -> str:
 _HOST_NOISE = {"www", "com", "org", "net", "co", "uk", "io", "app", "mail",
                "google", "gov", "edu"}
 
+# Suffixes where the last TWO labels are the public suffix, so the registrable
+# label is the THIRD from the right (shop.mycompany.co.uk -> "mycompany").
+# Not a full public-suffix list on purpose: an unlisted multi-part suffix just
+# resolves one label too far right, which errs toward CONFIRM.
+_MULTI_PART_SUFFIXES = frozenset({
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "net.uk",
+    "com.au", "net.au", "org.au", "co.nz", "co.za", "co.jp", "co.kr",
+    "co.in", "com.br", "com.mx", "com.tr", "com.cn", "com.sg", "com.hk",
+})
+
+# Labels that are ordinary words rather than the NAME of a site. These can never
+# grant an exemption on their own: they are the cheapest thing for an attacker to
+# guess, and a user saying "read the news" is not evidence they meant news.com.
+# Measured bypasses that this closes: news.com, shop.com, and every
+# docs./login./drive./support. subdomain trick.
+_GENERIC_LABELS = frozenset({
+    "news", "shop", "store", "docs", "doc", "login", "signin", "account",
+    "accounts", "mail", "email", "drive", "cloud", "support", "help", "search",
+    "home", "page", "site", "web", "app", "apps", "chat", "video", "videos",
+    "music", "photo", "photos", "data", "file", "files", "download",
+    "downloads", "blog", "forum", "wiki", "shopping", "cart", "pay", "payment",
+    "bank", "secure", "verify", "update", "info", "test", "demo", "api", "cdn",
+    "static", "media", "image", "images", "link", "links", "share", "open",
+    "click", "here", "now", "new", "my", "the", "and", "for", "you", "ai",
+})
+
+# A shorter label carries too little information to be evidence of intent
+# ("x.ai" must not be exempted by the user saying "x").
+_MIN_NAMED_LABEL = 4
+
+
+def _registrable_label(host: str) -> str:
+    """The primary label of the registrable domain — subdomains AND the public
+    suffix discarded.
+
+    This is the whole fix for slice 58's bypass. Matching ANY label meant that
+    owning `evil.com` granted unlimited exempt hostnames (`docs.evil.com`,
+    `login.evil.com`, `drive.evil.com`…), because each subdomain contributed its
+    own matchable label. Only the registrable domain identifies who actually
+    controls the destination, so only that is allowed to match.
+
+        docs.evil.com          -> evil
+        login.attacker.com     -> attacker
+        shop.mycompany.co.uk   -> mycompany
+        github.com             -> github
+    """
+    parts = [p for p in str(host or "").lower().split(".") if p]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]                      # "localhost"
+    if ".".join(parts[-2:]) in _MULTI_PART_SUFFIXES and len(parts) >= 3:
+        return parts[-3]
+    return parts[-2]
+
 # Spoken names that do not appear in their own hostname. Deliberately SHORT and
 # not exhaustive: this is a convenience for the handful of sites people call
 # something other than their domain, not a general allowlist. An unlisted site
@@ -713,8 +768,13 @@ def _user_named_host(target_host: str) -> bool:
             if spoken in words and host in hosts:
                 return True
 
-        labels = [p for p in host.split(".") if p and p not in _HOST_NOISE]
-        return any(label in words for label in labels)
+        # ONLY the registrable domain's label may match — see _registrable_label
+        # for why matching any label was a gate bypass, and a generic word is
+        # never evidence of intent.
+        label = _registrable_label(host)
+        if len(label) < _MIN_NAMED_LABEL or label in _GENERIC_LABELS:
+            return False
+        return label in words
     except Exception:
         return False
 
