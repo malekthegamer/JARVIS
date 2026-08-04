@@ -141,7 +141,7 @@ def test_mic_unavailable_is_honest_never_raises():
 def test_handle_wake_real_utterance_responds():
     responded = []
     idled = []
-    text = handle_wake(listen=lambda t: "open notepad",
+    text = handle_wake(listen=lambda t, on_ready=None: "open notepad",
                        respond=responded.append,
                        set_idle=lambda: idled.append(1))
     assert text == "open notepad"
@@ -154,7 +154,7 @@ def test_handle_wake_without_utterance_returns_idle_quietly(heard):
     NEVER calls respond — noise after a mis-trigger does nothing."""
     responded = []
     idled = []
-    text = handle_wake(listen=lambda t: heard,
+    text = handle_wake(listen=lambda t, on_ready=None: heard,
                        respond=responded.append,
                        set_idle=lambda: idled.append(1))
     assert text is None
@@ -193,9 +193,11 @@ def test_server_wake_real_utterance_responds(monkeypatch):
     # fake conversed until max_turns and the assertion saw six replies. A real
     # user goes quiet; the fake now does too. What the test proves — a real
     # utterance reaches _respond, and _busy is released — is unchanged.
+    # NAMED AMENDMENT (slice 59): listen() gained on_ready, so the fake takes it.
     heard = ["open notepad"]
     monkeypatch.setattr(voice_manager, "listen",
-                        lambda timeout=8.0: heard.pop(0) if heard else "")
+                        lambda timeout=8.0, on_ready=None:
+                        heard.pop(0) if heard else "")
     responded = []
     monkeypatch.setattr(server, "_respond", lambda text: responded.append(text))
     server._on_wake()
@@ -245,7 +247,7 @@ def _scripted_listen(*utterances):
     until max_turns. Silence-after-script is what a real user does."""
     seq = list(utterances)
 
-    def listen(_timeout):
+    def listen(_timeout, on_ready=None):
         return seq.pop(0) if seq else ""
     return listen
 
@@ -256,7 +258,7 @@ def test_follow_up_is_off_by_default_so_one_wake_is_one_turn():
     that returns the same text forever; had the window defaulted ON they would
     spin until max_turns and the suite would look broken for the wrong reason."""
     said = []
-    wake.handle_wake(listen=lambda t: "open notepad", respond=said.append,
+    wake.handle_wake(listen=lambda t, on_ready=None: "open notepad", respond=said.append,
                      set_idle=lambda: None, timeout_s=1.0)
     assert said == ["open notepad"], said
 
@@ -283,7 +285,7 @@ def test_silence_in_the_window_ends_the_conversation_and_idles():
 def test_max_turns_caps_a_runaway_conversation():
     """A room with a television in it must not hold _busy forever."""
     said = []
-    wake.handle_wake(listen=lambda t: "still talking", respond=said.append,
+    wake.handle_wake(listen=lambda t, on_ready=None: "still talking", respond=said.append,
                      set_idle=lambda: None, timeout_s=1.0,
                      follow_up_s=5.0, max_turns=3)
     assert len(said) == 3, said
@@ -291,7 +293,7 @@ def test_max_turns_caps_a_runaway_conversation():
 
 def test_a_long_conversation_is_capped_by_wall_clock():
     said = []
-    wake.handle_wake(listen=lambda t: "more", respond=said.append,
+    wake.handle_wake(listen=lambda t, on_ready=None: "more", respond=said.append,
                      set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0,
                      max_turns=100, max_total_s=0.0)
     assert len(said) == 1, "a zero budget must allow the first turn and no more"
@@ -306,7 +308,7 @@ def test_barge_in_ends_the_conversation_not_just_the_sentence():
         said.append(text)
         interrupt.request()          # the user cut him off mid-reply
 
-    wake.handle_wake(listen=lambda t: "keep going", respond=respond,
+    wake.handle_wake(listen=lambda t, on_ready=None: "keep going", respond=respond,
                      set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)
     assert said == ["keep going"], "a barge-in must end the conversation"
 
@@ -322,22 +324,35 @@ def test_no_follow_up_window_when_a_confirm_is_on_screen():
             said.append(text)
             broadcaster.set(AgentState.CONFIRMING)
 
-        wake.handle_wake(listen=lambda t: "delete the file", respond=respond,
+        wake.handle_wake(listen=lambda t, on_ready=None: "delete the file", respond=respond,
                          set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)
         assert said == ["delete the file"], said
     finally:
         broadcaster.set(prev)
 
 
-def test_the_listening_earcon_fires_before_every_capture():
-    """The cue must precede the FIRST listen (so you know the wake word landed)
-    and every follow-up listen (so you know it is still your turn)."""
-    cues = []
-    wake.handle_wake(listen=_scripted_listen("one", "two"),
-                     respond=lambda t: None, set_idle=lambda: None,
-                     timeout_s=1.0, follow_up_s=5.0,
-                     on_listen_start=lambda: cues.append("cue"))
-    assert len(cues) == 3, f"expected a cue before each of 3 captures, got {len(cues)}"
+def test_the_listening_cue_is_handed_to_every_capture():
+    """NAMED AMENDMENT (slice 59). This used to assert handle_wake CALLED the
+    cue itself before each capture — which was the bug: it announced "I'm
+    listening" while device enumeration and opening were still running, so
+    anything said in that gap was never recorded. The cue is now passed DOWN to
+    listen(), which fires it once the mic is genuinely open. So the contract to
+    assert is that every capture RECEIVES it."""
+    got = []
+    seq = ["one", "two"]
+
+    def listen(_timeout, on_ready=None):
+        got.append(on_ready)
+        return seq.pop(0) if seq else ""
+
+    cue = lambda: None
+    wake.handle_wake(listen=listen, respond=lambda t: None,
+                     set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0,
+                     on_listen_start=cue)
+
+    assert len(got) == 3, f"expected 3 captures, got {len(got)}"
+    assert all(c is cue for c in got), \
+        "every capture must receive the cue so it can fire it once the mic is open"
 
 
 def test_handle_wake_never_raises_when_a_callback_explodes():
@@ -346,3 +361,38 @@ def test_handle_wake_never_raises_when_a_callback_explodes():
         raise RuntimeError("mic died")
     wake.handle_wake(listen=boom, respond=lambda t: None,
                      set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)
+
+
+def test_a_stop_during_capture_discards_the_utterance(monkeypatch):
+    """SLICE 59 REGRESSION FIX. The only stop-check used to sit AFTER respond(),
+    so pressing stop while the mic was open still executed the whole captured
+    turn — brain, tools and all — and only then ended the conversation. A stop
+    must DISCARD what was captured, not merely stop the next turn."""
+    said = []
+
+    def listen(_timeout, on_ready=None):
+        interrupt.request()          # the user hits stop while the mic is open
+        return "delete all my files"
+
+    wake.handle_wake(listen=listen, respond=said.append,
+                     set_idle=lambda: None, timeout_s=1.0, follow_up_s=5.0)
+
+    assert said == [], f"a stop during capture must discard the utterance, ran {said}"
+
+
+def test_a_stop_between_turns_does_not_reopen_the_mic(monkeypatch):
+    """The loop must also refuse to start a NEW capture once stopped."""
+    captures = []
+
+    def listen(_timeout, on_ready=None):
+        captures.append(1)
+        return "hello"
+
+    def respond(_text):
+        interrupt.request()          # stop lands while JARVIS is replying
+
+    wake.handle_wake(listen=listen, respond=respond, set_idle=lambda: None,
+                     timeout_s=1.0, follow_up_s=5.0, max_turns=6)
+
+    assert len(captures) == 1, \
+        f"must not reopen the mic after a stop, captured {len(captures)}x"

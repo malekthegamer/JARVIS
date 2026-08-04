@@ -406,7 +406,10 @@ def _on_wake() -> None:
         from jarvis.voice import tones
         timeout = float(_s.get("wake.follow_up_timeout_s", 5))
         wake.handle_wake(
-            listen=lambda t: voice_manager.listen(timeout=t),
+            # Slice 59: on_ready is threaded down to capture so the earcon fires
+            # once the microphone is genuinely open, not before it is enumerated.
+            listen=lambda t, on_ready=None: voice_manager.listen(
+                timeout=t, on_ready=on_ready),
             respond=_respond,
             set_idle=lambda: broadcaster.set(AgentState.IDLE),
             timeout_s=timeout,

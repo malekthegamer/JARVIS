@@ -142,15 +142,72 @@ def get_recognizer():
 
 
 def should_calibrate(index: int | None, now: float) -> bool:
-    """Re-measure ambient noise? A new device always does; otherwise once the
-    interval has elapsed. `recalibrate_every_s = 0` disables re-calibration for
-    a stable environment where the 0.6s pause is not worth paying."""
+    """May we re-measure ambient noise RIGHT NOW?
+
+    SLICE 59 INVERTED THIS. Slice 58 ran calibration on a timer, on the capture
+    path — which meant it fired immediately after the "I'm listening" earcon,
+    i.e. exactly while the user was speaking. speech_recognition's own docstring
+    says adjust_for_ambient_noise "should be used on periods of audio WITHOUT
+    speech", and calibrating on speech drives energy_threshold to ~1.5x the
+    user's voice, after which their real speech never registers as speech-start
+    and listen() waits out the whole timeout. That produced the reported "it
+    sits listening too long", every ~3 minutes, with no visible pattern.
+
+    Now calibration is only ever performed at ONE moment: right after a capture
+    has timed out, while the mic is still open. Nothing being heard is both
+    proof of silence and evidence the threshold may be too high, so it is the
+    only place where measuring is both safe and warranted.
+
+    `recalibrate_every_s` is now a MINIMUM GAP between measurements (so a noisy
+    room cannot thrash), not a schedule that triggers them. 0 means "no rate
+    limit", not "never".
+    """
     if _calibrated_index != index:
-        return True
+        return True                      # a device we have never measured
     interval = capture_config().recalibrate_every_s
     if interval <= 0:
-        return False
+        return True
     return (now - _last_calibrated_at) >= interval
+
+
+# A threshold BELOW room noise is catastrophic, and in the opposite direction to
+# the bug slice 59 set out to fix. listen() would treat ambient as speech-start
+# immediately, then never see energy drop "below" it to end the phrase, so it
+# records all the way to phrase_time_limit (30s) and hands STT a wall of noise —
+# which presents as "it sits listening too long" just like the original report.
+# Measured on this machine: adjust_for_ambient_noise converged to 20 against a
+# real ambient RMS of ~43, i.e. it undershot on a briefly-quiet 0.6s sample.
+_MIN_ENERGY_THRESHOLD = 50.0
+_AMBIENT_HEADROOM = 2.0
+
+
+def calibrate_with_floor(recognizer, source) -> float:
+    """Re-measure ambient noise, then guarantee the threshold sits ABOVE it.
+
+    `adjust_for_ambient_noise` alone is not enough: it converges from wherever
+    the threshold happens to be, over a short window, so a momentarily quiet
+    sample can leave it under the real noise floor. We therefore measure the
+    room directly afterwards and clamp. Never raises.
+    """
+    try:
+        recognizer.adjust_for_ambient_noise(source, duration=0.6)
+    except Exception:
+        pass
+    rms = 0
+    try:
+        import audioop
+        chunks = max(1, int(0.3 * source.SAMPLE_RATE / source.CHUNK))
+        frames = [source.stream.read(source.CHUNK) for _ in range(chunks)]
+        rms = audioop.rms(b"".join(frames), source.SAMPLE_WIDTH)
+    except Exception:
+        pass
+    floor = max(_MIN_ENERGY_THRESHOLD, rms * _AMBIENT_HEADROOM)
+    try:
+        if recognizer.energy_threshold < floor:
+            recognizer.energy_threshold = floor
+        return float(recognizer.energy_threshold)
+    except Exception:
+        return 0.0
 
 
 def looks_truncated(audio, limit: float) -> bool:
@@ -190,19 +247,38 @@ def note_truncation(audio, limit: float) -> bool:
     return False
 
 
-_open_cache: dict[int, bool] = {}
+# Probe results keyed by device NAME -> (usable, when_measured).
+#
+# SLICE 59 fixed three things here. It was keyed by device INDEX, on a machine
+# where indices provably shift (44 -> 45 -> 39 -> 1 observed within minutes), so
+# a cached answer could describe a completely different device. It was mutated
+# from two threads with no lock — listen_once holds `_lock` while the wake
+# listener calls find_real_mic() outside it. And a `False` was cached FOREVER,
+# so a microphone that merely happened to be busy at probe time (the wake
+# listener holds the real mic continuously) was written off for the whole
+# process, after which the fallback returned the very device the probe exists to
+# reject. A dedicated lock is used because `_lock` is already held by
+# listen_once when it calls in here.
+_probe_lock = threading.Lock()
+_open_cache: dict[str, tuple[bool, float]] = {}
+_PROBE_FAIL_TTL_S = 60.0
 
 
-def _can_open(index: int | None) -> bool:
+def _can_open(index: int | None, name: str = "") -> bool:
     """Does this device actually yield a capture stream?
 
-    Cached: probing costs a device open, and find_real_mic() runs on every
-    listen. Cleared by forget_device_probe() whenever a capture fails, so a
-    re-plugged headset is re-discovered rather than being written off forever.
-    Never raises — an un-probeable device simply reads as unusable.
+    Successes are cached indefinitely; FAILURES expire, because "unusable" is
+    very often just "busy right now" and must be allowed to heal. Never raises —
+    an un-probeable device simply reads as unusable.
     """
-    if index in _open_cache:
-        return _open_cache[index]
+    key = (name or f"#{index}").strip().lower()
+    now = time.monotonic()
+    with _probe_lock:
+        hit = _open_cache.get(key)
+        if hit is not None:
+            usable, when = hit
+            if usable or (now - when) < _PROBE_FAIL_TTL_S:
+                return usable
     ok = False
     try:
         import speech_recognition as sr
@@ -210,14 +286,16 @@ def _can_open(index: int | None) -> bool:
             ok = source.stream is not None
     except Exception:
         ok = False
-    _open_cache[index] = ok
+    with _probe_lock:
+        _open_cache[key] = (ok, now)
     return ok
 
 
 def forget_device_probe() -> None:
-    """Drop cached open-probes so devices are re-evaluated (called when a
-    capture fails, and whenever the mic pin changes)."""
-    _open_cache.clear()
+    """Drop cached probes so every device is re-evaluated. Called when a capture
+    hits a device error — a re-plugged headset must be re-discovered."""
+    with _probe_lock:
+        _open_cache.clear()
 
 
 def is_probably_real_mic(name: str) -> bool:
@@ -279,22 +357,32 @@ def find_real_mic() -> tuple[int | None, str]:
     # device wins depends on enumeration, so it can change between runs. That is
     # indistinguishable from "the listening is inconsistent".
     for _rank, idx, name in sorted(ranked):
-        if _can_open(idx):
+        if _can_open(idx, name):
             return idx, name
     # Nothing opened (every mic busy, or a transient device error): fall back to
     # the ranked favourite rather than "system default", so behaviour degrades to
-    # exactly what it was before this probe existed.
+    # exactly what it was before this probe existed. SAY SO — silently returning
+    # the exact device the probe exists to reject is how "listening randomly
+    # stops working" looked from the outside.
     _rank, idx, name = min(ranked)
+    print(f"  [mic] no microphone passed the open-probe; falling back to "
+          f"{name!r} unverified — if listening fails, this is why")
     return idx, name
 
 
-def listen_once(timeout: float | None = None, phrase_time_limit: float | None = None):
+def listen_once(timeout: float | None = None, phrase_time_limit: float | None = None,
+                on_ready=None):
     """Capture one utterance. Returns sr.AudioData or None (timeout / device issue).
 
-    Slice 58: timing now comes from settings (`stt.*`) rather than hardcoded
-    literals, ambient noise is re-measured periodically instead of once per
-    process, and a `phrase_time_limit` truncation is REPORTED rather than
+    Slice 58: timing comes from settings (`stt.*`) rather than hardcoded
+    literals, and a `phrase_time_limit` truncation is REPORTED rather than
     silently shipping half a sentence to STT.
+
+    Slice 59 fixed two things slice 58 got wrong:
+      * ambient calibration no longer runs before a capture (it was measuring
+        the user's own voice as "background noise" — see should_calibrate);
+      * `on_ready` fires once the microphone is genuinely open, so the
+        "I'm listening" cue stops promising a live mic that isn't ready yet.
     """
     global _calibrated_index, _last_calibrated_at
     require_audio_stdlib()
@@ -313,20 +401,55 @@ def listen_once(timeout: float | None = None, phrase_time_limit: float | None = 
         try:
             # NOTE: no sample_rate argument — device default only (lesson #1).
             with sr.Microphone(device_index=index) as source:
-                if should_calibrate(index, time.monotonic()):
-                    recognizer.adjust_for_ambient_noise(source, duration=0.6)
-                    _calibrated_index = index
-                    _last_calibrated_at = time.monotonic()
-                audio = recognizer.listen(source, timeout=timeout,
-                                          phrase_time_limit=phrase_time_limit)
+                # SLICE 59: the cue fires HERE — after the device is genuinely
+                # open and immediately before listening. Slice 57 played it
+                # before listen_once() was even called, so it promised a live
+                # mic while device enumeration and opening were still running,
+                # and every word said during that gap was lost.
+                if on_ready is not None:
+                    try:
+                        on_ready()
+                    except Exception:
+                        pass      # a decorative cue must never cost an utterance
+                try:
+                    audio = recognizer.listen(
+                        source, timeout=timeout,
+                        phrase_time_limit=phrase_time_limit)
+                except sr.WaitTimeoutError:
+                    # NOTHING WAS HEARD. That is simultaneously proof of silence
+                    # and evidence the threshold may be too high — the only
+                    # moment where re-measuring ambient noise is both safe and
+                    # warranted, and the mic is already open. See
+                    # should_calibrate() for why this must never happen BEFORE a
+                    # capture instead.
+                    now = time.monotonic()
+                    if should_calibrate(index, now):
+                        level = calibrate_with_floor(recognizer, source)
+                        _calibrated_index = index
+                        _last_calibrated_at = now
+                        print(f"  [mic] silent capture — re-measured ambient, "
+                              f"speech threshold now {level:.0f}")
+                    return None   # silence — caller just listens again
+                if timing.enabled():
+                    # SLICE 59: the owner reported failures with "no pattern I
+                    # can see". Guessing was tried and was wrong, so the capture
+                    # now states its own conditions. Opt-in (JARVIS_VOICE_TIMING=1)
+                    # so normal runs stay quiet.
+                    try:
+                        import audioop
+                        secs = (len(audio.frame_data)
+                                / float(audio.sample_rate * audio.sample_width))
+                        print(f"  [mic] heard {secs:.1f}s on {_name!r} "
+                              f"(threshold {recognizer.energy_threshold:.0f}, "
+                              f"rms {audioop.rms(audio.frame_data, audio.sample_width)})")
+                    except Exception:
+                        pass
                 note_truncation(audio, phrase_time_limit)
-                # Slice 57: `listen` returns ~pause_threshold (0.8s) AFTER the
-                # user actually stopped talking. The harness subtracts that and
-                # SAYS SO rather than quietly flattering the number.
+                # Slice 57: `listen` returns ~pause_threshold AFTER the user
+                # actually stopped talking. The harness subtracts that and SAYS
+                # SO rather than quietly flattering the number.
                 timing.mark("speech_end")
                 return audio
-        except sr.WaitTimeoutError:
-            return None  # silence — caller just listens again
         except OSError as exc:
             print(f"  [mic] device problem ({exc}) — re-detecting on next attempt")
             _calibrated_index = None

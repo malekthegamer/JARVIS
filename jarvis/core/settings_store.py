@@ -72,10 +72,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "phrase_time_limit": 30.0,
         # How long to wait for speech to START before giving up (silence budget).
         "listen_timeout": 8.0,
-        # Re-measure ambient noise at most this often. THE INCONSISTENCY FIX:
-        # calibration used to run once per device for the whole process, while
-        # dynamic_energy_threshold drifted from that stale baseline — so the same
-        # words behaved differently an hour apart. 0 disables re-calibration.
+        # MINIMUM gap between ambient re-measurements. NOT a schedule.
+        #
+        # Slice 58 made this a timer that triggered calibration on the capture
+        # path — which fired right after the "I'm listening" cue, measuring the
+        # user's own voice as background noise and pushing the threshold above
+        # their speech, so listen() then waited out the full timeout hearing
+        # "nothing". That is the "it sits listening too long" report.
+        #
+        # Slice 59: calibration now happens ONLY after a capture times out (mic
+        # already open, silence proven), and this value just stops a noisy room
+        # from re-measuring on every turn. 0 = no rate limit, not "never".
         "recalibrate_every_s": 180.0,
         "active": "google",           # free, keyless, proven default
         "mic_device_index": None,     # None = auto-detect real mic (see jarvis.voice.capture)

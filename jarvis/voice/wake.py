@@ -159,16 +159,26 @@ def handle_wake(listen, respond, set_idle, timeout_s: float = 5.0, *,
     acted = None
     timeout = timeout_s
 
-    for turn in range(max(1, int(max_turns))):
-        if on_listen_start is not None:
-            try:
-                on_listen_start()
-            except Exception:
-                pass          # a decorative cue must never break the loop
+    for _turn in range(max(1, int(max_turns))):
+        if interrupt.conversation_stopped():
+            break             # a stop landed between turns — do not reopen the mic
         try:
-            text = listen(timeout)
+            # SLICE 59: the cue is handed DOWN so it fires once the mic is
+            # actually open. Calling it here (slice 57) announced "I'm
+            # listening" while device enumeration and opening were still
+            # running, so anything said in that gap was never recorded.
+            text = listen(timeout, on_ready=on_listen_start)
         except Exception:
             text = None
+
+        # SLICE 59: honour a stop that landed WHILE the mic was open, BEFORE
+        # executing what was captured. Previously the only check sat after
+        # respond(), so pressing stop during capture still ran the whole turn —
+        # brain, tools and all — and only then noticed. A stop must discard the
+        # utterance, not merely end the conversation afterwards.
+        if interrupt.conversation_stopped():
+            break
+
         if not text or not str(text).strip():
             # Silence ends the conversation, and ONLY this path idles: after a
             # real utterance `respond` runs speak(), which owns the

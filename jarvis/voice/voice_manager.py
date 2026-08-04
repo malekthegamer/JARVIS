@@ -48,13 +48,17 @@ class VoiceManager:
               f"tts={self.resolve_tts_name()}")
 
     # ---------- the two calls everyone uses ----------
-    def listen(self, timeout: float = 8.0) -> str | None:
+    def listen(self, timeout: float = 8.0, on_ready=None) -> str | None:
         """Capture one utterance and transcribe it. None on silence/failure —
         callers just loop back to listening (never-crash contract).
-        Owns the LISTENING state so the HUD always sees it end."""
+        Owns the LISTENING state so the HUD always sees it end.
+
+        `on_ready` (slice 59) fires once the microphone is genuinely open, so a
+        caller's "I'm listening" cue cannot promise a live mic while device
+        enumeration and opening are still in progress."""
         broadcaster.set(AgentState.LISTENING)
         try:
-            audio = capture.listen_once(timeout=timeout)
+            audio = capture.listen_once(timeout=timeout, on_ready=on_ready)
             if audio is None:
                 return None
             provider = registry.get("stt", self.resolve_stt_name())
