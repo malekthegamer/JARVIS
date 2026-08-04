@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-08-01, after **Slice 58 (real-use fixes: listening consistency, a navigate mis-tier, per-action confirm control, and a mic-selection bug)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
+> Last updated: 2026-08-02, after **Slice 59 (undoing three regressions slices 57-58 introduced: a cross-host gate BYPASS, the listening bug, and a swallowed stop)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
 
 ---
 
@@ -283,6 +283,67 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 59 — Undoing three regressions slices 57-58 shipped
+The owner reported listening was **still broken** after slice 58 "fixed" it, and
+asked me to look wherever I most suspect bugs. **The answer was my own last two
+slices.** Both shipped fast on a green gate; between them they introduced a
+security regression, a swallowed stop, a mic-blacklisting race, and the listening
+bug being felt. Every finding below was verified by RUNNING code, not reading it.
+
+**🔴 A cross-host CONFIRM BYPASS — live in the public repo (slice 58).**
+Slice 58's "don't confirm a site the user named himself" exemption matched **any
+hostname label** against the user's words. Measured, 7/7 defeated:
+
+```
+'summarise this page about AI'  -> evil.ai              BYPASSED
+'open the login page'           -> login.attacker.com   BYPASSED
+'find me docs for python'       -> docs.evil.com        BYPASSED
+'read the news'                 -> news.com             BYPASSED
+```
+
+Two faults: matching ANY label meant owning ONE domain granted unlimited exempt
+hostnames (`docs.`/`login.`/`drive.`/`support.` of it), and generic words meant
+an attacker only had to guess a common noun — **"AI" is near-guaranteed in this
+product**, so `anything.ai` was effectively ungated. This defeats the exact gate
+built for prompt-injection navigation, where the URL is *model-supplied from page
+content*. Now matches only the **registrable domain's** primary label
+(subdomains + public suffix discarded, `co.uk` handled), refuses generic labels,
+and requires ≥4 characters. All 7 are a verbatim table-driven test.
+
+**🔴 The listening bug (slice 58) — and the near-miss fixing it.**
+`speech_recognition`'s docstring: *"Should be used on periods of audio WITHOUT
+speech"*. Slice 58 put `adjust_for_ambient_noise` on the capture path, so:
+earcon says "I'm listening" → **user speaks** → **0.6s calibration measures their
+voice as ambient** → threshold converges to ~1.5× their volume → their real
+speech never registers → `listen()` waits out the whole timeout. **That is
+exactly "it sits listening too long"**, recurring every ~3 minutes.
+
+Calibration now happens at **one** moment: after a capture times out, mic still
+open — nothing heard is both proof of silence and evidence the threshold is
+wrong. **But the first version of that fix would have shipped the same symptom in
+reverse**: measured live, `adjust_for_ambient_noise` converged to **20 against a
+real ambient RMS of 43**, and a threshold *below* room noise makes `listen()`
+treat ambient as speech-start and never end the phrase — recording to
+`phrase_time_limit` (30s). `calibrate_with_floor()` now measures the room
+directly and clamps (verified: ambient 37 → threshold 112).
+
+**🔴 A stop during capture was swallowed (slice 57).** The only
+`conversation_stopped()` check sat *after* `respond()`, so pressing stop while
+the mic was open still ran the entire captured turn — brain, tools and all.
+
+**Also fixed:** the earcon fired *before* `listen_once()` was called, promising a
+live mic while enumeration/opening were still running (now threaded down via
+`on_ready`); the probe cache was keyed by **device index on a machine where
+indices provably shift**, unlocked across two threads, and cached failures
+**forever** — so a mic that was merely busy got written off for the whole
+process and the fallback silently returned the device the probe exists to reject.
+
+**Gate: 1183 passed / 0 failed / 0 skipped** — the project's second clean gate.
+
+**The lesson, recorded plainly:** slice 58's tests never once called
+`listen_once()`. They tested the helpers I wrote rather than the path they run
+in, which is why a bug sitting directly in that path shipped twice.
 
 ### Slice 58 — What real use exposed: listening, and over-confirmation
 The owner used it for a day and reported two things. **Neither was on any
