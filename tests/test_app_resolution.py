@@ -36,13 +36,17 @@ INVENTORY = [
 
 @pytest.fixture(autouse=True)
 def fake_inventory(monkeypatch):
+    """Pin every source. The Start Menu is emptied by pointing the REAL walk at
+    nothing rather than stubbing start_menu_apps() out — otherwise the tests
+    that exist to exercise that walk would silently test the stub instead."""
+    from jarvis.primitives import apps
+
     monkeypatch.setattr(D, "desktop_shortcuts",
                         lambda: [e for e in INVENTORY if e["source"] == "desktop"])
     monkeypatch.setattr(D, "steam_games",
                         lambda: [e for e in INVENTORY if e["source"] == "steam"])
     monkeypatch.setattr(D, "epic_games", lambda: [])
-    if hasattr(D, "start_menu_apps"):
-        monkeypatch.setattr(D, "start_menu_apps", lambda: [])
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [])
 
 
 def _names(hit) -> list[str]:
@@ -114,3 +118,101 @@ def test_genuine_ambiguity_still_refuses_to_guess():
     assert hit and hit.get("candidates"), hit
     assert len(hit["candidates"]) == 3, hit
     assert "launch" not in hit, "ambiguity must never carry a launch target"
+
+
+# ------------------------------------------------------ the Start Menu source
+
+def test_start_menu_apps_are_discoverable(monkeypatch, tmp_path):
+    """apps.py walks the Start Menu, but only for an EXACT '<name>.lnk', so
+    find()/suggest() could never fuzzy-match one. Measured on the owner's
+    machine: 145 apps resolve by their exact name and not one of them could be
+    SUGGESTED after a near-miss — the slice-60 dead end, still open for them.
+    """
+    from jarvis.primitives import apps
+
+    real = tmp_path / "AMD Software.exe"
+    real.write_text("x", encoding="utf-8")
+    lnk = tmp_path / "AMD Software\ua789 Adrenalin Edition.lnk"
+    lnk.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(apps, "_lnk_target", lambda p: str(real))
+    entries = D.start_menu_apps()
+    assert entries, "Start Menu produced nothing"
+    assert any("Adrenalin" in e["name"] for e in entries), entries
+    assert all(e["source"] == "start_menu" for e in entries), entries
+
+
+def test_a_stale_start_menu_shortcut_is_ignored(monkeypatch, tmp_path):
+    """A .lnk pointing at an uninstalled app must not become a launch target.
+    This is the exact mistake the AppCompatFlags graveyard just taught me —
+    a leftover record is not an inventory."""
+    from jarvis.primitives import apps
+
+    (tmp_path / "Ghost App.lnk").write_text("", encoding="utf-8")
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(apps, "_lnk_target",
+                        lambda p: str(tmp_path / "does-not-exist.exe"))
+
+    assert D.start_menu_apps() == []
+
+
+def test_suggest_offers_start_menu_apps(monkeypatch, tmp_path):
+    """The point of the whole stage: a near-miss must offer a real name back."""
+    from jarvis.primitives import apps
+
+    real = tmp_path / "Blender.exe"
+    real.write_text("x", encoding="utf-8")
+    (tmp_path / "Blender 4.5.lnk").write_text("", encoding="utf-8")
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(apps, "_lnk_target", lambda p: str(real))
+
+    assert any("Blender" in s for s in D.suggest("blendr")), D.suggest("blendr")
+
+
+def test_the_start_menu_scan_is_cached(monkeypatch, tmp_path):
+    """Resolving a .lnk is a COM round trip EACH, ~160 of them — measured 280ms,
+    and find() plus suggest() both call it, so an uncached miss paid it twice.
+
+    This test exists because the first cache I wrote did nothing: the loop
+    rebound `key` (the cache key) to each shortcut's path, so entries were
+    stored under the last .lnk instead of the directory tuple and never hit.
+    """
+    from jarvis.primitives import apps
+
+    real = tmp_path / "Thing.exe"
+    real.write_text("x", encoding="utf-8")
+    (tmp_path / "Thing.lnk").write_text("", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(tmp_path)])
+    monkeypatch.setattr(apps, "_lnk_target",
+                        lambda p: calls.append(p) or str(real))
+    monkeypatch.setattr(D, "_SM_CACHE", {})
+
+    first = D.start_menu_apps()
+    n_after_first = len(calls)
+    second = D.start_menu_apps()
+
+    assert first == second and first, first
+    assert len(calls) == n_after_first, (
+        f"scan re-ran: {len(calls)} .lnk resolutions instead of {n_after_first}")
+
+
+def test_the_cache_does_not_leak_between_different_start_menus(monkeypatch, tmp_path):
+    """Keyed on the directories, so a test (or a settings change) that repoints
+    the scan can never read another location's result."""
+    from jarvis.primitives import apps
+
+    a, b = tmp_path / "a", tmp_path / "b"
+    for d, exe in ((a, "Alpha"), (b, "Beta")):
+        d.mkdir()
+        (d / f"{exe}.exe").write_text("x", encoding="utf-8")
+        (d / f"{exe}.lnk").write_text("", encoding="utf-8")
+    monkeypatch.setattr(D, "_SM_CACHE", {})
+    monkeypatch.setattr(apps, "_lnk_target",
+                        lambda p: p[:-4] + ".exe")
+
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(a)])
+    assert [e["name"] for e in D.start_menu_apps()] == ["Alpha"]
+    monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(b)])
+    assert [e["name"] for e in D.start_menu_apps()] == ["Beta"]

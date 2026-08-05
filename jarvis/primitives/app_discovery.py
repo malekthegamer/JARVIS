@@ -24,6 +24,7 @@ import glob
 import json
 import os
 import re
+import time as _time
 
 # Module-level so tests (and odd setups) can repoint them.
 EPIC_MANIFEST_DIR = r"C:\ProgramData\Epic\EpicGamesLauncher\Data\Manifests"
@@ -33,6 +34,11 @@ DESKTOP_DIRS = [
 ]
 
 _STEAM_SKIP = {"steamworks common redistributables"}
+
+# Start Menu scan cache: {dirs_tuple: (timestamp, entries)}. Short TTL so a
+# freshly-installed app shows up without restarting JARVIS.
+_SM_CACHE: dict[tuple, tuple[float, list]] = {}
+_SM_CACHE_TTL_S = 60.0
 
 
 def _steam_root() -> str | None:
@@ -168,6 +174,59 @@ _ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8",
           "xx": "20"}
 
 
+def start_menu_apps() -> list[dict]:
+    """Every Start Menu .lnk whose target still exists.
+
+    SLICE 64. apps._resolve_shortcut already walks these folders, but only for
+    an EXACT '<name>.lnk' — so find()/suggest() could never fuzzy-match one.
+    Measured on the owner's machine: 145 apps resolve by their exact name and
+    NOT ONE of them could be offered as a suggestion after a near-miss. That is
+    the slice-60 dead end ("No application named X found", model invents a
+    name), still wide open for most of what's installed.
+
+    Targets are validated the way desktop_shortcuts() validates them: a .lnk
+    pointing at an uninstalled program is a leftover record, not an inventory —
+    the same mistake the AppCompatFlags graveyard taught in slice 63.
+    Measured cost of the walk: ~7 ms. Never raises.
+    """
+    from jarvis.primitives import apps  # late: avoid import cycle
+
+    # Cached because resolving a .lnk is a COM round trip EACH, and there are
+    # ~160 of them: I first measured only the os.walk (7 ms) and reported that
+    # as the cost. The real figure is ~280 ms, and find() and suggest() both
+    # call this, so an uncached miss paid it twice. Keyed on the directories so
+    # tests that repoint _START_MENU_DIRS never hit a stale entry.
+    key = tuple(apps._START_MENU_DIRS)
+    hit = _SM_CACHE.get(key)
+    if hit and (_time.time() - hit[0]) < _SM_CACHE_TTL_S:
+        return list(hit[1])
+
+    out: list[dict] = []
+    seen: set[str] = set()
+    for root_dir in apps._START_MENU_DIRS:
+        try:
+            if not os.path.isdir(root_dir):
+                continue
+            for dirpath, _dirs, files in os.walk(root_dir):
+                for fn in files:
+                    if not fn.lower().endswith(".lnk"):
+                        continue
+                    target = apps._lnk_target(os.path.join(dirpath, fn))
+                    if not target or not (os.path.isfile(target)
+                                          or os.path.isdir(target)):
+                        continue
+                    dedupe = target.casefold()
+                    if dedupe in seen:
+                        continue
+                    seen.add(dedupe)
+                    out.append({"name": os.path.splitext(fn)[0],
+                                "source": "start_menu", "launch": target})
+        except Exception:
+            continue
+    _SM_CACHE[key] = (_time.time(), list(out))
+    return out
+
+
 def _norm(text: str) -> str:
     """Casefold; every non-alphanumeric (®, ™, dashes, dots) becomes a space
     — probe-driven: Epic's DisplayName is literally 'Rocket League®'.
@@ -230,7 +289,8 @@ def suggest(name: str, limit: int = 5) -> list[str]:
     try:
         import difflib
 
-        entries = desktop_shortcuts() + steam_games() + epic_games()
+        entries = (desktop_shortcuts() + steam_games() + epic_games()
+                   + start_menu_apps())
         names = sorted({str(e.get("name") or "").strip()
                         for e in entries if e.get("name")})
         if not names:
@@ -265,7 +325,8 @@ def find(name: str) -> dict | None:
     needle = _norm(name)
     if not needle:
         return None
-    entries = desktop_shortcuts() + steam_games() + epic_games()
+    entries = (desktop_shortcuts() + steam_games() + epic_games()
+               + start_menu_apps())
     # Same normalized name from multiple sources = the same thing the user
     # means; prefer desktop < steam < epic order stability but dedupe only
     # EXACT-equal launch targets (a steam game and its own .url shortcut).
