@@ -259,7 +259,12 @@ def test_newest_extension_connection_wins(bridge):
         time.sleep(0.01)
     b.attach(_FakeWS(), _FakeLoop())   # a newer connection arrives
     t.join(timeout=5)
-    assert "newer" in err.get("msg", ""), err
+    # SLICE 69: was `"newer" in msg`. The behaviour under test is that the
+    # in-flight request FAILS when a newer socket takes over — the exact
+    # wording is not the contract, and the old text ("replaced by a newer
+    # extension connection") read to a user like a real fault rather than
+    # a routine Chrome service-worker restart.
+    assert "reconnect" in err.get("msg", "").lower(), err
     assert b.connected() is True
 
 

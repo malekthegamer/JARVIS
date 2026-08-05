@@ -43,7 +43,18 @@ class ExtensionBridge:
             old = self._ws
             self._ws, self._loop = ws, loop
         if old is not None and old is not ws:
-            self._fail_all("replaced by a newer extension connection")
+            # SLICE 69: in-flight requests still fail, deliberately. Chrome
+            # restarts the MV3 service worker whenever it likes, so a reconnect
+            # mid-request is NORMAL — but we cannot know whether the old socket
+            # already delivered the command, and silently re-sending a click or
+            # a form fill could act twice on the user's real browser. Failing
+            # loudly is the safe half of that trade; the message now says the
+            # request is safe to repeat, because from the user's seat "replaced
+            # by a newer extension connection" reads like a real fault.
+            self._fail_all(
+                "the browser extension reconnected mid-request (Chrome restarts "
+                "it when idle), so this command was dropped rather than risk "
+                "running twice - just ask again")
 
     def detach(self, ws) -> None:
         with self._lock:

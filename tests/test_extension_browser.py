@@ -133,6 +133,26 @@ def ext_browser():
         _stop_server()
 
 
+def _stable(call, *a, **kw):
+    """Run an extension request, retrying ONCE past a mid-request reconnect.
+
+    SLICE 69. Chrome restarts the MV3 service worker whenever it feels like it,
+    so the extension's socket can be replaced between two requests in a test.
+    The bridge then fails the in-flight command on purpose — it cannot know
+    whether the old socket already delivered it, and silently re-sending a click
+    could act twice on a real browser. That is the RIGHT production behaviour,
+    so the determinism belongs here in the test rather than in a loosened
+    safety rule. Caught as an intermittent gate failure in slice 68:
+
+        {'ok': False, 'message': 'replaced by a newer extension connection'}
+    """
+    out = call(*a, **kw)
+    if not out.get("ok") and "reconnect" in str(out.get("message", "")).lower():
+        time.sleep(1.0)
+        out = call(*a, **kw)
+    return out
+
+
 def _open_pages(ctx) -> list[str]:
     """URLs of every open tab, via CDP.
 
@@ -161,11 +181,11 @@ def test_open_creates_a_new_tab_and_leaves_the_previous_page_alone(ext_browser):
     ctx, web = ext_browser
     before = len(_open_pages(ctx))
 
-    r1 = web.navigate("https://example.com/")
+    r1 = _stable(web.navigate, "https://example.com/")
     assert r1["ok"], r1
     time.sleep(0.5)
 
-    r2 = web.navigate("https://example.org/")
+    r2 = _stable(web.navigate, "https://example.org/")
     assert r2["ok"], r2
     time.sleep(0.5)
 
