@@ -9,6 +9,7 @@ the WEBSITES map deliberately not carried over (web is a later slice).
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -130,6 +131,29 @@ def resolve_app(name: str) -> tuple[str | None, str]:
     if hit and hit.get("launch"):
         return hit["launch"], hit["name"]
     return None, name
+
+
+def resolve_app_detail(name: str) -> tuple[str | None, str, list[str]]:
+    """resolve_app, plus the candidate list it throws away.
+
+    SLICE 64: when discovery found SEVERAL matches, resolve_app returned a bare
+    None and the names died here — so launch_app reported "No application named
+    'resident evil' found" when it had in fact found three. Same class of lie as
+    slice 63's "doesn't appear to be installed".
+
+    Deliberately a thin wrapper AROUND resolve_app rather than a replacement for
+    its body: resolve_app is the seam tests stub, and moving the real work out
+    from under them would have silently stopped exercising the code they name.
+    The second find() call only happens once resolution has already failed.
+    """
+    target, matched = resolve_app(name)
+    if target is not None:
+        return target, matched, []
+    from jarvis.primitives import app_discovery  # late: cheap import, clear seam
+    hit = app_discovery.find(name)
+    if hit and hit.get("candidates"):
+        return None, name, list(hit["candidates"])
+    return None, name, []
 
 
 def _is_uri(target: str) -> bool:
@@ -361,7 +385,18 @@ def launch_app(name: str) -> dict:
         return {"ok": False, "message": "No application name given.",
                 "pid": None, "resolved": None}
     try:
-        target, matched = resolve_app(name)
+        target, matched, choices = resolve_app_detail(name)
+        if target is None and choices:
+            # It found several. Saying "no application named X" here was simply
+            # false, and it sent the model off inventing other names.
+            # find() tags candidates with their source ("Resident Evil 2
+            # (desktop)"). Useful for debugging, noise when it's SPOKEN aloud.
+            listed = ", ".join(re.sub(r"\s*\((?:desktop|steam|epic|start_menu)\)$",
+                                      "", c) for c in choices[:6])
+            return {"ok": False, "pid": None, "resolved": None, "matched": None,
+                    "candidates": choices,
+                    "message": (f"Several things match '{name}' — which did you "
+                                f"mean? {listed}")}
         if target is None:
             # SLICE 60: a miss used to dead-end here. The model then either gave
             # up or invented a name — both are in the audit log back to back

@@ -216,3 +216,56 @@ def test_the_cache_does_not_leak_between_different_start_menus(monkeypatch, tmp_
     assert [e["name"] for e in D.start_menu_apps()] == ["Alpha"]
     monkeypatch.setattr(apps, "_START_MENU_DIRS", [str(b)])
     assert [e["name"] for e in D.start_menu_apps()] == ["Beta"]
+
+
+# ------------------------------------------------- stage 3: honest ambiguity
+
+def test_resolve_app_passes_candidates_through():
+    """resolve_app DISCARDED find()'s candidates and returned a bare None, so
+    everything downstream was told 'nothing matched' when three things had."""
+    from jarvis.primitives import apps
+
+    target, matched, candidates = apps.resolve_app_detail("resident evil")
+    assert target is None, target
+    assert len(candidates) == 3, candidates
+    assert all("Resident Evil" in c for c in candidates), candidates
+
+
+def test_resolve_app_keeps_its_two_value_shape():
+    """Existing callers must not break: resolve_app stays (target, matched)."""
+    from jarvis.primitives import apps
+
+    target, matched = apps.resolve_app("resident evil 4")
+    assert target and "re4" in target.lower(), (target, matched)
+
+
+def test_the_ambiguous_message_does_not_claim_nothing_was_found(monkeypatch):
+    """The lie, same class as slice 63's 'doesn't appear to be installed': it
+    found three Resident Evils and reported that nothing was named that."""
+    from jarvis.primitives import apps
+
+    r = apps.launch_app("resident evil")
+    assert r["ok"] is False
+    msg = r["message"].lower()
+    assert "no application named" not in msg, r["message"]
+    assert "resident evil 2" in msg and "resident evil 4" in msg, r["message"]
+    assert "which" in msg or "several" in msg, r["message"]
+
+
+def test_a_genuine_miss_still_says_it_found_nothing(monkeypatch):
+    """The honest 'not found' must survive — only the FALSE one goes."""
+    from jarvis.primitives import apps
+
+    r = apps.launch_app("no such application anywhere")
+    assert r["ok"] is False
+    assert "no application named" in r["message"].lower(), r["message"]
+
+
+def test_the_spoken_choice_does_not_read_out_source_tags(monkeypatch):
+    """find() tags candidates '(desktop)'/'(steam)' — useful in a log, noise
+    when JARVIS SAYS it out loud."""
+    from jarvis.primitives import apps
+
+    msg = apps.launch_app("resident evil")["message"]
+    assert "(desktop)" not in msg and "(steam)" not in msg, msg
+    assert "Resident Evil 2" in msg, msg
