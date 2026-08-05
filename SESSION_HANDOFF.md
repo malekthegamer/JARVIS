@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-08-02, after **Slice 59 (undoing three regressions slices 57-58 introduced: a cross-host gate BYPASS, the listening bug, and a swallowed stop)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
+> Last updated: 2026-08-03, after **Slice 60 (reliability: `open_url` — stop automating a browser just to open a website)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
 
 ---
 
@@ -283,6 +283,68 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 60 — Reliability: stop automating a browser just to open a website
+The owner, after real use: *"why is jarvis so unreliable... I like our current
+version and believe it has so much potential but it's just so unreliable."*
+
+**THE NUMBER EXISTED ALL ALONG — nobody had counted it.** The audit log records
+every action with a status, so `tests/harness_reliability.py` (new) just reads
+it. First run:
+
+```
+313 actions, 51 failed  ->  16.2% of everything the owner asks for
+  browse_fill     7/9   78%      click           7/20  35%
+  list_tabs       2/3   67%      browse_navigate 10/42 24%
+                                 launch_app      7/46  15%
+```
+
+**Root cause of the reported bug: there was NO tool meaning "just open this
+website".** The only signposted route was `browse_navigate`, which drives a
+browser-AUTOMATION stack — isolated Playwright (a deliberately logged-out,
+profile-less Chromium → *"a window with no profile"*), real-Chrome CDP, or the
+MV3 extension (not loaded → *"keeps opening Chrome windows then fails"*). Both
+reported symptoms, exactly.
+
+**The owner's instinct about his previous JARVIS was CORRECT.** That build had
+one tool — raw PowerShell — and emitted `Start-Process "https://youtube.com"`;
+Windows handed it to the real default browser. One step, nothing to
+misconfigure. Its *architecture* is NOT salvageable (verified: it defines
+`SAFE_COMMANDS`/`is_safe_command` and **never calls either** — every command ran
+ungated), but the *technique* was right.
+
+**And the technique already existed here, unreachable.** `launch_app` ends at
+`os.startfile` for URIs. Measured before the change:
+`launch_app("https://youtube.com")` **worked**; `"youtube.com"` and `"youtube"`
+both failed, and nothing told the model to use it for websites.
+
+`open_url` now accepts a URL, a bare domain, or a known site name.
+- **SAFETY, non-obvious**: `os.startfile` *runs* what it is given — handed
+  `C:\...\calc.exe` it executes it. An unguarded version would be an
+  arbitrary-execution primitive in a browser costume. Only http/https reaches
+  the OS; file paths, UNC, `file://`, `javascript:`, `ms-settings:` and bare
+  executables are each refused and individually tested.
+- The gate **reuses `web._user_named_host`** rather than re-deriving it — slice
+  59 had to close a real bypass in that logic and a second copy is exactly the
+  drift that caused it. Pinned: a model-discovered host still CONFIRMs.
+- **Verified against the real model**: "open youtube" / "go to gmail" / "bring
+  up reddit" all now choose `open_url`, while "search youtube and tell me the
+  top result" still plans a proper chain.
+
+**`launch_app` no longer dead-ends.** Its miss returned a flat refusal, so the
+model gave up *or invented a name* — both are in the audit log back to back
+(`'Rocket League'`, then `'Rocket Leaguer.url'`). `app_discovery.suggest()` now
+offers real installed names; live on this machine that miss now answers
+*"Did you mean: Rocket League®?"*
+
+**Gate: 1201 passed / 2 failed / 0 skipped** — `test_live_multistep_chain_notepad`
+(the standing intermittent) and one extension-browser test; **both pass in
+isolation**. Not a clean gate.
+
+**Next, and deliberately NOT bundled:** `click` at 35% is the hardest number on
+the board (real UIA/vision timing). Start with actionable failure messages so
+the model self-corrects; anything deeper earns its own slice with its own
+measurement. `browse_fill` at 78% was deprioritised by the owner.
 
 ### Slice 59 — Undoing three regressions slices 57-58 shipped
 The owner reported listening was **still broken** after slice 58 "fixed" it, and

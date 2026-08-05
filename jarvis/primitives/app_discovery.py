@@ -165,6 +165,51 @@ def _norm(text: str) -> str:
                             for c in str(text or "").casefold()).split())
 
 
+def suggest(name: str, limit: int = 5) -> list[str]:
+    """Closest installed app names for a lookup that MISSED. Never raises.
+
+    SLICE 60. Ambiguity already returned candidates, but a miss returned a flat
+    "No application named 'X' found", which gives the model nothing to recover
+    with — so it either gave up or invented a name. Both are in the owner's
+    audit log, back to back:
+
+        FAILED: No application named 'Rocket League' found on this system.
+        FAILED: No application named 'Rocket Leaguer.url' found on this system.
+
+    The second is what inventing looks like. Offering real names turns a dead
+    end into a retry the model can actually get right.
+    """
+    try:
+        import difflib
+
+        entries = desktop_shortcuts() + steam_games() + epic_games()
+        names = sorted({str(e.get("name") or "").strip()
+                        for e in entries if e.get("name")})
+        if not names:
+            return []
+        needle = _norm(name)
+        # difflib first — it handles typos and mangled suffixes ("Leaguer.url").
+        close = difflib.get_close_matches(needle, [_norm(n) for n in names],
+                                          n=limit, cutoff=0.6)
+        by_norm = {_norm(n): n for n in names}
+        out = [by_norm[c] for c in close if c in by_norm]
+        # Then token overlap, which catches abbreviations difflib misses
+        # ("vs code" -> "Visual Studio Code").
+        if len(out) < limit:
+            want = set(needle.split())
+            scored = sorted(
+                ((len(want & set(_norm(n).split())), n) for n in names),
+                key=lambda t: (-t[0], t[1]))
+            for score, n in scored:
+                if score and n not in out:
+                    out.append(n)
+                if len(out) >= limit:
+                    break
+        return out[:limit]
+    except Exception:
+        return []
+
+
 def find(name: str) -> dict | None:
     """Unique match across all sources, or candidates, or None.
     Precedence: exact normalized name > unique prefix > unique substring.

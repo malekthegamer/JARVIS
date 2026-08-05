@@ -146,3 +146,59 @@ def test_open_url_is_registered_and_rides_no_kill_switch():
     assert "open_url" in primitives.PRIMITIVES
     for key, verbs in primitives._KILL_SWITCHES.items():
         assert "open_url" not in verbs or key == "web.enabled", key
+
+
+# ============ slice 60 stage 2: a missed app must not dead-end ============
+# FROM THE AUDIT LOG, real failures on the owner's machine:
+#     FAILED: No application named 'Rocket League' found on this system.
+#     FAILED: No application named 'Rocket Leaguer.url' found on this system.
+# launch_app failed 7/46 (15%). A flat refusal gives the model nothing to
+# recover with, so it either gives up or invents a name — the second message
+# above is what inventing looks like. Ambiguity already returns candidates;
+# a MISS did not.
+
+def _fake_library(monkeypatch, names):
+    from jarvis.primitives import app_discovery
+    entries = [{"name": n, "launch": f"C:\{n}.exe", "source": "desktop"}
+               for n in names]
+    monkeypatch.setattr(app_discovery, "desktop_shortcuts", lambda: entries)
+    monkeypatch.setattr(app_discovery, "steam_games", lambda: [])
+    monkeypatch.setattr(app_discovery, "epic_games", lambda: [])
+
+
+def test_a_missed_app_suggests_what_is_actually_installed(monkeypatch):
+    from jarvis.primitives import app_discovery
+    _fake_library(monkeypatch, ["Rocket League", "Discord", "Steam"])
+
+    got = app_discovery.suggest("Rocket Leaguer.url")
+    assert any("Rocket League" in g for g in got), got
+
+
+def test_suggestions_survive_a_partial_name(monkeypatch):
+    from jarvis.primitives import app_discovery
+    _fake_library(monkeypatch, ["Visual Studio Code", "Discord", "Spotify"])
+
+    assert any("Visual Studio Code" in g
+               for g in app_discovery.suggest("vs code")), \
+        app_discovery.suggest("vs code")
+
+
+def test_the_failure_message_gives_the_model_something_to_retry(monkeypatch):
+    """The point: the model must be able to self-correct on the next round
+    rather than dead-ending or inventing a name."""
+    from jarvis.primitives import app_discovery, apps
+    _fake_library(monkeypatch, ["Rocket League", "Discord"])
+    monkeypatch.setattr(apps, "resolve_app", lambda n: (None, n))
+
+    r = apps.launch_app("Rocket Leaguer.url")
+    assert r["ok"] is False
+    assert "Rocket League" in r["message"], r["message"]
+
+
+def test_suggest_never_raises(monkeypatch):
+    from jarvis.primitives import app_discovery
+
+    def boom():
+        raise RuntimeError("registry unavailable")
+    monkeypatch.setattr(app_discovery, "desktop_shortcuts", boom)
+    assert app_discovery.suggest("anything") == []

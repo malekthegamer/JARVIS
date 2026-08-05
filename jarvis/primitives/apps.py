@@ -244,8 +244,18 @@ def launch_app(name: str) -> dict:
     try:
         target, matched = resolve_app(name)
         if target is None:
+            # SLICE 60: a miss used to dead-end here. The model then either gave
+            # up or invented a name — both are in the audit log back to back
+            # ('Rocket League', then 'Rocket Leaguer.url'). Offer what is
+            # actually installed so the next round can succeed.
+            from jarvis.primitives import app_discovery
+            near = app_discovery.suggest(name)
+            hint = (f" Did you mean: {', '.join(near)}?" if near else
+                    " Try the exact name as it appears on the Start Menu, or "
+                    "open_url if it is a website.")
             return {"ok": False, "pid": None, "resolved": None, "matched": None,
-                    "message": f"No application named '{name}' found on this system."}
+                    "candidates": near,
+                    "message": f"No application named '{name}' found.{hint}"}
         if _is_uri(target):
             os.startfile(target)
             return {"ok": True, "pid": None, "resolved": target,
