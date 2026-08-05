@@ -774,7 +774,9 @@ def _run_type_text(args: dict, gate_info: dict | None = None) -> str:
     if not r["ok"]:
         return f"FAILED: {r['message']}"
     typed = r.get("typed", text)
-    readback = jinput.read_back_text(window)
+    # SLICE 68: tell the readback WHAT was typed so it can wait for the
+    # control to update and pick the right one among several.
+    readback = jinput.read_back_text(window, want=typed)
     if readback is None:
         verify = "VERIFY: control doesn't expose text — couldn't confirm"
     elif typed and typed in readback:

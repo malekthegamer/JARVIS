@@ -830,18 +830,61 @@ def classify_press(args: dict) -> dict:
 
 # ============================ verify (readback) ============================
 
-def read_back_text(window_hint: str | None = None) -> str | None:
-    """Text of the edit/document control in the target window, for verifying
-    type_text. None when no such control exposes text."""
+def _edit_texts(window_hint: str | None) -> list[str]:
+    """Every edit/document control's text in the target window. [] on any fault
+    — this is a verifier, and a verifier that raises is worse than one that
+    reports nothing."""
     win, _title = _target_window(window_hint)
     if win is None:
-        return None
+        return []
+    out: list[str] = []
     try:
         for c in win.descendants():
             if c.element_info.control_type in _EDIT_TYPES:
                 txt = c.window_text()
                 if txt is not None:
-                    return txt
+                    out.append(txt)
     except Exception:
-        return None
-    return None
+        return out
+    return out
+
+
+def read_back_text(window_hint: str | None = None, want: str = "",
+                   timeout_s: float = 1.5) -> str | None:
+    """Text of the edit/document control in the target window, for verifying
+    type_text. None when no such control exposes text.
+
+    SLICE 68. This used to do ONE pass and return the FIRST edit control it
+    found, which made JARVIS report "control doesn't expose text — couldn't
+    confirm" about typing that had demonstrably worked (caught in the slice-65
+    gate: 20 characters really went in). Two causes, both fixed here:
+
+      * Win11's WinUI Notepad updates its UIA text ASYNCHRONOUSLY, so an
+        immediate read often finds nothing -> poll until `timeout_s`.
+      * A window with a search box or status field exposes several edit
+        controls, and the first is not the one that was typed into -> when we
+        know what was typed, prefer the control that CONTAINS it.
+
+    Returning None still means "genuinely could not read", so an honest
+    "couldn't confirm" survives. Understating success is a smaller sin than
+    claiming one that did not happen.
+    """
+    deadline = time.time() + max(0.0, float(timeout_s))
+    best: str | None = None
+    while True:
+        texts = _edit_texts(window_hint)
+        if want:
+            for t in texts:
+                if want in t:
+                    return t
+        if texts:
+            # Richest control seen so far — the fallback when `want` never
+            # shows up, and the whole answer when the caller didn't pass one.
+            candidate = max(texts, key=len)
+            if best is None or len(candidate) > len(best):
+                best = candidate
+            if not want:
+                return best
+        if time.time() >= deadline:
+            return best
+        time.sleep(0.15)
