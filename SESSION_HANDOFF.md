@@ -2539,8 +2539,9 @@ still sit in `legacy/`.
 >
 > Slices 65-69 shipped, but the free-tier Gemini **DAILY** bucket ran out
 > mid-slice-66, so **the live-model gate never ran for slices 66-69b**. They are
-> verified on the deterministic core only (1311 passed / 0 failed with
-> `-k "not live"`, zero Gemini calls). Slice 65 got a real full gate
+> verified on the deterministic core only — final run **1314 passed / 0
+> failed / 0 skipped** with `-k "not live"`, zero Gemini calls, desktop
+> tests included and the fullscreen guard satisfied. Slice 65 got a real full gate
 > (1328 passed / 1 failed — the WinUI readback flake that became slice 68).
 >
 > **First action next session:** burst-probe quota (5 rapid calls; a single
