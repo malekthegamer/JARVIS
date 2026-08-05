@@ -148,7 +148,8 @@ def _run_delete_file(args: dict, gate_info: dict | None = None) -> str:
 def _run_search_files(args: dict, gate_info: dict | None = None) -> str:
     r = files.search_files(query=str(args.get("query", "")),
                            ext=str(args.get("ext", "")),
-                           within_days=args.get("within_days", 0))
+                           within_days=args.get("within_days", 0),
+                           contains=str(args.get("contains", "")))
     return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
 
 
@@ -986,9 +987,12 @@ PRIMITIVES: dict[str, dict] = {
         "tier": "auto",
         "schema": {
             "name": "search_files",
-            "description": ("Search the agent workspace (data/agent_files) for "
-                            "files by name, extension, and/or age. Read-only. "
-                            "Use when the user asks to find a file — e.g. "
+            "description": ("Search your workspace notes and files "
+                            "(data/agent_files) by name, extension, age, and/or "
+                            "TEXT INSIDE the files. Read-only. Use `contains` to "
+                            "find a note by what is written in it — this is how "
+                            "you look things up in your own notes, e.g. "
+                            "contains='wifi password'. Also for files: "
                             "\"yesterday's invoice PDF\" -> query='invoice', "
                             "ext='pdf', within_days=2."),
             "parameters": {
@@ -1000,6 +1004,8 @@ PRIMITIVES: dict[str, dict] = {
                             "description": "File extension like 'pdf' (optional)"},
                     "within_days": {"type": "number",
                                     "description": "Only files modified within this many days (optional)"},
+                    "contains": {"type": "string",
+                                 "description": "Text to find INSIDE the files — searches note contents (optional)"},
                 },
             },
         },

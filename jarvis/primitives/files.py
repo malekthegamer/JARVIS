@@ -193,22 +193,64 @@ def restore_file(token: str, over: bool = False) -> dict:
         return {"ok": False, "message": f"couldn't restore that file: {exc}"}
 
 
-def search_files(query: str = "", ext: str = "", within_days: float = 0) -> dict:
+# Content-search bounds. A grep over the workspace runs on the recall path, so
+# it must stay cheap and must never try to read a binary or a huge file.
+_CONTENT_MAX_BYTES = 256 * 1024
+_CONTENT_TEXT_EXTS = {"md", "txt", "json", "csv", "log", "yaml", "yml", "ini",
+                      "py", "js", "html", "css", "xml", "toml", ""}
+
+
+def _content_hit(path, needle: str) -> str | None:
+    """The first matching line, or None. Never raises — a file that cannot be
+    read is simply not a hit."""
+    try:
+        if path.suffix.lstrip(".").lower() not in _CONTENT_TEXT_EXTS:
+            return None
+        if path.stat().st_size > _CONTENT_MAX_BYTES:
+            return None
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if "\x00" in text[:2048]:          # binary that slipped past the suffix
+            return None
+        for line in text.splitlines():
+            if needle in line.lower():
+                return line.strip()[:200]
+        return None
+    except Exception:
+        return None
+
+
+def search_files(query: str = "", ext: str = "", within_days: float = 0,
+                 contains: str = "") -> dict:
     """AUTO tier (slice 8). Read-only search of the agent workspace by name
     substring, optional extension, optional modified-within-days. The query
     is a FILTER over names inside the cage, never a path — and every hit is
     re-checked with the same two-belt containment as delete_file, so a
-    symlinked escape can never be listed. Never raises."""
+    symlinked escape can never be listed. Never raises.
+
+    SLICE 61 added `contains`: match what is WRITTEN in a note, not just its
+    filename. Without it the workspace was storage rather than memory — a note
+    could be saved and then never found again unless you remembered the
+    filename.
+
+    This is deliberately a LITERAL search, not an embedding one. Slice 34
+    measured the embedder's ceiling (0.818 recall, ~18% of paraphrases missing)
+    and proved that residual unfixable with the shipped model; grep has no such
+    ceiling, which is precisely the point of keeping knowledge as readable text.
+    """
     query = str(query or "").strip().lower()
     ext = str(ext or "").strip().lstrip(".").lower()
+    try:
+        contains = str(contains or "").strip().lower()
+    except Exception:
+        contains = ""
     try:
         within_days = float(within_days or 0)
     except (TypeError, ValueError):
         within_days = 0
-    if not query and not ext and within_days <= 0:
+    if not query and not ext and within_days <= 0 and not contains:
         return {"ok": False, "matches": [],
-                "message": "Give me a file name, an extension, or an age "
-                           "(days) to search for."}
+                "message": "Give me a file name, an extension, an age (days), "
+                           "or some text to look for inside the files."}
     matches: list[dict] = []
     try:
         import time
@@ -230,10 +272,19 @@ def search_files(query: str = "", ext: str = "", within_days: float = 0) -> dict
                 stat = p.stat()
                 if cutoff is not None and stat.st_mtime < cutoff:
                     continue
-                matches.append({
-                    "name": rel, "size": stat.st_size,
-                    "modified": time.strftime("%Y-%m-%d %H:%M",
-                                              time.localtime(stat.st_mtime))})
+                excerpt = None
+                if contains:
+                    excerpt = _content_hit(p, contains)
+                    if excerpt is None:
+                        continue      # the text isn't in this file
+                hit = {"name": rel, "size": stat.st_size,
+                       "modified": time.strftime("%Y-%m-%d %H:%M",
+                                                 time.localtime(stat.st_mtime))}
+                if excerpt is not None:
+                    # Return the LINE, so one call answers the question instead
+                    # of costing a second read_file round.
+                    hit["excerpt"] = excerpt
+                matches.append(hit)
             except OSError:
                 continue
     except Exception as exc:
@@ -241,13 +292,18 @@ def search_files(query: str = "", ext: str = "", within_days: float = 0) -> dict
                 "message": f"Search failed: {exc}"}
     crit = " ".join(filter(None, [
         f"name contains '{query}'" if query else "",
+        f"text contains '{contains}'" if contains else "",
         f"type .{ext}" if ext else "",
         f"modified within {within_days:g} day(s)" if within_days > 0 else ""]))
     if not matches:
         return {"ok": True, "matches": [],
                 "message": f"No files matching {crit} in my workspace."}
-    listing = "; ".join(f"{m['name']} ({m['size']}B, {m['modified']})"
-                        for m in matches)
+    # Carry the matching LINE into the message, not just the filename — the
+    # point of content search is that one call answers the question.
+    listing = "; ".join(
+        (f"{m['name']}: \"{m['excerpt']}\"" if m.get("excerpt")
+         else f"{m['name']} ({m['size']}B, {m['modified']})")
+        for m in matches)
     return {"ok": True, "matches": matches,
             "message": f"Found {len(matches)} file(s) matching {crit}: {listing}."}
 

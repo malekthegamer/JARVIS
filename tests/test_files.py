@@ -292,3 +292,86 @@ def test_the_quarantine_follows_the_isolated_workspace():
         "the quarantine no longer derives from AGENT_FILES_DIR"
     assert config.DATA_DIR.resolve() not in trash.parents, \
         f"the quarantine {trash} still points at real user data"
+
+
+# ============ slice 61: find a note by what is WRITTEN in it ============
+# THE GAP. search_files matched file NAMES only -- "search of the agent
+# workspace by name substring". So a note could be written and then never found
+# again unless you remembered its filename, which makes the workspace storage
+# rather than memory.
+#
+# This deliberately does NOT use the embedder. Slice 34 measured its retrieval
+# ceiling (0.818 recall, ~18% of paraphrases missing) and proved that residual
+# unfixable with the shipped model. Literal content search sidesteps the whole
+# problem, which is exactly why a readable vault is worth having.
+
+def _note(name, body):
+    from jarvis.primitives import files as _f
+    p = _f.AGENT_FILES_DIR / name
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def test_a_note_is_findable_by_its_CONTENTS():
+    """THE CAPABILITY THAT DID NOT EXIST. The filename says nothing useful; the
+    body is what you remember."""
+    from jarvis.primitives import files as _f
+    _note("notes/2026-08-03.md", "# Log\nThe Wi-Fi password is hunter2trombone\n")
+    _note("notes/other.md", "# Other\nnothing relevant here\n")
+
+    r = _f.search_files(contains="wi-fi password")
+    assert r["ok"], r
+    names = [m["name"] for m in r["matches"]]
+    assert "notes/2026-08-03.md" in names, r["message"]
+    assert "notes/other.md" not in names
+
+
+def test_a_content_hit_shows_the_matching_line():
+    """A hit that only says "it's in this file" costs a second read. Return the
+    line so one call answers the question."""
+    from jarvis.primitives import files as _f
+    _note("notes/deploy.md", "# Deploy\nstaging url is https://stage.example\n")
+
+    r = _f.search_files(contains="staging url")
+    hit = next(m for m in r["matches"] if m["name"] == "notes/deploy.md")
+    assert "stage.example" in hit.get("excerpt", ""), hit
+
+
+def test_content_search_combines_with_the_existing_filters():
+    """Additive: name/ext/age filters keep working alongside it."""
+    from jarvis.primitives import files as _f
+    _note("notes/keep.md", "shared marker text")
+    _note("notes/keep.txt", "shared marker text")
+
+    r = _f.search_files(contains="shared marker", ext="md")
+    assert [m["name"] for m in r["matches"]] == ["notes/keep.md"], r["matches"]
+
+
+def test_content_search_skips_binaries_and_huge_files():
+    """Must not try to grep a PDF or read a gigabyte into memory."""
+    from jarvis.primitives import files as _f
+    (_f.AGENT_FILES_DIR / "blob.bin").write_bytes(b"\x00\xff" * 5000 + b"secret")
+
+    r = _f.search_files(contains="secret")
+    assert all(not m["name"].endswith(".bin") for m in r["matches"]), r["matches"]
+
+
+def test_content_search_never_escapes_the_cage(tmp_path):
+    """The cage is the whole safety story for this workspace — content search
+    must obey the same two-belt containment as delete_file."""
+    from jarvis.primitives import files as _f
+    outside = _f.AGENT_FILES_DIR.parent / "outside_secret.md"
+    outside.write_text("classified marker", encoding="utf-8")
+    try:
+        r = _f.search_files(contains="classified marker")
+        assert r["matches"] == [], f"content search escaped the cage: {r}"
+    finally:
+        outside.unlink(missing_ok=True)
+
+
+def test_content_search_never_raises_on_odd_input():
+    from jarvis.primitives import files as _f
+    for bad in (None, "", "   ", 123, "\x00"):
+        out = _f.search_files(contains=bad)
+        assert isinstance(out, dict) and "ok" in out
