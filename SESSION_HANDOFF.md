@@ -2535,6 +2535,28 @@ still sit in `legacy/`.
 
 ## 8. First moves in the new session
 
+> ### ⚠ READ FIRST — what is NOT verified (as of slice 69b, 2026-08-05)
+>
+> Slices 65-69 shipped, but the free-tier Gemini **DAILY** bucket ran out
+> mid-slice-66, so **the live-model gate never ran for slices 66-69b**. They are
+> verified on the deterministic core only (1311 passed / 0 failed with
+> `-k "not live"`, zero Gemini calls). Slice 65 got a real full gate
+> (1328 passed / 1 failed — the WinUI readback flake that became slice 68).
+>
+> **First action next session:** burst-probe quota (5 rapid calls; a single
+> success is a trickle, not headroom), then run the FULL suite:
+> `python -m pytest tests/ -q` — 1350 collected. Until that comes back clean,
+> treat slices 66-69b as *believed*, not *proven*.
+>
+> Two things were also blocked at the end of the session and may still need
+> doing: the full deterministic gate was refused by the conftest fullscreen
+> guard (the owner had a fullscreen app up), and one flake is **knowingly
+> open** — `tests/test_extension_browser.py` fails ~1 run in 5
+> (`the FIRST page was destroyed by the second open: ['about:blank']`). Two
+> attempts failed to fix it; it is a harness problem, not a product one, and
+> hunting it is what surfaced the slice-69b fail-open security bug.
+
+
 0. **Know that this is SHIPPED** (see the banner at the top): public repo,
    real users, latest release **v1.0.4**. A regression now reaches other
    people. Before any change to install/launch/HUD-serving paths, re-read the
