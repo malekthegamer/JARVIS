@@ -9,16 +9,18 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–63), grouped by area:**
-- **Reliability (slices 60-63 — the newest layer, driven by the owner asking
+**Capability set, built slice by slice (1–64), grouped by area:**
+- **Reliability (slices 60-64 — the newest layer, driven by the owner asking
   "why is JARVIS so unreliable?"):** the pattern behind the failures was
   **a missing verb forcing the model onto a fragile stack** — `open_url` (slice
   60) replaced browser automation for "just open this site", and **`open_path`
   (slice 62)** replaced screenshot→vision→double-click for "just open this
   file". Both are one-step OS handoffs; neither has failed. **Slice 63** fixed
-  the third: `launch_app` used `Popen`, which cannot elevate, so the 26 games
-  flagged RUNASADMIN on this machine failed with WinError 740 — and the model
-  reported that as "doesn't appear to be installed". Slice 62 also fixed the
+  the third: `launch_app` used `Popen`, which cannot elevate, so the 9 installed
+  games flagged RUNASADMIN here failed with WinError 740 — and the model
+  reported that as "doesn't appear to be installed". **Slice 64** fixed the
+  fourth: the name you'd actually say (`prismlauncher`, `spider-man 2`, `fifa`,
+  `black ops 2`) didn't match what the shortcut is called. Slice 62 also fixed the
   **measurement**: harness runs were being written into the owner's real audit
   log and read back as evidence about real use.
 - **Real-use hardening (slices 57-58, driven by actually
@@ -295,6 +297,88 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
 
+### Slice 64 — matching the name people actually say
+Slice 63 made admin-flagged games *launch*. This makes them *resolvable* by the
+name you'd say out loud. Same family as 60/62/63: JARVIS failing something a
+person would call trivial.
+
+**The number I opened with was wrong, and the correction is the useful part.**
+I told the owner "17 of 20 natural phrasings miss". They did — but that probe
+list was half software that **isn't installed** (GTA V, Modern Warfare,
+Minecraft, OBS), and *refusing to launch something absent is correct behaviour
+that I was scoring as failure*. Re-measured against apps that actually exist:
+**15/20 already worked.** The Definition of Done therefore *rose* to 20/20;
+`>=16` would have been below the starting line.
+
+The root of that error is worth keeping: **I read
+`HKCU\...\AppCompatFlags\Layers` as an inventory of installed games. It is a
+graveyard** — 9 of those 26 RUNASADMIN entries still exist, 17 are leftovers.
+The owner caught it ("btw i don't have gta v installed"). Slice 63's section
+above is corrected accordingly.
+
+The five real failures, every one a name-matching gap:
+
+```
+prismlauncher   a missing space          spider-man 2   'Spider-Man2', digit welded on
+black ops 2     '2' where it says 'II'   fifa           lost to 'FIFA 22 Settings'
+```
+
+- **`_norm()`** splits a digit welded to a word (`Spider-Man2` → `spider man 2`)
+  and converts multi-letter roman numerals (`Black Ops II` → `black ops 2`).
+  **Bare `i`/`v`/`x` are deliberately NOT converted** — `X` and `Vim` are real
+  app names. Accepted cost: `gta v` stays unnormalized. Test-pinned.
+- **`find()`** gains two looser tiers *after* exact/prefix/substring, so a loose
+  match can never outrank a literal one: **spaceless** (`prismlauncher` →
+  `Prism Launcher`) and **tokens** (every word present but not contiguous,
+  `fifa settings` → `FIFA 22 Settings`).
+- **`_AUXILIARY` suppression** — a game's own settings/uninstaller/update
+  shortcut is not a rival game. `fifa` matched `FIFA 22` *and* `FIFA 22
+  Settings`, so it asked a question with one real answer. Accessories drop out
+  unless the user said the word themselves.
+- **Start Menu becomes fuzzy-matchable** (`start_menu_apps()`). `apps.py` always
+  walked it, but only for an exact `<name>.lnk`, so none of those apps could be
+  *suggested* after a near-miss — the slice-60 dead end, still open for most of
+  what's installed. Now `blendr` → `Blender 4.5`, `discrod` → `Discord`.
+- **The false "not found" is gone.** `resolve_app` discarded `find()`'s
+  candidates, so `launch_app` said *"No application named 'resident evil'
+  found"* having found three. Now: *"Several things match — which did you mean?
+  Resident Evil 2, Resident Evil 3, Resident Evil 4."* Exactly the class of lie
+  slice 63 fixed in the elevation path. The honest miss keeps its honest message.
+
+**What did NOT change, deliberately.** `app_discovery`'s documented doctrine —
+*find() launches only on a unique match; a wrong game fullscreening the machine
+is worse than a clean question* — **stands.** I floated margin-based auto-accept
+when recommending this slice; the measurement said it wasn't needed, so the
+safety property survived intact.
+
+**Result: 20/20 correct, 0 wrong apps** (`tests/harness_app_resolve_eval.py`),
+from a 15/20 baseline committed *before* any fix.
+
+**Three of my own mistakes, all now test-pinned rather than merely fixed:**
+1. I reported the Start Menu scan as **7 ms**. That timed only the `os.walk`;
+   resolving a `.lnk` is a COM round trip *each*, ~160 of them — really **280
+   ms**, and `find()` and `suggest()` both call it, so an uncached miss paid it
+   twice. Cached (60s TTL): **325 ms → 0.0 ms**, a miss 660 ms → 184 ms.
+2. **The first cache did nothing.** The loop rebound `key` — the cache key — to
+   each shortcut's path, so entries were stored under the last `.lnk` and the
+   lookup never matched. Only the "warm" timing exposed it.
+3. My first `resolve_app_detail` moved the real work out from under
+   `resolve_app`, breaking 7 tests that stub it. Their assertions were right;
+   my refactor had quietly stopped exercising the path they name. Keeping the
+   seam was the fix — changing the tests to suit the refactor was not.
+
+**Gate: 1320 passed / 0 failed / 0 skipped** — the project's fourth clean gate.
+
+The first gate run of this slice showed 1319/1, failing
+`test_live_multistep_chain_notepad`. I never captured its assertion, so rather
+than label it I went looking: it passed 10 consecutive isolated runs, and
+`launch_app` IS on its path, so I checked the one thing this slice could have
+touched — `resolve_app("notepad")` takes the `APP_ALIASES` branch and returns
+`C:\WINDOWS\system32\notepad.exe` exactly as before, never reaching discovery.
+The second full gate then passed it too. Intermittent, not a regression —
+recorded rather than quietly dropped, because "it passed the second time" is
+only worth something if the first time is written down as well.
+
 ### Slice 63 — `launch_app` can finally start elevated programs
 The owner, on real use: *"it can't open most games/apps on my desktop."* The HUD
 showed JARVIS replying *"Forza Horizon 6 doesn't appear to be installed, sir, and
@@ -309,10 +393,19 @@ FAILED: Couldn't launch 'Forza Horizon 6': [WinError 740] The requested operatio
 ```
 
 `launch_app` used `subprocess.Popen` → `CreateProcess`, which **cannot elevate** —
-it only fails. **Measured, not guessed:** 26 entries in this machine's
-`HKCU\...\AppCompatFlags\Layers` carry `RUNASADMIN` (`forzahorizon6.exe`,
-`modernwarfare.exe`, `blackops.exe`, `cod.exe`, the Spider-Man / NFS / Resident
-Evil / FIFA titles) — someone ticked "run as administrator" on them. Only
+it only fails. **Measured:** entries in this machine's
+`HKCU\...\AppCompatFlags\Layers` carry `RUNASADMIN` — `forzahorizon6.exe`,
+`Spider-Man2.exe`, `NeedForSpeedHeat.exe`, `re3.exe`/`re4.exe`,
+`blender-launcher.exe` and more — someone ticked "run as administrator" on them.
+
+> **Correction (slice 64).** I first wrote "26 games". That registry key is a
+> **graveyard, not an inventory**: it keeps entries for games since uninstalled.
+> The true split is **9 still installed, 17 stale**. The owner caught it —
+> GTA V, which I cited as evidence, is not installed, and neither are Modern
+> Warfare or Call of Duty HQ. The fix is unaffected (Forza is in the live nine
+> and demonstrably needed elevation); the number was wrong.
+
+Only
 ShellExecute honours that flag, **which is exactly why the Steam/Epic URI games
 always worked**: those already went through `os.startfile`.
 

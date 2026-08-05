@@ -8,9 +8,13 @@ elevate — it just fails. Verbatim, from the real audit log:
     FAILED: Couldn't launch 'Forza Horizon 6':
             [WinError 740] The requested operation requires elevation
 
-26 entries in this machine's HKCU AppCompatFlags\\Layers carry RUNASADMIN
-(forzahorizon6.exe, modernwarfare.exe, blackops.exe, cod.exe, the Spider-Man /
-NFS / Resident Evil / FIFA titles). Only ShellExecute honours that flag.
+Entries in this machine's HKCU AppCompatFlags\\Layers carry RUNASADMIN
+(forzahorizon6.exe, Spider-Man2.exe, NeedForSpeedHeat.exe, re3.exe/re4.exe,
+blender-launcher.exe). Only ShellExecute honours that flag.
+
+Corrected in slice 64: this docstring first said "26 games". That registry key
+is a GRAVEYARD, not an inventory — it keeps entries for games since
+uninstalled. The real split is 9 still installed, 17 stale.
 
 Measured in the stage-0 probe, on C:\\Windows\\regedit.exe:
     Popen          -> WinError 740, immediately
