@@ -297,6 +297,63 @@ def open_path(path: str) -> dict:
             "message": f"Opened the {kind} '{target.name}'."}
 
 
+# Windows error codes we act on by name rather than by magic number.
+_ERROR_ELEVATION_REQUIRED = 740   # CreateProcess refused; the target needs admin
+_ERROR_CANCELLED = 1223           # the user clicked No on the UAC prompt
+
+# ShellExecute BLOCKS until the UAC prompt is answered. Measured in the slice-63
+# probe: 10.1s for a click, and past 120s when the prompt was simply ignored.
+# Inside the executor that would freeze the whole chain, so the wait is bounded.
+_UAC_WAIT_S = 90.0
+
+
+def _shell_launch(target: str, work_dir: str | None, matched: str) -> dict:
+    """Launch via ShellExecute (os.startfile), which is the ONLY way to start a
+    program that requires elevation — by manifest or by the RUNASADMIN
+    compatibility flag. Windows shows its own consent prompt on the secure
+    desktop; we cannot and must not try to answer it.
+
+    Run on a worker thread so an unanswered prompt costs a bounded wait instead
+    of hanging the chain. No pid is available from ShellExecute, so none is
+    claimed — reporting a fake one would be worse than reporting none.
+    """
+    import threading
+
+    base = os.path.basename(target)
+    outcome: dict = {}
+
+    def run():
+        try:
+            os.startfile(target, cwd=work_dir)
+            outcome["ok"] = True
+        except OSError as exc:
+            outcome["ok"] = False
+            outcome["exc"] = exc
+
+    worker = threading.Thread(target=run, daemon=True, name="uac-launch")
+    worker.start()
+    worker.join(_UAC_WAIT_S)
+
+    if worker.is_alive():
+        # The prompt is still on screen. Saying it failed would be a lie — it
+        # may yet start the moment the user clicks.
+        return {"ok": False, "pid": None, "resolved": target, "matched": matched,
+                "message": (f"{base} needs administrator permission. Windows is "
+                            f"still showing the approval prompt — approve it and "
+                            f"{base} will start.")}
+    if outcome.get("ok"):
+        return {"ok": True, "pid": None, "resolved": target, "matched": matched,
+                "message": f"Launched {base} as administrator."}
+
+    exc = outcome.get("exc")
+    if getattr(exc, "winerror", None) == _ERROR_CANCELLED:
+        return {"ok": False, "pid": None, "resolved": target, "matched": matched,
+                "message": (f"{base} needs administrator permission and the "
+                            f"Windows prompt was declined, so it didn't start.")}
+    return {"ok": False, "pid": None, "resolved": target, "matched": matched,
+            "message": f"Couldn't launch {base}: {exc}"}
+
+
 def launch_app(name: str) -> dict:
     """AUTO tier. Returns {"ok", "message", "pid", "resolved"} — never raises."""
     name = str(name or "").strip()
@@ -328,7 +385,20 @@ def launch_app(name: str) -> dict:
             return {"ok": True, "pid": None, "resolved": target,
                     "matched": matched,
                     "message": f"Opened folder {os.path.basename(target)} in Explorer."}
-        proc = subprocess.Popen([target])
+        # SLICE 63: cwd is the executable's OWN folder. Games routinely fail or
+        # crash when started from elsewhere, and until now they inherited
+        # JARVIS's working directory.
+        work_dir = os.path.dirname(target) or None
+        try:
+            proc = subprocess.Popen([target], cwd=work_dir)
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != _ERROR_ELEVATION_REQUIRED:
+                raise
+            # Popen -> CreateProcess, which CANNOT elevate; it only fails. This
+            # is why "most games" wouldn't start: 26 of this machine's shortcuts
+            # carry the RUNASADMIN compatibility flag, which only ShellExecute
+            # honours. Measured: Popen 740 instantly, os.startfile OK in 10.1s.
+            return _shell_launch(target, work_dir, matched)
         return {"ok": True, "pid": proc.pid, "resolved": target,
                 "matched": matched,
                 "message": f"Launched {os.path.basename(target)} (pid {proc.pid})."}

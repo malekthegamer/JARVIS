@@ -130,7 +130,12 @@ def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
         from jarvis.primitives.app_discovery import _norm as _disco_norm
         needle = _disco_norm(result.get("matched") or name) or None
         wait_s = float(settings.get("apps.game_window_wait_s", 20))
-    elif result["resolved"] and not result["pid"]:  # plain URI (ms-settings:)
+    elif result["resolved"] and apps._is_uri(result["resolved"]):
+        # A plain URI (ms-settings:) has no window title to watch for.
+        # SLICE 63: this used to test `not result["pid"]`. That was a proxy for
+        # "it was a URI" and the proxy broke the moment ShellExecute became a
+        # launch path — it returns no pid either, so every elevated game would
+        # have skipped the window check and reported NOT CONFIRMED.
         needle = None
     else:
         needle = os.path.splitext(os.path.basename(result["resolved"]))[0]
