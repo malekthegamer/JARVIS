@@ -1,7 +1,7 @@
 # JARVIS Rebuild — Session Handoff
 
 > Paste this into a new Claude Code session to continue the build with full context.
-> Last updated: 2026-08-03, after **Slice 60 (reliability: `open_url` — stop automating a browser just to open a website)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
+> Last updated: 2026-08-03, after **Slice 61 (the vault: notes JARVIS can search and you can read)**. See `git log --oneline` for the full slice history. (This header had been stale at "Slice 38" through slices 39–57; corrected here — check it every session, it WILL go stale again.)
 
 ---
 
@@ -283,6 +283,61 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 61 — The vault: memory you can actually open and read
+The owner shared a "JARVIS OS" guide (Claude Code + Obsidian + local voice + a
+HUD) and asked whether it beats ours. **Verdict: no, and not comparable** — that
+guide builds a voice frontend over a notes folder; its own day-in-the-life
+(morning brief, metrics pull, plan today) is entirely reading information and
+writing notes, and nothing in it clicks a button or controls a PC. That is why
+it can claim "one evening". Rebuilding toward it would trade a working
+PC-control agent for a notes app.
+
+**But it contained one good idea, and the evidence was damning.** After ~60
+slices JARVIS's entire memory was three facts — coffee, "sir", favourite anime —
+in an opaque 11KB encrypted blob the owner cannot read. Beautifully engineered
+(DPAPI, local embeddings, pinned prefs) and nearly empty, because it only writes
+when explicitly told to.
+
+**The gap was far smaller than "build a vault".** `data/agent_files/` was
+ALREADY a caged, plain-text, undo-protected workspace. Two things stopped it
+being memory:
+1. `search_files` matched **filenames only** — a note could be written and never
+   found again unless you remembered its name. That is storage, not memory.
+2. `_memory_block` never read files at all.
+
+So this slice was **content search + wiring**, reusing the proven cage rather
+than inventing a subsystem.
+
+- **`contains=` content search** (additive, so every existing caller is
+  untouched). Returns the matching LINE, carried into the result message, so one
+  call answers the question instead of costing a second `read_file`.
+  **Deliberately LITERAL, not embedding-based**: slice 34 measured the embedder
+  at 0.818 recall with ~18% of paraphrases unfixably missing, and sidestepping
+  that ceiling is the entire point of keeping knowledge as readable text.
+  Bounded for the recall path: text suffixes only, 256KB/file, NUL sniff for
+  binaries. Cage containment pinned by a test that plants a file OUTSIDE the
+  workspace and asserts content search cannot see it.
+- **`_notes_block`** surfaces relevant notes into the prompt, relevance-gated
+  (no hit → empty string) and **wrapped in the SAME untrusted boundary
+  `read_page` uses** — a note JARVIS wrote from a web page can carry an
+  instruction, and re-deriving that rule instead of reusing it is exactly the
+  drift that caused slice 59's gate bypass. Fails closed to `""`.
+- **The model now files knowledge unasked.** Verified live: "my deployment
+  server is codenamed Bluefin at 10.0.4.7" → `write_file` to
+  `notes/deployment_…md`; "what do you know about my deployment server?" →
+  `search_files(contains='deployment server')`; "how are you today?" → no tool.
+  The first attempt used `query=` (filenames) and would have MISSED — the tool
+  description now states plainly that `query` matches filenames and `contains`
+  matches text.
+
+**Gate: 1212 passed / 2 failed / 0 skipped** — both the standing Notepad
+intermittents, both green in isolation. Not clean.
+
+**Explicitly not done:** no Obsidian dependency (plain .md in a folder is the
+whole idea), no move of `data/agent_files/` (a rename buys a nicer word and
+costs a migration plus risk to a proven cage), and no daily-rhythm workflows —
+owner said "maybe later"; routines + schedules already provide that machinery.
 
 ### Slice 60 — Reliability: stop automating a browser just to open a website
 The owner, after real use: *"why is jarvis so unreliable... I like our current

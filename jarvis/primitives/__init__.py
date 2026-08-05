@@ -988,13 +988,15 @@ PRIMITIVES: dict[str, dict] = {
         "schema": {
             "name": "search_files",
             "description": ("Search your workspace notes and files "
-                            "(data/agent_files) by name, extension, age, and/or "
-                            "TEXT INSIDE the files. Read-only. Use `contains` to "
-                            "find a note by what is written in it — this is how "
-                            "you look things up in your own notes, e.g. "
-                            "contains='wifi password'. Also for files: "
-                            "\"yesterday's invoice PDF\" -> query='invoice', "
-                            "ext='pdf', within_days=2."),
+                            "(data/agent_files). Read-only. TO LOOK SOMETHING UP "
+                            "IN YOUR NOTES, USE `contains` — it searches the TEXT "
+                            "inside the files and returns the matching line, e.g. "
+                            "contains='deployment server'. `query` only matches "
+                            "FILENAMES, so it misses whenever the wording differs "
+                            "from the file name; prefer `contains` for anything "
+                            "you are trying to recall. Use query/ext/within_days "
+                            "to find a FILE: \"yesterday's invoice PDF\" -> "
+                            "query='invoice', ext='pdf', within_days=2."),
             "parameters": {
                 "type": "object",
                 "properties": {
