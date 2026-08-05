@@ -38,6 +38,7 @@ _STEAM_SKIP = {"steamworks common redistributables"}
 # Start Menu scan cache: {dirs_tuple: (timestamp, entries)}. Short TTL so a
 # freshly-installed app shows up without restarting JARVIS.
 _SM_CACHE: dict[tuple, tuple[float, list]] = {}
+_STORE_CACHE: dict[str, tuple[float, list]] = {}
 _SM_CACHE_TTL_S = 60.0
 
 
@@ -174,6 +175,61 @@ _ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8",
           "xx": "20"}
 
 
+def _appsfolder_items() -> list[tuple[str, str]]:
+    """(Name, Path) for every entry in the Start Menu's AppsFolder shell
+    namespace — the same list `Get-StartApps` returns, read straight from COM
+    so we don't pay for spawning PowerShell. Seam kept separate so tests can
+    fake the shell without faking our own logic."""
+    import win32com.client  # pywin32 ships with pywinauto — always available
+
+    shell = win32com.client.Dispatch("Shell.Application")
+    out: list[tuple[str, str]] = []
+    for item in shell.NameSpace("shell:AppsFolder").Items():
+        try:
+            out.append((str(item.Name), str(item.Path)))
+        except Exception:
+            continue
+    return out
+
+
+def store_apps() -> list[dict]:
+    """Store/UWP apps — the ones with an AUMID instead of a file on disk.
+
+    SLICE 65. Every other source hunts for an .exe or a .lnk target, and a
+    packaged app has NEITHER, so Xbox, Terminal, Paint, Photos, Clock and the
+    Microsoft Store were simply unreachable: 148 of this machine's 233 AppsFolder
+    entries. Launching one is `shell:AppsFolder\\<AUMID>`, which apps._is_uri()
+    already classifies as a URI — so it flows through the existing os.startfile
+    branch, exactly like a steam:// or com.epicgames.launcher:// target. Probed
+    on the real machine before building: Calculator really starts this way.
+
+    Entries whose Path is an ordinary file are SKIPPED — start_menu_apps() and
+    desktop_shortcuts() already have those, and listing them twice would
+    manufacture ambiguity out of nothing.
+
+    Cached (COM enumeration measured at 385 ms, and find() + suggest() both call
+    it). Degrades to [] and never raises, like every other scan here.
+    """
+    cached = _STORE_CACHE.get("all")
+    if cached and (_time.time() - cached[0]) < _SM_CACHE_TTL_S:
+        return list(cached[1])
+    out: list[dict] = []
+    try:
+        for name, path in _appsfolder_items():
+            if not name or not path:
+                continue
+            # A real file path is somebody else's job. An AUMID has no
+            # separator and names nothing on disk.
+            if os.sep in path or "/" in path or os.path.exists(path):
+                continue
+            out.append({"name": name, "source": "store",
+                        "launch": f"shell:AppsFolder\\{path}"})
+    except Exception:
+        return []
+    _STORE_CACHE["all"] = (_time.time(), list(out))
+    return out
+
+
 def start_menu_apps() -> list[dict]:
     """Every Start Menu .lnk whose target still exists.
 
@@ -290,7 +346,7 @@ def suggest(name: str, limit: int = 5) -> list[str]:
         import difflib
 
         entries = (desktop_shortcuts() + steam_games() + epic_games()
-                   + start_menu_apps())
+                   + start_menu_apps() + store_apps())
         names = sorted({str(e.get("name") or "").strip()
                         for e in entries if e.get("name")})
         if not names:
@@ -326,7 +382,7 @@ def find(name: str) -> dict | None:
     if not needle:
         return None
     entries = (desktop_shortcuts() + steam_games() + epic_games()
-               + start_menu_apps())
+               + start_menu_apps() + store_apps())
     # Same normalized name from multiple sources = the same thing the user
     # means; prefer desktop < steam < epic order stability but dedupe only
     # EXACT-equal launch targets (a steam game and its own .url shortcut).
@@ -345,7 +401,8 @@ def find(name: str) -> dict | None:
     # themselves, so "fifa settings" still finds it.
     uniq = _without_auxiliary(uniq, needle)
 
-    _PRIORITY = {"steam": 0, "epic": 1, "desktop": 2, "start_menu": 3}
+    _PRIORITY = {"steam": 0, "epic": 1, "desktop": 2, "start_menu": 3,
+                 "store": 4}
     flat_needle = needle.replace(" ", "")
     want_tokens = set(needle.split())
     # Tiers run most-literal first; a looser tier is only consulted when every

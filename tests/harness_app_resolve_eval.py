@@ -55,8 +55,24 @@ PROBES: list[tuple[str, str]] = [
     ("resident evil",       "ask"),                 # RE2 / RE3 / RE4
     ("need for speed",      "ask"),                 # Heat / Most Wanted
     ("black ops 2",         "ask"),                 # base / multiplayer / zombies
+    # --- Store/UWP apps (slice 65) -----------------------------------------
+    # Packaged apps have no .exe and no .lnk target, so before slice 65 every
+    # one of these missed. Some resolve to a WindowsApps stub .exe via the fast
+    # ladder (the official launch alias, and the better answer); the rest to a
+    # shell:AppsFolder AUMID.
+    ("xbox",                "unique:GamingApp"),
+    ("photos",              "unique:Photos"),
+    ("clock",               "unique:WindowsAlarms"),
+    ("camera",              "unique:WindowsCamera"),
+    ("sound recorder",      "unique:SoundRecorder"),
+    ("solitaire",           "unique:Solitaire"),
+    ("microsoft store",     "unique:store"),
+    ("snipping tool",       "unique:snipping"),
+    ("media player",        "unique:media"),
+    ("paint",               "unique:paint"),
     # --- honestly absent ---------------------------------------------------
     ("obs",                 "miss"),                # not installed here
+    ("xbox game bar",       "miss"),                # not a separate app entry
 ]
 
 
@@ -67,7 +83,10 @@ def outcome(phrase: str) -> tuple[str, str]:
     except Exception as exc:
         return "ERROR", f"{type(exc).__name__}: {exc}"
     if target:
-        return "UNIQUE", str(matched or target)
+        # Report the display name AND the launch target: the name is what the
+        # user sees, but the target is what actually gets run, and only the
+        # target proves a Store app resolved to its own AUMID.
+        return "UNIQUE", f"{matched} -> {target}"
     try:
         hit = app_discovery.find(phrase)
     except Exception:
@@ -106,14 +125,16 @@ def main() -> int:
         else:
             ok = (kind == want)
         good, bad = (good + 1, bad) if ok else (good, bad + 1)
-        print(f"{phrase:22s} {kind:7s} {want:7s}  {'ok ' if ok else 'FAIL'} {detail[:40]}")
+        print(f"{phrase:22s} {kind:7s} {want:7s}  {'ok ' if ok else 'FAIL'} {detail[:56]}")
 
     total = len(PROBES)
     print("-" * 78)
     print(f"  {good}/{total} correct, {bad} wrong")
     # Raised from >=16 once the baseline was measured honestly at 15/20 — the
     # original bar was below the starting line. See the slice-64 baseline commit.
-    print("  Definition of Done (slice 64): 20/20, and ZERO 'WRONG APP' rows.")
+    print("  Definition of Done: every row correct, ZERO 'WRONG APP'.")
+    print("  slice 64 took this from 15/20 to 20/20; slice 65 added the")
+    print("  12 Store/UWP rows, every one of which missed before it.")
     return 0 if (good == total) else 1
 
 
