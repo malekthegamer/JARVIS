@@ -50,6 +50,23 @@ def status_from_result(result: str) -> str:
     return "ok"
 
 
+def audit_status_from_result(result: str) -> str:
+    """The DURABLE record's status, which is finer than the chain's.
+
+    SLICE 67. The chain and the HUD deliberately render BLOCKED as a failure
+    (see _BLOCKED_PREFIX above) — red is right, and a chain that keeps hitting a
+    denylist should burn its failure budget. But in the audit log, which is what
+    harness_reliability.py measures JARVIS by, "the safety system refused on
+    purpose" is not the same event as "the software broke", and conflating them
+    produced a failure rate that picked the last four slices' work. Twice it
+    pointed at problems that no longer existed.
+    """
+    text = (result or "").lstrip()
+    if text.startswith(_BLOCKED_PREFIX):
+        return "refused"
+    return status_from_result(result)
+
+
 class ChainTracker:
     def __init__(self, dry_run: bool = False, unattended: bool = False) -> None:
         self.chain_id = uuid.uuid4().hex[:8]  # groups audit records per think()

@@ -305,7 +305,13 @@ def test_blocked_logged_and_never_ran(no_exec):
     (rec,) = _records()
     assert rec["tier"] == "blocked"
     assert rec["gate"] is None
-    assert rec["status"] == "failed"
+    # SLICE 67: was "failed". A denylisted command is the safety system working
+    # exactly as designed, and scoring it as breakage is what made
+    # harness_reliability report a 17.4% failure rate that chose four slices'
+    # worth of work. This is a NARROWER claim than before, not a weaker one —
+    # the guarantee that matters (it was blocked and never ran) is untouched,
+    # and the chain/HUD still render it red (chain.status_from_result).
+    assert rec["status"] == "refused"
     assert rec["payload"]["args"]["command"] == "rmdir /s /q C:\\"
 
 

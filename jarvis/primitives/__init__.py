@@ -118,6 +118,11 @@ def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
     before = screen.capture_screen()
     result = apps.launch_app(name)
     if not result["ok"]:
+        # SLICE 67: declining Windows' own consent dialog is the owner making a
+        # choice, not software breaking. Signalled by a flag rather than sniffed
+        # out of the message text, which would break the moment wording changes.
+        if result.get("declined"):
+            return f"CANCELLED: {result['message']}"
         return f"FAILED: {result['message']}"
 
     game = bool(result["resolved"]
@@ -1914,8 +1919,10 @@ def _audit_record(name: str, args: dict, outcome: dict, result: str) -> str:
     action, but is loud: the note is APPENDED (a prefix would corrupt
     status_from_result's ground-truth parsing) so model + HUD + user see it."""
     tracker = chain.current()
+    # SLICE 67: the DURABLE record distinguishes "refused on purpose" from
+    # "broke". The chain and HUD keep the coarser status (BLOCKED renders red).
     status = ("failed" if outcome["tier"] == "unknown"
-              else chain.status_from_result(result))
+              else chain.audit_status_from_result(result))
     # Redaction seam (slice 31): a tool marked redact_audit keeps its ENVELOPE
     # (tool/tier/gate/status) in the durable log but never its content — the
     # verbatim args/result are replaced with a placeholder before recording.

@@ -372,6 +372,7 @@ def _shell_launch(target: str, work_dir: str | None, matched: str) -> dict:
     exc = outcome.get("exc")
     if getattr(exc, "winerror", None) == _ERROR_CANCELLED:
         return {"ok": False, "pid": None, "resolved": target, "matched": matched,
+                "declined": True,   # slice 67: a choice, not a breakage
                 "message": (f"{base} needs administrator permission and the "
                             f"Windows prompt was declined, so it didn't start.")}
     return {"ok": False, "pid": None, "resolved": target, "matched": matched,
