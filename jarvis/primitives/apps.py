@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 # Friendly name -> launch target (Windows). Extend freely.
 APP_ALIASES = {
@@ -233,6 +234,67 @@ def open_url(url: str) -> dict:
                 "message": f"Couldn't open {target}: {exc}"}
     return {"ok": True, "resolved": target,
             "message": f"Opened {target} in your browser."}
+
+
+# os.startfile RUNS these rather than displaying them. launch_app and run_shell
+# are the deliberate, gated routes to execution; open_path opens documents and
+# must never become a quiet way to execute something — the same reasoning that
+# makes open_url refuse file paths entirely.
+_EXECUTABLE_SUFFIXES = frozenset({
+    ".exe", ".bat", ".cmd", ".ps1", ".psm1", ".msi", ".scr", ".vbs", ".vbe",
+    ".js", ".jse", ".wsf", ".wsh", ".com", ".pif", ".cpl", ".hta", ".reg",
+})
+
+
+def is_executable_path(path) -> bool:
+    """Would opening this RUN something? Never raises."""
+    try:
+        return Path(str(path)).suffix.lower() in _EXECUTABLE_SUFFIXES
+    except Exception:
+        return True          # unreadable -> treat as dangerous
+
+
+def open_path(path: str) -> dict:
+    """Open a local file or folder in the user's default app. {ok, message}.
+
+    SLICE 62. Every real-use `click` failure in the audit log was the model
+    trying to open a file by double-clicking its DESKTOP ICON — because there
+    was no verb for this, so its only route was the most fragile path it owns:
+    capture the desktop, ask a vision model to locate the icon, verify the
+    point, then `kind='double'` (the known-flaky kind). A file has a default
+    handler; Windows already knows it.
+
+    Directly parallel to slice 60's open_url, which replaced driving a browser
+    stack with one OS handoff and has not failed since.
+
+    Never raises. An executable is REFUSED — see _EXECUTABLE_SUFFIXES.
+    """
+    raw = str(path or "").strip().strip('"').strip("'")
+    if not raw:
+        return {"ok": False, "resolved": None,
+                "message": "Give me the path of a file or folder to open."}
+    try:
+        from jarvis.primitives.fsaccess import resolve_user_path
+        target = resolve_user_path(raw)
+        if target is None:
+            return {"ok": False, "resolved": None,
+                    "message": f"Couldn't understand the path '{raw}'."}
+        if is_executable_path(target):
+            return {"ok": False, "resolved": str(target),
+                    "message": (f"'{target.name}' is a program, and opening it "
+                                f"would RUN it. Use launch_app to start an app, "
+                                f"or run_shell if you really mean to execute "
+                                f"something — both ask you first.")}
+        if not target.exists():
+            return {"ok": False, "resolved": str(target),
+                    "message": f"There's nothing at '{target}' to open."}
+        os.startfile(str(target))
+    except Exception as exc:
+        return {"ok": False, "resolved": raw,
+                "message": f"Couldn't open '{raw}': {exc}"}
+    kind = "folder" if target.is_dir() else "file"
+    return {"ok": True, "resolved": str(target),
+            "message": f"Opened the {kind} '{target.name}'."}
 
 
 def launch_app(name: str) -> dict:

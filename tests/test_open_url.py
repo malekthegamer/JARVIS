@@ -202,3 +202,102 @@ def test_suggest_never_raises(monkeypatch):
         raise RuntimeError("registry unavailable")
     monkeypatch.setattr(app_discovery, "desktop_shortcuts", boom)
     assert app_discovery.suggest("anything") == []
+
+
+# ============ slice 62: open_path — a local file has no direct verb ============
+# MEASURED. Every real-use `click` failure in the audit log is the model trying
+# to open a file by double-clicking its DESKTOP ICON:
+#     {'target': 'note.txt',             'kind': 'double', 'window': 'Desktop'}
+#     {'target': 'plutonium - Shortcut', 'kind': 'double', 'window': 'Desktop'}
+# It writes a file, then hunts for its icon on screen. Verified why:
+#     launch_app(r'C:\...\note.txt') -> cannot resolve
+#     open_url(r'C:\...\note.txt')   -> refused (not a website)
+# There was NO verb to open a local file, so the only route was the most fragile
+# one JARVIS owns: capture the desktop, vision-locate an icon, verify the point,
+# then kind='double' (the known-flaky kind). This is slice 60 repeating -- the
+# same shape as "open YouTube" having no direct verb.
+
+def test_open_path_opens_a_real_file(monkeypatch, tmp_path):
+    opened = []
+    monkeypatch.setattr(apps.os, "startfile", opened.append, raising=False)
+    f = tmp_path / "note.txt"
+    f.write_text("hello", encoding="utf-8")
+
+    r = apps.open_path(str(f))
+    assert r["ok"], r
+    assert opened == [str(f)]
+
+
+def test_open_path_opens_a_folder(monkeypatch, tmp_path):
+    """A folder should land in Explorer, not be treated as an error."""
+    opened = []
+    monkeypatch.setattr(apps.os, "startfile", opened.append, raising=False)
+
+    r = apps.open_path(str(tmp_path))
+    assert r["ok"], r
+    assert opened == [str(tmp_path)]
+
+
+@pytest.mark.parametrize("ext", [".exe", ".bat", ".cmd", ".ps1", ".msi", ".vbs", ".scr"])
+def test_an_EXECUTABLE_is_refused(monkeypatch, tmp_path, ext):
+    """THE critical property, same as open_url's. os.startfile RUNS these.
+    launch_app and run_shell are the deliberate, gated ways to execute
+    something; this verb opens documents and must never become a quiet
+    execution path."""
+    opened = []
+    monkeypatch.setattr(apps.os, "startfile", opened.append, raising=False)
+    f = tmp_path / f"payload{ext}"
+    f.write_bytes(b"MZ")
+
+    r = apps.open_path(str(f))
+    assert r["ok"] is False, f"{ext} must be refused: {r}"
+    assert opened == [], f"{ext} REACHED os.startfile — arbitrary execution"
+
+
+def test_a_missing_path_fails_cleanly(monkeypatch, tmp_path):
+    monkeypatch.setattr(apps.os, "startfile", lambda t: None, raising=False)
+    r = apps.open_path(str(tmp_path / "nope.txt"))
+    assert r["ok"] is False and "nope.txt" in r["message"]
+
+
+def test_open_path_never_raises(monkeypatch):
+    monkeypatch.setattr(apps.os, "startfile", lambda t: None, raising=False)
+    for bad in (None, "", "   ", 123, "\x00"):
+        out = apps.open_path(bad)
+        assert isinstance(out, dict) and "ok" in out
+
+
+# ---- the gate ----
+
+def test_a_protected_path_is_BLOCKED():
+    """Reuses the slice-32 resolved-path denylist rather than inventing one."""
+    from jarvis import primitives
+    info = primitives.PRIMITIVES["open_path"]["classify"](
+        {"path": r"C:\Windows\System32\drivers\etc\hosts"})
+    assert info["tier"] == "blocked", info
+
+
+def test_an_executable_is_BLOCKED_at_the_gate_too(tmp_path):
+    """Defence in depth: refused by the classifier AND by open_path itself."""
+    from jarvis import primitives
+    f = tmp_path / "tool.exe"
+    f.write_bytes(b"MZ")
+    info = primitives.PRIMITIVES["open_path"]["classify"]({"path": str(f)})
+    assert info["tier"] == "blocked", info
+
+
+def test_an_ordinary_file_opens_without_a_prompt(tmp_path):
+    """Displaying a document destroys nothing — the precedent open_url set, and
+    the owner's standing objection is to being asked about benign actions."""
+    from jarvis import primitives
+    f = tmp_path / "report.md"
+    f.write_text("# hi", encoding="utf-8")
+    info = primitives.PRIMITIVES["open_path"]["classify"]({"path": str(f)})
+    assert info["tier"] == "auto", info
+
+
+def test_open_path_is_registered_under_the_fs_switch():
+    """It reaches the real filesystem, so fs.enabled must govern it."""
+    from jarvis import primitives
+    assert "open_path" in primitives.PRIMITIVES
+    assert "open_path" in primitives._KILL_SWITCHES["fs.enabled"]

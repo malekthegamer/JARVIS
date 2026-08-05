@@ -35,6 +35,46 @@ DIFF_MEANINGFUL = 0.01
 _GAME_URI_PREFIXES = ("steam://", "com.epicgames.launcher://")
 
 
+def _classify_open_path(args: dict) -> dict:
+    """BLOCKED for anything that would RUN, and for protected trees; otherwise
+    AUTO — displaying a document destroys nothing, the precedent open_url set.
+
+    The protected-path check reuses `fsaccess.classify_path_risk` (the
+    resolved-path denylist, already traversal- and symlink-safe) rather than
+    re-deriving one. Never raises; anything unresolvable falls to CONFIRM.
+    """
+    raw = str(args.get("path", ""))
+    try:
+        from jarvis.primitives import apps as _apps
+        from jarvis.primitives import fsaccess as _fs
+
+        if _apps.is_executable_path(raw):
+            return {"tier": "blocked",
+                    "description": (f"BLOCKED: opening '{raw}' would RUN it. Use "
+                                    f"launch_app or run_shell to execute things.")}
+        p = _fs.resolve_user_path(raw)
+        if p is None:
+            return {"tier": "confirm", "command": raw,
+                    "description": f"Open '{raw}' (couldn't resolve — confirming)."}
+        if _apps.is_executable_path(p):
+            return {"tier": "blocked",
+                    "description": (f"BLOCKED: '{p.name}' is a program — opening it "
+                                    f"would run it.")}
+        level, why = _fs.classify_path_risk(p)
+        if level == "blocked":
+            return {"tier": "blocked",
+                    "description": f"BLOCKED: I won't open that — {why}"}
+        return {"tier": "auto", "description": f"Open '{p}'"}
+    except Exception:
+        return {"tier": "confirm", "command": raw,
+                "description": f"Open '{raw}' (couldn't classify — confirming)."}
+
+
+def _run_open_path(args: dict, gate_info: dict | None = None) -> str:
+    r = apps.open_path(str(args.get("path", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _classify_open_url(args: dict) -> dict:
     """BLOCKED for anything that isn't a web page; otherwise the SAME gate
     browse_navigate uses — a site the user named themselves is AUTO, a host the
@@ -747,6 +787,28 @@ def _run_press_keys(args: dict, gate_info: dict | None = None) -> str:
 
 
 PRIMITIVES: dict[str, dict] = {
+    "open_path": {
+        "fn": _run_open_path,
+        "classify": _classify_open_path,
+        "schema": {
+            "name": "open_path",
+            "description": (
+                "Open a FILE or FOLDER on the user's PC in whatever app normally "
+                "opens it (a folder opens in Explorer). USE THIS whenever the "
+                "user asks to open, show, or bring up a file or folder — "
+                "'open that note', 'show me the downloads folder'. It is one "
+                "step and always works. Do NOT try to find the file's icon on "
+                "the desktop and double-click it; that is slow and unreliable. "
+                "Give the full path (list_directory first if you need to find "
+                "it). For websites use open_url; to start an application use "
+                "launch_app."),
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string",
+                                        "description": "Full path of the file or folder to open"}},
+                "required": ["path"]},
+        },
+    },
     "open_url": {
         "fn": _run_open_url,
         "classify": _classify_open_url,
@@ -1607,7 +1669,7 @@ _KILL_SWITCHES: dict[str, set[str]] = {
     # slices 32-33: real-filesystem access — the most powerful surface.
     "fs.enabled": {"list_directory", "delete_path", "create_shortcut",
                    "write_path", "read_path", "move_path", "rename_path",
-                   "copy_path", "make_folder"},
+                   "copy_path", "make_folder", "open_path"},
     # slice 53: arbitrary mouse + keyboard. Every other capability had a switch
     # while THIS one — the surface that can drive any application on the machine
     # — had none, so "stop touching my mouse and keyboard" was the one thing
