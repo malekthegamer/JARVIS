@@ -9,15 +9,18 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–62), grouped by area:**
-- **Reliability (slices 60-62 — the newest layer, driven by the owner asking
+**Capability set, built slice by slice (1–63), grouped by area:**
+- **Reliability (slices 60-63 — the newest layer, driven by the owner asking
   "why is JARVIS so unreliable?"):** the pattern behind the failures was
   **a missing verb forcing the model onto a fragile stack** — `open_url` (slice
   60) replaced browser automation for "just open this site", and **`open_path`
   (slice 62)** replaced screenshot→vision→double-click for "just open this
-  file". Both are one-step OS handoffs; neither has failed. Slice 62 also fixed
-  the **measurement**: harness runs were being written into the owner's real
-  audit log and read back as evidence about real use.
+  file". Both are one-step OS handoffs; neither has failed. **Slice 63** fixed
+  the third: `launch_app` used `Popen`, which cannot elevate, so the 26 games
+  flagged RUNASADMIN on this machine failed with WinError 740 — and the model
+  reported that as "doesn't appear to be installed". Slice 62 also fixed the
+  **measurement**: harness runs were being written into the owner's real audit
+  log and read back as evidence about real use.
 - **Real-use hardening (slices 57-58, driven by actually
   using it rather than by a backlog):** persona rewrite to a genuinely
   brief/dry "film-JARVIS" voice (measured **-52% words spoken**, which beat a
@@ -291,6 +294,77 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 63 — `launch_app` can finally start elevated programs
+The owner, on real use: *"it can't open most games/apps on my desktop."* The HUD
+showed JARVIS replying *"Forza Horizon 6 doesn't appear to be installed, sir, and
+the request to launch it was denied."*
+
+**Neither half of that sentence was true, and it was never a discovery problem.**
+`resolve_app('forza horizon 6')` returns `D:\Games\Forza Horizon 6\forzahorizon6.exe`
+and the file is there. The audit log had the real reason all along:
+
+```
+FAILED: Couldn't launch 'Forza Horizon 6': [WinError 740] The requested operation requires elevation
+```
+
+`launch_app` used `subprocess.Popen` → `CreateProcess`, which **cannot elevate** —
+it only fails. **Measured, not guessed:** 26 entries in this machine's
+`HKCU\...\AppCompatFlags\Layers` carry `RUNASADMIN` (`forzahorizon6.exe`,
+`modernwarfare.exe`, `blackops.exe`, `cod.exe`, the Spider-Man / NFS / Resident
+Evil / FIFA titles) — someone ticked "run as administrator" on them. Only
+ShellExecute honours that flag, **which is exactly why the Steam/Epic URI games
+always worked**: those already went through `os.startfile`.
+
+- **`Popen` stays first** (it yields a real pid worth reporting); on `WinError
+  740` **only**, fall back to `os.startfile`. Any other `OSError` is still a real
+  failure, reported rather than retried into a confusing second error.
+- **`cwd` is now the executable's own folder** on both paths. Games routinely
+  fail when started from elsewhere; until now they inherited JARVIS's directory.
+- **The shell call runs on a worker thread with a 90s bound.** Not caution —
+  measurement: `os.startfile` returned in **10.1s** when the prompt was clicked
+  and blocked **past 120 seconds** when it was ignored. Inside the executor that
+  freezes the entire chain.
+- ShellExecute gives **no pid, so none is claimed** — a fabricated one would be
+  worse than none.
+
+**Caught while wiring it, before it shipped:** `_run_launch_app` decided "this
+was just a URI, don't watch for a window" by testing `not result["pid"]`. That
+was a *proxy* for "it was a URI", and the proxy broke the instant ShellExecute
+became a launch path — it returns no pid either, so **every elevated game would
+have skipped the window check and reported NOT CONFIRMED however well it
+launched.** Now keyed on `apps._is_uri()`, pinned both ways. (Same failure shape
+as slice 58's cross-host gate: a proxy standing in for the real question.)
+
+**The honesty half.** Handed `[WinError 740] ... requires elevation`, the model
+told the user the program wasn't installed *and* that something denied it.
+Messages are now plain enough to leave nothing to paraphrase, plus a prompt rule:
+**give the reason the TOOL gave, never substitute another one.** Verified live —
+the real model now replies *"the application requires administrator permission,
+and the request was declined, sir."*
+
+**Evidence against real Windows, not fakes** (`tests/harness_elevated_launch.py`,
+deliberately kept OUT of the gate — a suite that pops a UAC prompt on every run
+is a suite people stop running):
+
+| path | result |
+|---|---|
+| approved | `ok` after **10.1s** — it really launches |
+| unanswered | bounded at **90.0s**, honest message, **no hang** |
+| declined | unit-tested only, **not yet seen live** |
+
+**Gate: 1300 passed / 0 failed / 0 skipped** — the project's third clean gate.
+
+**Stated rather than hidden:** this does NOT make those 26 games feel automatic.
+UAC here is `EnableLUA=1`, `ConsentPromptBehaviorAdmin=5`, `PromptOnSecureDesktop=1`,
+so Windows shows a consent dialog **on the secure desktop, which JARVIS provably
+cannot click** — by design, and not something to work around. It goes from *fails
+outright* to *works with the same one click you already make when you
+double-click the icon*. The owner chose that over a scheduled-task shim
+(zero-prompt but creates a permanently-elevated launch path) after both were laid
+out. Also still missing: `'modern warfare'`, `'black ops 2'`, `'spider-man 2'`
+and `'gta v'` fail to RESOLVE — name-matching / no-shortcut cases, a discovery
+problem this slice does not touch.
 
 ### Slice 62 — `open_path`, and a number I had been getting wrong
 Slice 60's lesson, repeated exactly: **a missing verb pushes the model onto an

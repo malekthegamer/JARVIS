@@ -93,7 +93,9 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
 51 registered primitives, each individually tested:
 
 - **Apps & windows** — `launch_app` (Start Menu, desktop shortcuts, Steam and
-  Epic libraries), `close_window`, `read_ui_tree`
+  Epic libraries; starts programs that need administrator rights — Windows shows
+  its own approval prompt, which only you can answer), `close_window`,
+  `read_ui_tree`
 - **Input** — `click` (single/double/right), `type_text`, `press_keys`, `scroll`
 - **Files (sandboxed)** — `write_file`, `read_file`, `delete_file`,
   `search_files` inside `data/agent_files/` only
