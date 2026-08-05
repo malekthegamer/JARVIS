@@ -68,8 +68,8 @@ python -m pytest tests/ -q
 ```
 
 - **Exit criterion: `N passed, 0 failed, 0 skipped` (exit code 0).** A skip is a
-  failure with better manners. (Baseline N = 606 as of slice 25; **1320 collected
-  as of slice 64**; it only grows.)
+  failure with better manners. (Baseline N = 606 as of slice 25; **1350 collected
+  as of slice 69**; it only grows.)
 - The full suite needs a real desktop, launches/kills Notepad + a throwaway
   Chrome, drives a headless Playwright Chromium against local fixtures, sends
   live-test email to `TEST_SELF_EMAIL`, briefly toggles real Do Not Disturb
@@ -103,6 +103,14 @@ python -m pytest tests/ -q
   - If the summary says **"pacing was re-armed Nx"**, a test tore the wrapper off
     the SDK and later tests ran unprotected — find that test. (This happened once,
     in the pacer's own file, and made a gate look 5 failures better than it was.)
+- **When the DAILY bucket is gone, gate the deterministic core and SAY SO.**
+  Discovered the hard way in slices 66-69: with the daily cap hit, live tests
+  fail with `tools=[]` (the weaker fallback model answers without calling any
+  tool), which looks exactly like a regression and is not.
+  `python -m pytest tests/ -q -k "not live"` runs 1311 of 1350 in ~3m45s with
+  **zero** Gemini calls. That is a legitimate gate for deterministic work
+  PROVIDED the record says "deterministic core green, live gate blocked on daily
+  quota" — never "green". Burst-probe first to prove the axis is PerDay.
 - **Never run two full live suites back-to-back**: the second exhausts the
   free-tier Gemini DAILY quota (429 RESOURCE_EXHAUSTED; resets midnight
   Pacific / 07:00 UTC) and live tests fail in clusters. **Pacing does NOT fix

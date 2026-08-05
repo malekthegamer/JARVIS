@@ -9,8 +9,8 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–64), grouped by area:**
-- **Reliability (slices 60-64 — the newest layer, driven by the owner asking
+**Capability set, built slice by slice (1–69), grouped by area:**
+- **Reliability (slices 60-69 — the newest layer, driven by the owner asking
   "why is JARVIS so unreliable?"):** the pattern behind the failures was
   **a missing verb forcing the model onto a fragile stack** — `open_url` (slice
   60) replaced browser automation for "just open this site", and **`open_path`
@@ -296,6 +296,89 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slices 65–69 — an autonomous overnight run (and what quota did to it)
+The owner asked for five slices planned and built while they slept, chosen from
+the codebase. **Investigating first killed three of the five candidates**, which
+is the most useful thing in this section:
+
+- **`browse_fill` (78%) and `browse_click` (33%) are DEAD DATA.** Every one of
+  their failures is 2026-07-17/18; the contenteditable handling landed after and
+  neither has failed since. This is the slice-62 stale-number trap a second time,
+  caught only because dates are now checked before a rate is quoted.
+- **Today's `launch_app` failures were already fixed** (WinError 740 → slice 63,
+  `black ops 2` → slice 64) **or were the owner clicking No** on a UAC prompt.
+- **A guard against the model repeating an identical failing call already
+  exists** (`chain.py`, `pre_call_guard`). Nearly built a second one.
+
+**Slice 65 — Store/UWP apps become launchable.** 148 of this machine's 233
+AppsFolder entries are packaged apps (Xbox, Terminal, Paint, Photos, Clock,
+Camera, Microsoft Store). Every source hunted for an `.exe` or a `.lnk` *target*
+and a packaged app has **neither**, so all of them were unreachable.
+`store_apps()` reads the shell namespace over COM (no PowerShell spawn) and
+launches `shell:AppsFolder\<AUMID>` — already a URI by `apps._is_uri()`, so it
+takes the existing `os.startfile` branch, the same route Steam and Epic URIs
+take. Entries whose Path is a real file are skipped (already covered elsewhere;
+listing them twice would manufacture ambiguity). Probe harness **20/20 → 31/31,
+zero wrong apps**.
+
+**Slice 66 — the browser recovers from a dead handle.** The one live browser bug:
+`_ensure()` checked whether the owner THREAD was alive, never whether the browser
+it owns still was, so a closed sandbox Chromium made every later request fail
+identically until restart (seven times in the log, three inside one minute).
+`_do()` now rebuilds **once** and retries. **The more important half:** a rebuilt
+browser starts on `about:blank`, so the first version made `read_page()` succeed
+and return an **empty page** — silently wrong is worse than the failure it
+replaced. The URL is captured before `close()` and restored before the retry.
+Recovery is always reported, never silent. Tests kill a real headless Chromium
+out from under a real session.
+
+**Slice 67 — refused is not broken.** The instrument that chose slices 60-66 was
+wrong three ways: a BLOCKED action (kill switch, denylist) scored as breakage; a
+declined UAC scored as breakage; and there was no date window, which is how
+`browse_fill 78%` survived for weeks. Now `chain.audit_status_from_result()`
+records BLOCKED as `refused` — **the chain and HUD keep the coarser status on
+purpose**, since a chain hitting a denylist should still burn its failure budget.
+A declined elevation returns CANCELLED via an explicit flag, not a text match.
+The report has three buckets, a 30-day default window, and **prints the date
+range of every row's failures** — `browse_fill 78% 2026-07-17..2026-07-18` now
+reads as stale at a glance.
+
+**Slice 68 — stop understating success.** From slice 65's captured gate failure:
+`VERIFY: control doesn't expose text — couldn't confirm` for typing that had
+demonstrably worked. `read_back_text()` did ONE pass and took the FIRST edit
+control. WinUI Notepad updates UIA text **asynchronously**, and a window with a
+search box exposes several controls. It now polls to 1.5s and prefers the control
+*containing* what was typed. An honest "couldn't confirm" still survives — pinned,
+because understating success is a smaller sin than claiming one that never
+happened. **Live: 6/6 confirmed** on the exact scenario that failed.
+
+**Slice 69 — the extension reconnect, partially.** Chrome restarts the MV3
+service worker whenever it likes, so a socket replaced mid-request is normal. The
+bridge fails the in-flight command deliberately — it cannot know if the old
+socket already delivered it, and re-sending a click could act twice — so **that
+rule was not loosened to make a test pass**. The message now says what happened
+and that it is safe to retry. **This did not fully fix the flake:**
+`test_extension_browser.py` still fails ~1 run in 5 with a different symptom
+(`the FIRST page was destroyed by the second open: ['about:blank']`), left named
+and open rather than claimed as fixed. It is a harness flake; the production path
+is covered by `test_extension_bridge.py`.
+
+**🔴 The night was cut short by quota, and the gates say so.** Mid-slice-66 the
+free-tier **DAILY** bucket ran out — burst probe: primary **0 ok / 5 failed,
+quotaId PerDay**; fallback 5/5. Two live tests then "failed" with `tools=[]` —
+the model called **no tool at all**, because the weaker fallback does not
+reliably tool-call. So slices 66-69 are verified on the **deterministic core
+(1311 passed, 0 failed, 0 skipped, 39 live deselected, zero Gemini calls)** and
+**NOT on the live gate**. Slice 65 got a real full gate: **1328 passed, 1 failed**
+(the WinUI readback flake that became slice 68).
+
+The live tests need re-running after 07:00 UTC. Nothing here is claimed green on
+a gate that did not run.
+
+**Also killed by quota:** the planned acceptance sweep — driving the real brain
+through ~15 everyday tasks — was impossible without a working brain, so slices 68
+and 69 were re-scoped to two real defects found during the night instead.
 
 ### Slice 64 — matching the name people actually say
 Slice 63 made admin-flagged games *launch*. This makes them *resolvable* by the
