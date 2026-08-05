@@ -111,8 +111,10 @@ def main() -> int:
     total = len(PROBES)
     print("-" * 78)
     print(f"  {good}/{total} correct, {bad} wrong")
-    print("  Definition of Done (slice 64): >= 16/20, and ZERO 'WRONG APP' rows.")
-    return 0 if good >= 16 else 1
+    # Raised from >=16 once the baseline was measured honestly at 15/20 — the
+    # original bar was below the starting line. See the slice-64 baseline commit.
+    print("  Definition of Done (slice 64): 20/20, and ZERO 'WRONG APP' rows.")
+    return 0 if (good == total) else 1
 
 
 if __name__ == "__main__":

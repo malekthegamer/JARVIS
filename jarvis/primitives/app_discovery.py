@@ -158,11 +158,59 @@ def desktop_shortcuts() -> list[dict]:
     return out
 
 
+# Roman numerals people actually say in game titles. SLICE 64: deliberately NO
+# bare "i"/"v"/"x" — those are real names ("X", "Vim" tokenizes to "vim", a lone
+# "V"), and turning them into numbers would corrupt far more than it fixes. The
+# accepted cost: "gta v" does not normalize to "gta 5".
+_ROMAN = {"ii": "2", "iii": "3", "iv": "4", "vi": "6", "vii": "7", "viii": "8",
+          "ix": "9", "xi": "11", "xii": "12", "xiii": "13", "xiv": "14",
+          "xv": "15", "xvi": "16", "xvii": "17", "xviii": "18", "xix": "19",
+          "xx": "20"}
+
+
 def _norm(text: str) -> str:
     """Casefold; every non-alphanumeric (®, ™, dashes, dots) becomes a space
-    — probe-driven: Epic's DisplayName is literally 'Rocket League®'."""
-    return " ".join("".join(c if c.isalnum() else " "
-                            for c in str(text or "").casefold()).split())
+    — probe-driven: Epic's DisplayName is literally 'Rocket League®'.
+
+    SLICE 64 adds two things, each from a measured miss on the owner's machine:
+    a digit welded to a word is split ('Spider-Man2' -> 'spider man 2', which is
+    why a spoken "spider-man 2" never matched), and multi-letter roman numerals
+    become arabic ('Black Ops II' -> 'black ops 2').
+    """
+    s = "".join(c if c.isalnum() else " " for c in str(text or "").casefold())
+    out = []
+    for token in s.split():
+        # "man2" -> "man 2", "2fort" -> "2 fort"
+        for part in re.findall(r"\d+|[^\W\d]+", token, flags=re.UNICODE):
+            out.append(_ROMAN.get(part, part))
+    return " ".join(out)
+
+
+def _flat(text: str) -> str:
+    """Normalized with spaces removed — 'prismlauncher' vs 'Prism Launcher'."""
+    return _norm(text).replace(" ", "")
+
+
+# Words that mark an entry as a program's accessory rather than the program:
+# its settings, its uninstaller, a patch shortcut. Matched as whole normalized
+# tokens so "Setup" is caught but "Setups Inc" isn't.
+_AUXILIARY = frozenset({"settings", "config", "configuration", "uninstall",
+                        "uninstaller", "readme", "setup", "update", "updater",
+                        "documentation", "docs", "support", "help", "manual",
+                        "crash", "report", "benchmark", "editor", "server"})
+
+
+def _is_auxiliary(name: str) -> bool:
+    return bool(_AUXILIARY & set(_norm(name).split()))
+
+
+def _without_auxiliary(entries: list[dict], needle: str) -> list[dict]:
+    """Drop accessory entries — unless the user's own words asked for one, and
+    unless dropping would leave nothing (then the accessory IS the answer)."""
+    if _AUXILIARY & set(needle.split()):
+        return entries
+    kept = [e for e in entries if not _is_auxiliary(e.get("name", ""))]
+    return kept or entries
 
 
 def suggest(name: str, limit: int = 5) -> list[str]:
@@ -230,14 +278,30 @@ def find(name: str) -> dict | None:
         seen_launch.add(key)
         uniq.append(e)
 
-    _PRIORITY = {"steam": 0, "epic": 1, "desktop": 2}
-    for tier in ("exact", "prefix", "substring"):
+    # SLICE 64: a game's own config/uninstall shortcut is not a rival game.
+    # "fifa" matched both 'FIFA 22' and 'FIFA 22 Settings' and so asked a
+    # question with only one real answer. Dropped UNLESS the user said the word
+    # themselves, so "fifa settings" still finds it.
+    uniq = _without_auxiliary(uniq, needle)
+
+    _PRIORITY = {"steam": 0, "epic": 1, "desktop": 2, "start_menu": 3}
+    flat_needle = needle.replace(" ", "")
+    want_tokens = set(needle.split())
+    # Tiers run most-literal first; a looser tier is only consulted when every
+    # stricter one found nothing, so loosening cannot outrank an exact match.
+    for tier in ("exact", "prefix", "substring", "spaceless", "tokens"):
         hits = []
         for e in uniq:
             n = _norm(e["name"])
             if ((tier == "exact" and n == needle)
                     or (tier == "prefix" and n.startswith(needle))
-                    or (tier == "substring" and needle in n)):
+                    or (tier == "substring" and needle in n)
+                    or (tier == "spaceless" and flat_needle
+                        and flat_needle in n.replace(" ", ""))
+                    # "fifa settings" -> "FIFA 22 Settings": every word the user
+                    # said is present, just not contiguously.
+                    or (tier == "tokens" and want_tokens
+                        and want_tokens <= set(n.split()))):
                 hits.append(e)
         if not hits:
             continue
