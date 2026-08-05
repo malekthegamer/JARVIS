@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis.brain import jarvis_brain
 from jarvis.voice.voice_manager import voice_manager
 from jarvis.voice.wake import (DEFAULT_THRESHOLD, WakeListener, _build_model,

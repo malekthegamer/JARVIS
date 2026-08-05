@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis import config                                    # noqa: E402
 from jarvis.core import extbridge                            # noqa: E402
 from jarvis.core.settings_store import settings              # noqa: E402

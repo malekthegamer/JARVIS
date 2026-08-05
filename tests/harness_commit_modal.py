@@ -33,6 +33,7 @@ if str(ROOT) not in sys.path:
 
 from playwright.sync_api import sync_playwright
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis.core.settings_store import settings
 from jarvis.primitives import input as jinput
 from jarvis.primitives import web

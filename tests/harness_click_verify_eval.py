@@ -35,6 +35,7 @@ try:
 except Exception:
     pass
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis import config
 from jarvis.core.settings_store import settings
 from jarvis.primitives import vision

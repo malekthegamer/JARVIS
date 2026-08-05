@@ -30,6 +30,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 try:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 except Exception:

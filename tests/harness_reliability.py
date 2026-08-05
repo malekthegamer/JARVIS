@@ -81,6 +81,14 @@ def report(recent: int | None) -> None:
     if clean:
         print(f"\n  never failed: {', '.join(sorted(clean))}")
 
+    print("\n  NOTE: entries recorded BEFORE slice 62 (2026-08-05) include runs")
+    print("  from tests/harness_*.py, which wrote into this log because only")
+    print("  pytest gets conftest's audit isolation. Three of the `click`")
+    print("  failures below are harness_visionpad, not real use — I read this")
+    print("  report as evidence about real use and was wrong. Harnesses now")
+    print("  redirect (tests/_harness_env.py), so entries from here on are")
+    print("  clean; check the timestamp before trusting an old failure.")
+
 
 def why(tool: str, recent: int | None, limit: int = 8) -> None:
     """The verbatim failure texts — what the MODEL saw, which is what decides

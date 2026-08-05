@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis.core import memory as jmemory
 from jarvis.core.memory import MemoryStore, _tokens
 from jarvis.core.settings_store import settings

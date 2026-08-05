@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import threading
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis.core.confirmations import confirmations
 from jarvis.core.settings_store import settings
 from jarvis.primitives import web

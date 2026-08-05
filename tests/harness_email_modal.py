@@ -27,6 +27,7 @@ if str(ROOT) not in sys.path:
 
 from playwright.sync_api import sync_playwright
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis.primitives import email as jemail
 from jarvis.primitives import files
 

@@ -31,6 +31,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
+
 LIB_JS = ROOT / "extension" / "lib.js"
 
 # (path, target) pairs with a KNOWN right answer, mirroring test_web.py's

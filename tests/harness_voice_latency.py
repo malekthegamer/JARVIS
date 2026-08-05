@@ -37,6 +37,7 @@ if str(ROOT) not in sys.path:
 
 os.environ["JARVIS_VOICE_TIMING"] = "1"      # before anything imports timing
 
+from tests import _harness_env  # noqa: E402,F401  (audit isolation: import BEFORE jarvis)
 from jarvis.core import timing                                    # noqa: E402
 from jarvis.voice import capture                                  # noqa: E402
 from jarvis.voice.voice_manager import voice_manager              # noqa: E402
