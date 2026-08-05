@@ -170,6 +170,25 @@ def _timeout_ms() -> int:
     return int(float(settings.get("web.timeout_s", 15)) * 1000)
 
 
+# Playwright's ways of saying "the browser you are holding is gone". Matched on
+# text because the SDK raises plain Errors for all of them. Kept narrow on
+# purpose: a timeout or a DNS failure is a REAL failure and must surface as
+# itself, not trigger a relaunch (test-pinned both ways, slice 66).
+_DEAD_BROWSER_MARKERS = (
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "target closed",
+    "no current window",
+    "connection closed",
+    "browser closed",
+)
+
+
+def _is_dead_browser(exc: BaseException) -> bool:
+    text = str(exc or "").casefold()
+    return any(m in text for m in _DEAD_BROWSER_MARKERS)
+
+
 class BrowserSession:
     """A lazily-launched isolated browser, driven from ONE owner thread."""
 
@@ -179,6 +198,7 @@ class BrowserSession:
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._start_error: Exception | None = None
+        self.recovered = False   # slice 66: set when _do relaunched
         self._page = None
         self._proc = None          # the dedicated Chrome we launched (real mode)
         self._mode = "isolated"    # captured at launch
@@ -328,9 +348,8 @@ class BrowserSession:
         if self._start_error is not None:
             raise BrowserUnavailable(_SETUP_HINT)
 
-    def _do(self, fn, wait_s: float | None = None):
-        """Run fn(page) on the owner thread; block for the result. Raises on
-        timeout or the operation's own exception."""
+    def _run_once(self, fn, wait_s: float | None = None):
+        """One attempt on the owner thread. Raises on timeout or fn's error."""
         self._ensure()
         box = {"done": threading.Event(), "result": None, "error": None}
         self._queue.put((fn, box))
@@ -340,6 +359,43 @@ class BrowserSession:
         if box["error"] is not None:
             raise box["error"]
         return box["result"]
+
+    def _do(self, fn, wait_s: float | None = None):
+        """Run fn(page) on the owner thread, rebuilding the session ONCE if the
+        browser turned out to be dead.
+
+        SLICE 66. _ensure() only ever checked whether the owner THREAD is alive
+        — not whether the browser that thread owns still is. Close the sandbox
+        Chromium and the thread keeps serving a corpse, so every later request
+        failed identically until JARVIS was restarted. The owner's audit log has
+        that exact error seven times, three of them inside one minute.
+
+        ONE relaunch, deliberately. A retry loop against a genuinely broken
+        browser hangs the chain instead of telling the user, which is worse than
+        a clean failure. The relaunch also sets `recovered` so callers can SAY it
+        happened — a silent relaunch would mask a real fault.
+        """
+        try:
+            return self._run_once(fn, wait_s)
+        except Exception as exc:
+            if not _is_dead_browser(exc):
+                raise
+        # Capture BEFORE close(), which clears it. A rebuilt browser starts on
+        # about:blank, so without this a recovered read_page() would cheerfully
+        # return an empty page — silently wrong, which is worse than failing.
+        was_on = self.current_url
+        self.close()           # drop the dead thread + handles
+        self.recovered = True  # read and cleared by whoever reports the result
+        if was_on:
+            try:
+                self._run_once(lambda page: page.goto(
+                    was_on, timeout=_timeout_ms(), wait_until="domcontentloaded"))
+                self.current_url = was_on
+            except Exception:
+                # Couldn't get back to where we were. Let the caller's own
+                # operation run and fail honestly rather than fake the state.
+                pass
+        return self._run_once(fn, wait_s)
 
     # ---- public operations (return plain data; callers wrap into results) ----
     def navigate(self, url: str) -> dict:
@@ -1178,11 +1234,23 @@ def classify_navigate(args: dict) -> dict:
                 "description": f"Navigate (could not classify cleanly: {exc})"}
 
 
+def _recovery_note(sess) -> str:
+    """Consume the one-shot relaunch flag. SLICE 66: a session that silently
+    rebuilt itself would hide a genuinely broken browser, so whoever reports the
+    result says it happened."""
+    if getattr(sess, "recovered", False):
+        sess.recovered = False
+        return " (the browser had been closed, so I reopened it)"
+    return ""
+
+
 def navigate(url: str) -> dict:
     try:
-        out = _active_session().navigate(str(url or "").strip())
+        sess = _active_session()
+        out = sess.navigate(str(url or "").strip())
+        note = _recovery_note(sess)
         return {"ok": True, "url": out["url"], "title": out["title"],
-                "message": f"Loaded {out['url']} — \"{out['title']}\"."}
+                "message": f"Loaded {out['url']} — \"{out['title']}\".{note}"}
     except BrowserUnavailable as exc:
         return {"ok": False, "url": None, "message": str(exc)}
     except Exception as exc:
@@ -1200,7 +1268,7 @@ def read_page() -> dict:
             if names:
                 wrapped += f"\n[interactive elements] {names[:800]}"
         return {"ok": True, "url": out["url"], "text": wrapped,
-                "message": wrapped}
+                "message": wrapped + _recovery_note(_active_session())}
     except BrowserUnavailable as exc:
         return {"ok": False, "url": None, "text": "", "message": str(exc)}
     except Exception as exc:
