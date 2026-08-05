@@ -161,3 +161,49 @@ def test_recovery_returns_to_the_page_it_was_on(server):
     assert out["ok"] is True, out
     assert "about:blank" not in out["text"], out["text"][:160]
     assert str(server) in out["text"], out["text"][:160]
+
+
+# ------------------------------------------- slice 69b: the gate must fail CLOSED
+
+def test_cross_host_is_assumed_when_the_current_page_is_unknown(monkeypatch):
+    """Found via a flaky extension test, and it is a real hole, not a flake.
+
+        AssertionError: {'tier': 'auto', ...}  assert 'auto' == 'confirm'
+
+    _cross_host() read the session's current_url to decide whether a click
+    leaves the site. When that is empty — a fresh session, a just-recovered one,
+    a page whose URL has not committed — cur_host was None and the function
+    returned None, which the callers read as "same host, no confirmation
+    needed". So NOT KNOWING where we are made the gate fall OPEN.
+
+    Slice 27 built this gate precisely so a click to another site is confirmed;
+    slice 35 already established the doctrine for the tier system (unknown fails
+    closed). This applies it here.
+    """
+    class _Blind:
+        current_url = None
+
+    monkeypatch.setattr(web, "_active_session", lambda: _Blind())
+    assert web._cross_host("https://elsewhere.example/x") == "elsewhere.example"
+
+
+def test_cross_host_is_still_none_for_the_same_host(monkeypatch):
+    """The fix must not confirm every click on the page you are already on."""
+    class _On:
+        current_url = "https://site.example/a"
+
+    monkeypatch.setattr(web, "_active_session", lambda: _On())
+    assert web._cross_host("https://site.example/b") is None
+    assert web._cross_host("https://other.example/b") == "other.example"
+
+
+def test_a_non_web_target_is_still_not_cross_host(monkeypatch):
+    """Only http(s) destinations are gated here; a mailto: or a relative jump
+    is somebody else's problem and must not become a spurious confirm."""
+    class _Blind:
+        current_url = None
+
+    monkeypatch.setattr(web, "_active_session", lambda: _Blind())
+    assert web._cross_host("mailto:someone@example.com") is None
+    assert web._cross_host("") is None
+    assert web._cross_host("javascript:void(0)") is None

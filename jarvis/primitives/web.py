@@ -835,7 +835,7 @@ def _user_named_host(target_host: str) -> bool:
         return False
 
 
-def _cross_host(target_url: str) -> str | None:
+def _cross_host(target_url: str, unknown_is_cross: bool = True) -> str | None:
     """The destination HOST when navigating to `target_url` would leave the
     current page's host — else None. Shared by classify_navigate and
     classify_web_click so a click and a navigate to the same place gate
@@ -847,11 +847,27 @@ def _cross_host(target_url: str) -> str | None:
         if (parsed.scheme or "").lower() not in ("http", "https"):
             return None
         target_host = parsed.hostname or ""
+        if not target_host:
+            return None
         cur = _active_session().current_url
         cur_host = (urlparse(cur).hostname if cur else None)
-        if cur_host and target_host and target_host != cur_host:
-            return target_host
-        return None
+        if not cur_host:
+            # SLICE 69: FAIL CLOSED for a CLICK. This used to return None
+            # whenever the current page was unknown — a fresh session, a
+            # just-recovered one, a URL that hasn't committed — and every caller
+            # reads None as "same host, no confirmation needed". So NOT KNOWING
+            # where we are made slice 27's cross-host gate fall OPEN, and a
+            # click to another site ran unconfirmed. Found via an intermittent
+            # extension test reporting tier 'auto' where 'confirm' was
+            # asserted: the flake was the symptom, this was the defect. Same
+            # doctrine as slice 35 — unknown never picks the permissive answer.
+            #
+            # NAVIGATE opts out (unknown_is_cross=False) and that is deliberate,
+            # not an oversight: the FIRST load of a session is the user naming a
+            # site, so confirming it would prompt for something they just asked
+            # for. Pinned by test_navigate_first_load_is_auto.
+            return target_host if unknown_is_cross else None
+        return target_host if target_host != cur_host else None
     except Exception:
         return None
 
@@ -1220,7 +1236,9 @@ def classify_navigate(args: dict) -> dict:
             return {"tier": "blocked",
                     "description": f"BLOCKED: only http/https URLs are allowed "
                                    f"(refusing '{url}')."}
-        dest_host = _cross_host(url)  # shared with classify_web_click
+        # unknown_is_cross=False: a first load with no current page is the
+        # user asking for a site, not a sideways jump. See _cross_host.
+        dest_host = _cross_host(url, unknown_is_cross=False)
         if dest_host and _user_named_host(dest_host):
             return {"tier": "auto",
                     "description": f"Navigate to {url} (you asked for this site)"}

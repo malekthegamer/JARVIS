@@ -169,6 +169,30 @@ def _open_pages(ctx) -> list[str]:
 
 
 
+def _wait_for_pages(ctx, needles, timeout_s: float = 15.0) -> list[str]:
+    """Poll the real tab list until every needle appears, or give up.
+
+    SLICE 69, second attempt. The first fix retried past the extension's
+    reconnect but still read the tab list after a flat sleep(0.5), and the test
+    kept failing ~1 run in 5 with:
+
+        the FIRST page was destroyed by the second open: ['about:blank']
+
+    A tab that has been CREATED but whose navigation has not committed yet
+    reports its URL as about:blank, so a fixed sleep races the network. Polling
+    changes nothing about what is asserted - both pages must still be present -
+    it just stops reading the state before the browser has finished writing it.
+    """
+    deadline = time.time() + timeout_s
+    urls: list[str] = []
+    while time.time() < deadline:
+        urls = _open_pages(ctx)
+        if all(any(n in u for u in urls) for n in needles):
+            return urls
+        time.sleep(0.4)
+    return urls
+
+
 # ---------- the owner's reported bugs, now END-TO-END ----------
 
 def test_open_creates_a_new_tab_and_leaves_the_previous_page_alone(ext_browser):
@@ -187,9 +211,8 @@ def test_open_creates_a_new_tab_and_leaves_the_previous_page_alone(ext_browser):
 
     r2 = _stable(web.navigate, "https://example.org/")
     assert r2["ok"], r2
-    time.sleep(0.5)
 
-    urls = _open_pages(ctx)
+    urls = _wait_for_pages(ctx, ["example.com", "example.org"])
     assert any("example.com" in u for u in urls), \
         f"the FIRST page was destroyed by the second open: {urls}"
     assert any("example.org" in u for u in urls), urls
