@@ -136,6 +136,105 @@ def _is_uri(target: str) -> bool:
     return ":" in target and not (len(target) > 1 and target[1] == ":")
 
 
+# Sites people name by brand rather than domain. Deliberately SHORT — this is a
+# convenience for the handful of things said out loud constantly, not a
+# directory. An unlisted bare word is refused with an honest message, and the
+# model simply supplies the real URL instead.
+_SITE_ALIASES = {
+    "youtube": "https://www.youtube.com",
+    "gmail": "https://mail.google.com",
+    "google": "https://www.google.com",
+    "github": "https://github.com",
+    "reddit": "https://www.reddit.com",
+    "chatgpt": "https://chatgpt.com",
+    "claude": "https://claude.ai",
+    "netflix": "https://www.netflix.com",
+    "spotify": "https://open.spotify.com",
+    "twitch": "https://www.twitch.tv",
+    "whatsapp": "https://web.whatsapp.com",
+    "drive": "https://drive.google.com",
+    "maps": "https://maps.google.com",
+    "amazon": "https://www.amazon.com",
+    "x": "https://x.com",
+    "twitter": "https://x.com",
+}
+
+
+def normalize_url(text: str) -> str | None:
+    """A user's phrasing -> a real http(s) URL, or None if it isn't one.
+
+    Accepts what people actually say/type: a full URL, a bare domain
+    ("youtube.com"), or a well-known brand name ("youtube"). Returns None for
+    anything else — crucially including FILE PATHS, because the caller hands the
+    result to os.startfile, which would happily execute them.
+    """
+    s = str(text or "").strip().strip('"').strip("'")
+    if not s:
+        return None
+    low = s.lower()
+
+    if low in _SITE_ALIASES:
+        return _SITE_ALIASES[low]
+
+    if "://" in low:
+        # Only the two web schemes may ever pass. file://, javascript:, ms-*:,
+        # and friends are refused here rather than at the OS.
+        if not (low.startswith("http://") or low.startswith("https://")):
+            return None
+        rest = s.split("://", 1)[1]
+        return s if rest.strip() else None
+
+    # A drive path (C:\...), a UNC share (\\host\...) or a bare executable is
+    # NOT a website, however domain-ish it looks.
+    if s.startswith("\\\\") or "\\" in s or (len(s) > 1 and s[1] == ":"):
+        return None
+    if ":" in s:                      # "cmd.exe:" / "ms-settings:" style
+        return None
+    if "." not in s.strip("."):
+        return None                   # a bare word we have no alias for
+    if s.lower().rsplit(".", 1)[-1] in ("exe", "bat", "cmd", "ps1", "msi",
+                                        "com", "scr", "vbs", "lnk"):
+        # ".com" is a real TLD AND an executable extension; a lone "foo.com"
+        # is a site, but anything with a path separator was rejected above, so
+        # what remains here reads as an executable name.
+        if s.lower().endswith((".exe", ".bat", ".cmd", ".ps1", ".msi",
+                               ".scr", ".vbs", ".lnk")):
+            return None
+    return "https://" + s
+
+
+def open_url(url: str) -> dict:
+    """Open a website in the user's REAL default browser. {ok, message}.
+
+    SLICE 60, and the single highest-value reliability change in the project.
+    Measured over 313 real actions, `browse_navigate` failed 24% of the time —
+    because "open YouTube" was being routed through a browser-AUTOMATION stack
+    (Playwright / CDP / an MV3 extension), any part of which can be
+    misconfigured, and one of which opens a deliberately profile-less window.
+
+    Opening a page needs none of that. Windows already knows the user's default
+    browser and their signed-in profile; handing it the URL is one step with
+    essentially nothing to break. This is the technique from the owner's
+    previous JARVIS (`Start-Process <url>`), which never failed at this.
+
+    Never raises. Only http/https ever reaches the OS — see normalize_url; this
+    function must never become a way to execute a file.
+    """
+    target = normalize_url(url)
+    if target is None:
+        return {"ok": False, "resolved": None,
+                "message": (f"'{url}' isn't a website I can open. Give me a full "
+                            f"URL like https://example.com — I only open web "
+                            f"pages this way, never files or programs.")}
+    try:
+        os.startfile(target)
+    except Exception as exc:
+        return {"ok": False, "resolved": target,
+                "message": f"Couldn't open {target}: {exc}"}
+    return {"ok": True, "resolved": target,
+            "message": f"Opened {target} in your browser."}
+
+
 def launch_app(name: str) -> dict:
     """AUTO tier. Returns {"ok", "message", "pid", "resolved"} — never raises."""
     name = str(name or "").strip()

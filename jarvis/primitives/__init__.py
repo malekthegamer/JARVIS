@@ -35,6 +35,42 @@ DIFF_MEANINGFUL = 0.01
 _GAME_URI_PREFIXES = ("steam://", "com.epicgames.launcher://")
 
 
+def _classify_open_url(args: dict) -> dict:
+    """BLOCKED for anything that isn't a web page; otherwise the SAME gate
+    browse_navigate uses — a site the user named themselves is AUTO, a host the
+    MODEL discovered still CONFIRMs.
+
+    Reusing `web._user_named_host` is deliberate: slice 59 had to close a real
+    bypass in that logic, and a second hand-rolled copy of the rule here would
+    be exactly the drift that produced it. One implementation, one set of tests.
+    """
+    raw = str(args.get("url", ""))
+    try:
+        from urllib.parse import urlparse
+
+        from jarvis.primitives import apps as _apps
+        from jarvis.primitives import web as _web
+
+        target = _apps.normalize_url(raw)
+        if target is None:
+            return {"tier": "blocked",
+                    "description": (f"BLOCKED: '{raw}' is not a web page. This opens "
+                                    f"websites only — never files or programs.")}
+        host = urlparse(target).hostname or ""
+        if _web._user_named_host(host):
+            return {"tier": "auto", "description": f"Open {target} in your browser"}
+        return {"tier": "confirm", "command": target,
+                "description": f"Open {host} in your browser — review it first."}
+    except Exception:
+        return {"tier": "confirm", "command": raw,
+                "description": f"Open '{raw}' (couldn't classify cleanly — confirming)."}
+
+
+def _run_open_url(args: dict, gate_info: dict | None = None) -> str:
+    r = apps.open_url(str(args.get("url", "")))
+    return ("OK: " if r["ok"] else "FAILED: ") + r["message"]
+
+
 def _run_launch_app(args: dict, gate_info: dict | None = None) -> str:
     """Act (launch) + observe (ui tree, screenshots) + verify (both signals),
     reported separately so the model — and the user — see the evidence."""
@@ -710,6 +746,28 @@ def _run_press_keys(args: dict, gate_info: dict | None = None) -> str:
 
 
 PRIMITIVES: dict[str, dict] = {
+    "open_url": {
+        "fn": _run_open_url,
+        "classify": _classify_open_url,
+        "schema": {
+            "name": "open_url",
+            "description": (
+                "Open a website in the user's OWN default browser (their real "
+                "profile, already signed in). USE THIS whenever the user asks to "
+                "open, go to, or bring up a site — 'open YouTube', 'go to "
+                "gmail'. It is one step and does not depend on any browser "
+                "automation being set up, so it is far more reliable. Accepts a "
+                "full URL, a bare domain, or a well-known site name. "
+                "Do NOT use browse_navigate for simply opening a site — that "
+                "drives a separate automation browser and is only for when you "
+                "must READ or CLICK something on the page afterwards."),
+            "parameters": {
+                "type": "object",
+                "properties": {"url": {"type": "string",
+                                       "description": "URL, domain, or site name to open"}},
+                "required": ["url"]},
+        },
+    },
     "launch_app": {
         "fn": _run_launch_app,
         "tier": "auto",
