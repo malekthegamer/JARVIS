@@ -159,7 +159,7 @@ def test_open_url_is_registered_and_rides_no_kill_switch():
 
 def _fake_library(monkeypatch, names):
     from jarvis.primitives import app_discovery
-    entries = [{"name": n, "launch": f"C:\{n}.exe", "source": "desktop"}
+    entries = [{"name": n, "launch": rf"C:\{n}.exe", "source": "desktop"}
                for n in names]
     monkeypatch.setattr(app_discovery, "desktop_shortcuts", lambda: entries)
     monkeypatch.setattr(app_discovery, "steam_games", lambda: [])
@@ -301,3 +301,68 @@ def test_open_path_is_registered_under_the_fs_switch():
     from jarvis import primitives
     assert "open_path" in primitives.PRIMITIVES
     assert "open_path" in primitives._KILL_SWITCHES["fs.enabled"]
+
+
+# ---------------------------------------------------------------------------
+# Slice 62 stage 2 — the point of the verb is that the MODEL reaches for it.
+# Unit tests prove open_path works; only a live check proves it gets chosen
+# over the vision+double-click path that produced every real click failure.
+# ---------------------------------------------------------------------------
+
+from jarvis import config  # noqa: E402  (live gate, slice 62)
+
+live = pytest.mark.skipif(not config.get_api_key("gemini"),
+                          reason="GEMINI_API_KEY not configured")
+
+
+@live
+def test_live_model_opens_a_desktop_file_with_open_path_not_a_double_click(
+        monkeypatch):
+    """Reproduces the exact audit-log failure: a file sitting on the Desktop,
+    asked for by name. The model must call open_path, and must NOT fall back to
+    locating the icon and sending click(kind='double') — the path that failed
+    4/4 times in real use.
+
+    Nothing is actually opened or clicked: both primitives are stubbed. The
+    file is real (the model has to find it with list_directory) and is removed
+    afterwards.
+    """
+    import os
+    import uuid
+    from pathlib import Path
+
+    from jarvis import primitives
+    from jarvis.brain import JarvisBrain
+
+    desktop = Path(os.path.join(os.path.expanduser("~"), "Desktop"))
+    if not desktop.is_dir():
+        pytest.skip("no Desktop directory on this machine")
+    note = desktop / f"jarvis-slice62-{uuid.uuid4().hex[:6]}.txt"
+    note.write_text("slice 62 open_path probe", encoding="utf-8")
+
+    opened: list[dict] = []
+    clicked: list[dict] = []
+    monkeypatch.setitem(
+        primitives.PRIMITIVES["open_path"], "fn",
+        lambda args, gi=None: opened.append(args) or "OK: opened (stubbed).")
+    monkeypatch.setitem(
+        primitives.PRIMITIVES["click"], "fn",
+        lambda args, gi=None: clicked.append(args) or
+        "FAILED: could not find that on screen (stubbed).")
+
+    try:
+        brain = JarvisBrain()
+        reply = brain.think(f"Open the file {note.name} on my desktop.")
+    finally:
+        note.unlink(missing_ok=True)
+
+    print(f"[live] opened={opened} clicked={clicked} reply={reply[:160]}")
+    assert not clicked, f"model hunted for the icon instead: {clicked}"
+    assert opened, "model never called open_path"
+    # Choosing the right tool is only half of it. The FIRST live run picked
+    # open_path but passed 'C:\\Users\\User\\Desktop\\...' — a guessed account
+    # name that does not exist. The stub hid it; real use would just fail. So
+    # assert the argument actually resolves to the real file.
+    from jarvis.primitives import fsaccess
+    got = fsaccess.resolve_user_path(str(opened[0].get("path", "")))
+    assert got == note.resolve(), f"open_path got a path that isn't the file: {opened}"

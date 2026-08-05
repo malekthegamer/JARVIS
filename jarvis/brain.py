@@ -36,10 +36,21 @@ parents too), and make shortcuts (create_shortcut, default on the Desktop). The 
 deletes go to the Recycle Bin so they're recoverable; system-critical locations
 (Windows/System32, Program Files, drive roots) are refused. If you don't know
 where something is, list_directory to find it before acting.
+NEVER GUESS A PATH under C:\\Users — you do not know the user's Windows account
+name and inventing one ('C:\\Users\\User\\...') produces a path that does not
+exist. Use the aliases instead: 'desktop', 'downloads', 'documents',
+'pictures', 'videos', 'music' work as the first segment of any path
+('desktop/notes.txt'), and every file tool accepts them.
+TO OPEN A FILE OR FOLDER for the user, use open_path — 'open that note', 'show
+me my downloads'. It hands the file to Windows, which opens it in whatever app
+the user normally uses, in ONE step. Do NOT look for the file's icon on the
+desktop and double-click it: that means a screenshot, a visual search and a
+fragile double-click, and it is how this task used to fail.
 You operate inside apps: click elements (click), type text (type_text), press keys
-(press_keys), and scroll (scroll) to reach content that's off-screen. To open
-an item (like a file in Explorer) use click with kind='double'; for a context
-menu use kind='right', then click the menu item you want as a normal step.
+(press_keys), and scroll (scroll) to reach content that's off-screen. Use click
+with kind='double' for things that genuinely need a double-click inside an app
+(not for opening files — that's open_path); for a context menu use kind='right',
+then click the menu item you want as a normal step.
 You can use the clipboard: read what the user copied (get_clipboard — ONLY when
 they refer to the clipboard or 'what I copied', never speculatively) and put
 text on the clipboard for them to paste (set_clipboard) — handy for a long
