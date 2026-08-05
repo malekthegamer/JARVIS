@@ -9,8 +9,16 @@
 
 You are continuing a **from-scratch rebuild of JARVIS** — a voice-driven agent that controls a Windows 11 PC. The single source of truth for **what to build** is **`JARVIS_Spec_v1.md`** (read it first). **How to build** is codified in **`CLAUDE.md`** (auto-loaded — the plan→build→self-test→vision-check discipline runs by default, no need to type `/fable-mode`) and **`HARNESS.md`** (the concrete techniques with real examples).
 
-**Capability set, built slice by slice (1–58), grouped by area:**
-- **Real-use hardening (slices 57-58 — the newest layer, driven by actually
+**Capability set, built slice by slice (1–62), grouped by area:**
+- **Reliability (slices 60-62 — the newest layer, driven by the owner asking
+  "why is JARVIS so unreliable?"):** the pattern behind the failures was
+  **a missing verb forcing the model onto a fragile stack** — `open_url` (slice
+  60) replaced browser automation for "just open this site", and **`open_path`
+  (slice 62)** replaced screenshot→vision→double-click for "just open this
+  file". Both are one-step OS handoffs; neither has failed. Slice 62 also fixed
+  the **measurement**: harness runs were being written into the owner's real
+  audit log and read back as evidence about real use.
+- **Real-use hardening (slices 57-58, driven by actually
   using it rather than by a backlog):** persona rewrite to a genuinely
   brief/dry "film-JARVIS" voice (measured **-52% words spoken**, which beat a
   cut streaming-TTS stage on latency); a bounded conversation follow-up window
@@ -283,6 +291,88 @@ Each slice = staged commits, tests-first, ending in a live end-to-end verificati
 - **New principle, applied consistently: overwrite/clobber recycles the prior version first** (`_place()` helper → `_recycle` the existing file, then move/copy/write) — so, like deletes, an overwrite is recoverable from the Recycle Bin, never silently lost. An existing-folder destination is refused (no silent merge).
 - Reuses `shutil` (move/copy) + the slice-32 `_recycle`; `read_path` reuses `web._wrap_untrusted`. All five under the same `fs.enabled` kill-switch; `fs.max_write_kb` (256) caps writes. No JARVIS undo (the Recycle Bin is the recovery, delete parity).
 - **Live-proven (real brain):** wrote a note → read it back (content matches on disk) → renamed it → copied it (source preserved), all verified from disk.
+
+### Slice 62 — `open_path`, and a number I had been getting wrong
+Slice 60's lesson, repeated exactly: **a missing verb pushes the model onto an
+unreliable stack.** There "open YouTube" had no direct verb, so it drove a
+browser-automation stack; `open_url` fixed it. Here **there was no way at all to
+open a local file or folder** — `launch_app` cannot resolve a `.txt`, and
+`open_url` refuses file paths on purpose. So "open that note" had only one
+route: screenshot → ask a vision model to find the icon → verify the point →
+`click(kind='double')`, the most fragile path in the system ending in the
+known-flaky click kind. **Every real-use `click` failure in the audit log is
+exactly that**, four for four:
+
+```
+{'target': 'note.txt',             'kind': 'double', 'window': 'Desktop'}
+{'target': 'plutonium - Shortcut', 'kind': 'double', 'window': 'Desktop'}
+```
+
+**The prompt was actively causing it.** It said, in as many words: *"To open an
+item (like a file in Explorer) use click with kind='double'."*
+
+- **`open_path`** — the same one-step `os.startfile` handoff that made `open_url`
+  reliable. Tiering reuses existing policy rather than inventing any:
+  **BLOCKED for executables** (`.exe .bat .cmd .ps1 .msi .scr .vbs` …), checked
+  on the raw string *and* again on the resolved path, because `os.startfile`
+  **runs** those and `launch_app`/`run_shell` are the deliberate gated ways to
+  execute; **BLOCKED for protected trees** via the slice-32 resolved-path
+  denylist; **AUTO** for an ordinary existing file or folder (displaying a
+  document destroys nothing — the precedent `open_url` set); anything
+  unresolvable still CONFIRMs. Under the `fs.enabled` kill switch.
+- A **`launch_app` miss now returns `candidates`** (`app_discovery.suggest()`)
+  instead of a dead end.
+
+**The live check found a second bug the unit tests could not see.** With only
+stage 1 in place the model *did* pick `open_path` — but passed
+`C:\Users\User\Desktop\...`, **inventing a Windows account name**. The stub made
+the test pass. In real use that path simply does not exist, so the new verb would
+have failed on its first outing and looked exactly as unreliable as what it
+replaced. The prompt now forbids guessing anything under `C:\Users` and points at
+the `desktop/`, `downloads/` … aliases `resolve_user_path` already accepts; the
+test was tightened so a fabricated path fails it (**the argument must
+`resolve_user_path()` to the real file, not merely contain its name**). Two
+consecutive live runs after the fix: `desktop/<name>.txt`, zero clicks.
+
+**🔴 The correction that matters most: I had been citing a contaminated number.**
+"Click is 35% broken" appeared in three consecutive slices. **Three of those
+seven failures were my own `tests/harness_visionpad.py`.** Harnesses are plain
+scripts, not pytest, so conftest's per-test audit isolation never applies to them
+and their runs land in the owner's real `data/audit/` log — which
+`harness_reliability.py` then reads back as evidence about real use. *The
+measuring tool was contaminating the measurement.* And all seven are from
+2026-07-16/21; **every click since has succeeded**.
+
+- `tests/_harness_env.py` points `JARVIS_AUDIT_FILE` at a throwaway file. **19
+  harnesses import it before their first `jarvis` import** — order is
+  load-bearing, because `jarvis.core.audit` reads that env var exactly once, at
+  module import. Two are deliberately exempt (documented in the module):
+  `harness_audit_visual` sets the var itself to seed a log a separate server
+  process reads, and `harness_reliability` must read the REAL log.
+- The durable part is **`tests/test_harness_isolation.py`**, which catches the
+  *next* harness written without the guard: it requires the import in any
+  harness touching `jarvis`, and — the subtle one — **fails if the guard sits
+  after the first `jarvis` import**, where it would silently do nothing.
+- Verified behaviourally, not by unit test alone: a harness-shaped subprocess ran
+  `primitives.execute("get_volume")` through the real executor; the entry went to
+  `%TEMP%\jarvis-harness-audit\` and `data/audit/audit.jsonl` stayed
+  byte-identical at 347345 bytes.
+- **The old polluted entries stay.** An audit log is the owner's record, and
+  editing history to improve my own numbers is not a fix. The report now prints
+  the caveat instead, naming the mistake so it cannot be misread the same way.
+
+**Gate: 1286 passed / 1 failed / 0 skipped.** The one failure was
+`test_close_window_closes_notepad`, and it is **environmental, confirmed not
+assumed**: the assertion that fired is the *fixture's* `"Notepad never appeared"`
+launch gate (Notepad missed its 12s UWP handoff under a loaded run), not the
+close behaviour under test; nothing in this slice touches `launch_app`,
+`ui_tree` or `windows`; it passes in isolation and the whole file passes (19/19).
+
+**Worth recording, self-inflicted:** the caveat text I added to
+`harness_reliability.py` contains the string `_harness_env`, and my first version
+of the order check matched *any* line containing it — so prose was mistaken for
+an import and the check raised `StopIteration`. I committed that stage with the
+test failing and had to amend. Both checks now require a real `import`/`from` line.
 
 ### Slice 61 — The vault: memory you can actually open and read
 The owner shared a "JARVIS OS" guide (Claude Code + Obsidian + local voice + a

@@ -90,7 +90,7 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
 
 ## What it can actually do
 
-49 registered primitives, each individually tested:
+51 registered primitives, each individually tested:
 
 - **Apps & windows** — `launch_app` (Start Menu, desktop shortcuts, Steam and
   Epic libraries), `close_window`, `read_ui_tree`
@@ -99,8 +99,11 @@ The gear icon opens **Settings**; the 🗎 icon opens the **audit log**.
   `search_files` inside `data/agent_files/` only
 - **Files (whole PC)** — `list_directory`, `read_path`, `write_path`,
   `move_path`, `rename_path`, `copy_path`, `delete_path`, `make_folder`,
-  `create_shortcut`
-- **Web** — `browse_navigate`, `read_page`, `browse_click`, `browse_fill`,
+  `create_shortcut`, `open_path` (open a file or folder in whatever app
+  normally opens it — programs are refused, since opening one would run it)
+- **Web** — `open_url` (put a site on YOUR screen, in YOUR browser, in one
+  step), plus the automation verbs it reads and clicks with:
+  `browse_navigate`, `read_page`, `browse_click`, `browse_fill`,
   `browse_key`, `web_search`
 - **System** — volume, mute, brightness, media keys, Do Not Disturb, clipboard
 - **Comms** — `send_email` (Gmail API, send-only scope)
